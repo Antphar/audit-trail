@@ -1012,6 +1012,7 @@ function pointSegProjection(px, py, ax, ay, bx, by) {
 }
 function rand(min, max) { return min + Math.random() * (max - min); }
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function isDragonEscape() { return MAPS[game.selectedMapIdx || 0].id === "dragon_escape"; }
 
 function hexToRgba(hex, alpha) {
   let s = hex.replace("#", "");
@@ -1434,7 +1435,8 @@ const Sound = {
         this.scheduleStep(this.stepIndex, this.nextNoteTime);
         const secondsPerStep = 60.0 / this.tempo / 4.0; // 16th notes
         this.nextNoteTime += secondsPerStep;
-        this.stepIndex = (this.stepIndex + 1) % 128; // loop every 128 steps (8 bars)
+        const loopLen = (this.mapStyle === "japanese") ? 512 : 128; // Japanese gets 32-bar epic loops
+        this.stepIndex = (this.stepIndex + 1) % loopLen;
       }
       this.musicInterval = setTimeout(scheduler, scheduleInterval);
     };
@@ -1454,6 +1456,12 @@ const Sound = {
   },
 
   scheduleStep(step, time) {
+    // Select musical style per map
+    if (this.mapStyle === "japanese") {
+      this.scheduleJapaneseStep(step, time);
+      return;
+    }
+
     const bar = Math.floor(step / 16);
     const stepInBar = step % 16;
     const stepDur = 60.0 / this.tempo / 4.0; // length of 16th note
@@ -1757,7 +1765,252 @@ const Sound = {
     gain.connect(this.musicGain);
 
     src.start(time);
-  }
+  },
+
+  // Dragon fire breath sound
+  dragonBreath() {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const dur = 0.5;
+    const len = Math.floor(this.ctx.sampleRate * dur);
+    const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const env = 1 - i / len;
+      data[i] = (Math.random() * 2 - 1) * env * (0.3 + 0.7 * (i / len));
+    }
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(800, t);
+    filter.frequency.exponentialRampToValueAtTime(120, t + dur);
+    filter.Q.value = 2;
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.25, t + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.master);
+    src.start(t);
+  },
+
+  // Japanese Taiko drum
+  playTaiko(time, intensity = 0) {
+    if (!this.ctx || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(110 - intensity * 30, time);
+    osc.frequency.exponentialRampToValueAtTime(45, time + 0.12);
+    g.gain.setValueAtTime(0.001, time);
+    g.gain.linearRampToValueAtTime(0.28 + intensity * 0.1, time + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.001, time + 0.35 + intensity * 0.1);
+    osc.connect(g);
+    g.connect(this.musicGain);
+    osc.start(time);
+    osc.stop(time + 0.4);
+
+    // Noise crack
+    const ndur = 0.08;
+    const nlen = Math.max(1, Math.floor(this.ctx.sampleRate * ndur));
+    const nbuf = this.ctx.createBuffer(1, nlen, this.ctx.sampleRate);
+    const ndata = nbuf.getChannelData(0);
+    for (let i = 0; i < nlen; i++) ndata[i] = (Math.random() * 2 - 1) * (1 - i / nlen);
+    const nsrc = this.ctx.createBufferSource();
+    nsrc.buffer = nbuf;
+    const nfilter = this.ctx.createBiquadFilter();
+    nfilter.type = "lowpass";
+    nfilter.frequency.value = 400 + intensity * 200;
+    const ngain = this.ctx.createGain();
+    ngain.gain.setValueAtTime(0.08 + intensity * 0.04, time);
+    ngain.gain.exponentialRampToValueAtTime(0.001, time + ndur);
+    nsrc.connect(nfilter);
+    nfilter.connect(ngain);
+    ngain.connect(this.musicGain);
+    nsrc.start(time);
+  },
+
+  // Japanese Koto / Shamisen pluck
+  playKotoPluck(freq, time, dur = 0.35, vol = 0.14) {
+    if (!this.ctx || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(freq, time);
+    g.gain.setValueAtTime(0.001, time);
+    g.gain.linearRampToValueAtTime(vol, time + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+
+    // Quick pitch bend (pluck attack)
+    osc.frequency.exponentialRampToValueAtTime(freq * 1.015, time + 0.02);
+    osc.frequency.exponentialRampToValueAtTime(freq, time + 0.06);
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(2800, time);
+    filter.frequency.exponentialRampToValueAtTime(900, time + dur * 0.6);
+
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(this.musicGain);
+    osc.start(time);
+    osc.stop(time + dur + 0.02);
+  },
+
+  // Traditional Japanese flute (Shakuhachi-ish)
+  playShakuhachi(freq, time, dur = 0.5, vol = 0.13) {
+    if (!this.ctx || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, time);
+    // Shakuhachi breath wobble
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+    lfo.frequency.value = 5.5;
+    lfoGain.gain.value = freq * 0.015;
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(1800, time);
+    filter.frequency.exponentialRampToValueAtTime(600, time + dur);
+    filter.Q.value = 1.5;
+
+    g.gain.setValueAtTime(0.001, time);
+    g.gain.linearRampToValueAtTime(vol, time + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(this.musicGain);
+    osc.start(time);
+    lfo.start(time);
+    osc.stop(time + dur + 0.02);
+    lfo.stop(time + dur + 0.02);
+  },
+
+  // Bass drone (intensifies)
+  playBassDrone(freq, time, dur = 0.6, vol = 0.08) {
+    if (!this.ctx || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(freq, time);
+    g.gain.setValueAtTime(0.001, time);
+    g.gain.linearRampToValueAtTime(vol, time + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, time + dur);
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(400, time);
+    filter.frequency.exponentialRampToValueAtTime(120, time + dur);
+
+    osc.connect(filter);
+    filter.connect(g);
+    g.connect(this.musicGain);
+    osc.start(time);
+    osc.stop(time + dur + 0.02);
+  },
+
+  // Japanese pentatonic Hirajoshi (A-based): A(440), B(495), C(528), E(660), F(704)
+  // Extended full 2-octave range for more melodic variety
+  _jpNotes: [220.00, 247.50, 264.00, 330.00, 352.00, 440.00, 495.00, 528.00, 660.00, 704.00, 880.00, 990.00, 1056.00, 1320.00, 1408.00],
+  _jpMelodyPattern: [
+    // Phase 0: calm — sparse, contemplative
+    [5, null, null, 7, 5, null, null, null, 7, null, 5, null, 8, null, 7, null],
+    // Phase 1: building — more movement
+    [5, null, 7, 8, 5, null, 7, null, 8, null, 10, null, 9, null, 7, null],
+    // Phase 2: active — denser melodic line
+    [5, 7, 8, 10, 8, 7, 5, null, 7, 8, 10, 9, 7, 5, 7, null],
+    // Phase 3: intense — rapid arpeggios and flourishes
+    [5, 7, 8, 10, 7, 5, 7, 8, 10, 9, 8, 7, 5, 7, 8, 10],
+    // Phase 4: climax — octave-leaping, maximum energy
+    [12, null, 10, 12, 9, 10, 8, null, 7, 8, 10, 12, 10, 9, 7, 5],
+  ],
+  _jpBassPattern: [
+    // Phase 0: slow bass, one note per bar
+    [5, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    // Phase 1: two notes per bar (quarter-note feel)
+    [5, null, null, null, null, null, null, null, 3, null, null, null, null, null, null, null],
+    // Phase 2: walking-ish bass
+    [5, null, null, null, 3, null, null, null, 5, null, null, null, 0, null, null, null],
+    // Phase 3: quarter-note pulse
+    [5, null, 5, null, 3, null, 3, null, 5, null, 5, null, 0, null, 0, null],
+    // Phase 4: galloping eighth-note bass (intense!)
+    [5, 0, 5, 0, 3, 0, 3, 0, 5, 0, 5, 0, 0, 5, 0, 5],
+  ],
+
+  scheduleJapaneseStep(step, time) {
+    const stepDur = 60.0 / this.tempo / 4.0;
+    const intensity = clamp((this.tempo - 90) / 70, 0, 1);
+    const bar = Math.floor(step / 16);
+    const stepInBar = step % 16;
+
+    // Much longer looping: 64 bars instead of fixed small pattern (64*16=1024 steps)
+    const barInLoop = bar % 64;
+    // Use bar position in the long loop to evolve the pattern further
+    const loopProgress = barInLoop / 64; // 0..1 across the mega-loop
+
+    // Taiko drum pattern — sparse at first, overwhelming at climax
+    let taikoInterval = intensity < 0.2 ? 8 : (intensity < 0.4 ? 4 : (intensity < 0.7 ? 2 : 1));
+    // At very high intensity, add stepping! (0.5 offset every other bar for polyrhythm)
+    if (intensity > 0.85 && (bar % 2 === 1) && (stepInBar === 1 || stepInBar === 9)) {
+      this.playTaiko(time, 0.9);
+    }
+    if ((step % taikoInterval) === 0) {
+      const isAccent = (stepInBar === 0);
+      this.playTaiko(time, isAccent ? Math.min(intensity * 0.7, 1.0) : intensity * 0.4);
+    }
+
+    // ---- MELODY ----
+    const patIdx = Math.min(Math.floor(intensity * this._jpMelodyPattern.length), this._jpMelodyPattern.length - 1);
+    const pat = this._jpMelodyPattern[patIdx];
+    const noteIdx = pat[stepInBar];
+    if (noteIdx !== null && noteIdx !== undefined) {
+      const freq = this._jpNotes[noteIdx];
+      // At low intensity, mix in shakuhachi for atmosphere (especially at bar boundaries)
+      if (intensity < 0.3 && stepInBar === 0 && bar % 4 === 0) {
+        this.playShakuhachi(freq * 0.5, time, 0.8, 0.10);
+      } else if (intensity > 0.7 && bar % 2 === 0 && stepInBar % 2 === 0) {
+        // At high intensity, double up with a second koto an octave higher for shimmer
+        this.playKotoPluck(freq, time, 0.25, 0.10 + intensity * 0.04);
+        if (Math.random() > 0.35) {
+          this.playKotoPluck(freq * 2, time + stepDur * 0.5, 0.2, 0.06);
+        }
+      } else {
+        this.playKotoPluck(freq, time, 0.35 + intensity * 0.3, 0.10 + intensity * 0.04);
+      }
+    }
+
+    // ---- BASS ---- (evolving bassline!)
+    const bassPatIdx = Math.min(Math.floor(intensity * this._jpBassPattern.length), this._jpBassPattern.length - 1);
+    const bassPat = this._jpBassPattern[bassPatIdx];
+    const bassNoteIdx = bassPat[stepInBar];
+    if (bassNoteIdx !== null && bassNoteIdx !== undefined) {
+      const bassFreq = this._jpNotes[bassNoteIdx];
+      // Richer bass: sub-oscillator + drone
+      this.playBassDrone(bassFreq, time, stepDur * 1.5 + intensity, 0.06 + intensity * 0.1);
+    }
+
+    // ---- SHAKUHACHI FLUTTER ---- ( atmospheric fills at transition points )
+    if ((barInLoop === 15 || barInLoop === 31 || barInLoop === 47) && stepInBar === 14) {
+      const fillNote = this._jpNotes[5 + Math.floor(Math.random() * 4)];
+      this.playShakuhachi(fillNote, time, 0.45, 0.08);
+    }
+    // Climax trills
+    if (intensity > 0.82 && (stepInBar % 2 === 0)) {
+      const trillNote = this._jpNotes[5 + (step % 5)];
+      this.playShakuhachi(trillNote, time, 0.18, 0.065);
+    }
+  },
+
+  // Switch between music styles
+  mapStyle: "retro",
 };
 
 /* ============================================================
@@ -1952,6 +2205,39 @@ let WORLD_W = 3400;
 let WORLD_H = 2400;
 
 // Multiple premium "Regulaido" stylized maps (tracks)
+function generateDragonTrail() {
+  const wp = [];
+  let x = 400, y = 1200;
+  wp.push({ x, y });
+  const xmax = 490000;
+  let i = 0;
+  while (x < xmax) {
+    const segLen = 350 + Math.random() * 400;
+    let targetY = 1000 + Math.sin(i * 0.07) * 300 + Math.cos(i * 0.12) * 180 + Math.sin(i * 0.19) * 80;
+    if (i % 40 > 35) {
+      targetY = 300 + Math.random() * 1200;
+    }
+    let dy = (targetY - y) * 0.12 + Math.sin(i * 0.3) * 40;
+    dy = clamp(dy, -200, 200);
+    y += dy;
+    y = clamp(y, 400, 1600);
+    x += segLen;
+    wp.push({ x: Math.round(x), y: Math.round(y) });
+    i++;
+    if (Math.random() < 0.015 && x < xmax - 2000) {
+      const backSteps = 2 + Math.floor(Math.random() * 3);
+      for (let b = 0; b < backSteps; b++) {
+        x += segLen * 0.3;
+        y += (Math.random() > 0.5 ? 1 : -1) * (200 + Math.random() * 300);
+        y = clamp(y, 400, 1600);
+        wp.push({ x: Math.round(x), y: Math.round(y) });
+        i++;
+      }
+    }
+  }
+  return wp;
+}
+
 const MAPS = [
   {
     name: "Core Mainframe Circuit",
@@ -2036,6 +2322,18 @@ const MAPS = [
     boostPadSegs: [1, 4, 5],
     itemBoxSegs: [0, 2, 3, 6],
     desc: "A giant wide-lane speed ring with gentle sweeps designed for massive drifts and continuous boost chaining."
+  },
+  {
+    name: "Dragon's Escape",
+    id: "dragon_escape",
+    worldW: 490000,
+    worldH: 2000,
+    waypoints: generateDragonTrail(),
+    roadHalfBase: 110,
+    segWidth: {},
+    boostPadSegs: [],
+    itemBoxSegs: [],
+    desc: "INFINITE SURVIVAL: True open-ended trail. Drive right forever. Dragon hunts from your left. Speed ramps forever. One hit = dead. How far can you escape?"
   }
 ];
 
@@ -2052,13 +2350,22 @@ class Track {
     this.halfWidth = mapConfig.roadHalfBase;
     const segWidthConfig = mapConfig.segWidth || {};
 
+    this.isOpen = (mapConfig.id === "dragon_escape");
+
     // Pre-compute segment data (length, normal, half-width)
     this.segments = [];
     for (let i = 0; i < this.n; i++) {
       const a = this.waypoints[i];
-      const b = this.waypoints[(i + 1) % this.n];
+      let b;
+      if (this.isOpen) {
+        b = this.waypoints[i + 1];
+        if (!b) break; // end of open trail
+      } else {
+        b = this.waypoints[(i + 1) % this.n];
+      }
       const dx = b.x - a.x, dy = b.y - a.y;
       const len = Math.hypot(dx, dy);
+      if (len < 0.1) continue;
       const nx = -dy / len, ny = dx / len; // left normal
       const wScale = (segWidthConfig[i] || 1);
       this.segments.push({
@@ -2079,7 +2386,7 @@ class Track {
   // Find closest segment to a world point
   closestSegment(x, y) {
     let bestI = 0, bestD = Infinity, bestT = 0, bestProj = null;
-    for (let i = 0; i < this.n; i++) {
+    for (let i = 0; i < this.segments.length; i++) {
       const s = this.segments[i];
       const p = pointSegProjection(x, y, s.a.x, s.a.y, s.b.x, s.b.y);
       if (p.d < bestD) { bestD = p.d; bestI = i; bestT = p.t; bestProj = p; }
@@ -2108,33 +2415,66 @@ class Track {
   }
 
   _generateDecor() {
-    const pillars = [];
+    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const isDragon = mapId === "dragon_escape";
+    const decor = [];
+    const colors = isDragon
+      ? ["#ff4d4d", "#ffb84d", "#ffd700", "#ff6b6b", "#c0392b"]
+      : ["#7b75ff", "#fd9927", "#ff4d6d", "#a4ff80"];
+
+    if (isDragon) {
+      // Open trail: place 1 decor every ~6 segments along alternating sides
+      for (let i = 0; i < this.segments.length; i += 6) {
+        const s = this.segments[i];
+        if (!s) continue;
+        const t = 0.5;
+        const cx = s.a.x + s.dx * t;
+        const cy = s.a.y + s.dy * t;
+        const side = (i % 2 === 0) ? 1 : -1;
+        const offDist = s.halfW + 60 + Math.random() * 120;
+        decor.push({
+          x: cx + s.nx * offDist * side,
+          y: cy + s.ny * offDist * side,
+          r: rand(8, 16),
+          h: rand(40, 70),
+          color: pick(colors),
+          pulseOffset: Math.random() * Math.PI * 2,
+          isJapanese: true,
+          type: Math.random() < 0.3 ? "lantern" : (Math.random() < 0.5 ? "torii" : "sakura")
+        });
+      }
+      return decor;
+    }
+
+    // Closed-loop maps: scattered random trees
     let attempts = 0;
-    const colors = ["#7b75ff", "#fd9927", "#ff4d6d", "#a4ff80"];
-    while (pillars.length < 80 && attempts < 4000) {
+    const count = 80;
+    const maxDist = 380;
+    while (decor.length < count && attempts < 4000) {
       attempts++;
       const x = rand(120, WORLD_W - 120);
       const y = rand(120, WORLD_H - 120);
       const c = this.closestSegment(x, y);
       const seg = this.segments[c.idx];
-      // Place outside the road & rumble strip
-      if (c.dist > seg.halfW + 50 && c.dist < seg.halfW + 380) {
-        pillars.push({
+      if (c.dist > seg.halfW + 50 && c.dist < seg.halfW + maxDist) {
+        decor.push({
           x, y,
           r: rand(10, 18),
           h: rand(35, 60),
           color: pick(colors),
-          pulseOffset: Math.random() * Math.PI * 2
+          pulseOffset: Math.random() * Math.PI * 2,
+          isJapanese: false,
+          type: "pillar"
         });
       }
     }
-    return pillars;
+    return decor;
   }
 
   _placeCoins() {
     const coins = [];
     // Lay coin pickups along the centerline
-    for (let i = 0; i < this.n; i++) {
+    for (let i = 0; i < this.segments.length; i++) {
       const s = this.segments[i];
       const count = Math.max(2, Math.floor(s.len / 180));
       for (let k = 1; k <= count; k++) {
@@ -2158,16 +2498,27 @@ class Track {
 
   _placeBoostPads(segIdxs) {
     const pads = [];
+    if (this.isOpen && segIdxs.length === 0) {
+      for (let i = 4; i < this.segments.length; i += 12) {
+        const s = this.segments[i];
+        if (!s) continue;
+        const t = 0.55;
+        pads.push({
+          x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
+          ang: Math.atan2(s.dy, s.dx),
+          w: 70, h: 36, cooldown: new Map(),
+        });
+      }
+      return pads;
+    }
     for (const i of segIdxs) {
-      if (i >= this.n) continue;
+      if (i >= this.segments.length) continue;
       const s = this.segments[i];
       const t = 0.55;
       pads.push({
-        x: s.a.x + s.dx * t,
-        y: s.a.y + s.dy * t,
+        x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
         ang: Math.atan2(s.dy, s.dx),
-        w: 70, h: 36,
-        cooldown: new Map(), // kart -> time
+        w: 70, h: 36, cooldown: new Map(),
       });
     }
     return pads;
@@ -2175,16 +2526,25 @@ class Track {
 
   _placeItemBoxes(segIdxs) {
     const boxes = [];
+    if (this.isOpen && segIdxs.length === 0) {
+      for (let i = 2; i < this.segments.length; i += 16) {
+        const s = this.segments[i];
+        if (!s) continue;
+        const t = 0.5;
+        boxes.push({
+          x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
+          active: true, respawn: 0, spin: Math.random() * TAU,
+        });
+      }
+      return boxes;
+    }
     for (const i of segIdxs) {
-      if (i >= this.n) continue;
+      if (i >= this.segments.length) continue;
       const s = this.segments[i];
       const t = 0.5;
       boxes.push({
-        x: s.a.x + s.dx * t,
-        y: s.a.y + s.dy * t,
-        active: true,
-        respawn: 0,
-        spin: Math.random() * TAU,
+        x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
+        active: true, respawn: 0, spin: Math.random() * TAU,
       });
     }
     return boxes;
@@ -2192,10 +2552,11 @@ class Track {
 
   // ---- Drawing ----
   drawPath(ctx) {
+    if (this.n === 0) return;
     ctx.beginPath();
     ctx.moveTo(this.waypoints[0].x, this.waypoints[0].y);
     for (let i = 1; i < this.n; i++) ctx.lineTo(this.waypoints[i].x, this.waypoints[i].y);
-    ctx.closePath();
+    if (!this.isOpen) ctx.closePath();
   }
 
   draw(ctx, time) {
@@ -2230,9 +2591,9 @@ class Track {
     this.drawPath(ctx); ctx.stroke();
 
     // Re-stroke narrow segments with darker fill to indicate width change
-    for (let i = 0; i < this.n; i++) {
+    for (let i = 0; i < this.segments.length; i++) {
       const s = this.segments[i];
-      if (s.halfW < this.halfWidth * 0.95) {
+      if (s && s.halfW < this.halfWidth * 0.95) {
         ctx.strokeStyle = "#0d0b21";
         ctx.lineWidth = s.halfW * 2;
         ctx.beginPath();
@@ -2271,37 +2632,103 @@ class Track {
     ctx.setLineDash([]);
 
     // Start/finish line (checkered)
-    this._drawStartLine(ctx);
+    if (!this.isOpen) this._drawStartLine(ctx);
 
     // Trees / decorations (Holographic pillars)
     this._drawDecor(ctx);
   }
 
   _drawGrass(ctx) {
-    // Cyberpunk canvas
-    const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
-    grad.addColorStop(0, "#060514");
-    grad.addColorStop(1, "#0c0a24");
-    ctx.fillStyle = grad;
-    ctx.fillRect(-500, -500, WORLD_W + 1000, WORLD_H + 1000);
+    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const isDragon = mapId === "dragon_escape";
 
-    // Dynamic gridlines
-    ctx.strokeStyle = "rgba(123, 117, 255, 0.08)";
-    ctx.lineWidth = 1;
-    
-    // Draw horizontal grid lines
-    for (let y = 0; y < WORLD_H; y += 80) {
-      ctx.beginPath();
-      ctx.moveTo(-500, y);
-      ctx.lineTo(WORLD_W + 500, y);
-      ctx.stroke();
+    // Approx visible world X range from context transform (for huge world culling)
+    let minX = -500, maxX = WORLD_W + 500;
+    const huge = WORLD_W > 10000;
+    if (huge) {
+      try {
+        const m = ctx.getTransform();
+        const invScale = 1 / Math.max(0.001, Math.abs(m.a || 1));
+        const viewW = ctx.canvas ? ctx.canvas.width : 1280;
+        minX = (-m.e * invScale) - 200;
+        maxX = minX + viewW * invScale + 500;
+      } catch (e) {}
+      minX = Math.max(-500, minX);
+      maxX = Math.min(WORLD_W + 500, maxX);
     }
-    // Draw vertical grid lines
-    for (let x = 0; x < WORLD_W; x += 80) {
-      ctx.beginPath();
-      ctx.moveTo(x, -500);
-      ctx.lineTo(x, WORLD_H + 500);
-      ctx.stroke();
+
+    if (isDragon) {
+      // Japanese highland dusk scene
+      const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+      grad.addColorStop(0, "#1a0c0c");
+      grad.addColorStop(0.4, "#2d1810");
+      grad.addColorStop(1, "#0d1a10");
+      ctx.fillStyle = grad;
+      ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+
+      // Far misty mountains (multiple layers) — capped to visible range
+      for (let m = 0; m < 4; m++) {
+        const mh = 150 + m * 50;
+        const my = WORLD_H * 0.2 + m * 120;
+        const alpha = 0.06 - m * 0.01;
+        ctx.fillStyle = `rgba(${60 + m * 20}, ${30 + m * 10}, ${20 + m * 5}, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(minX, my + mh);
+        for (let x = minX; x <= maxX + 60; x += 60) {
+          ctx.lineTo(x, my + mh - Math.sin((x + m * 200) * 0.003) * mh * 0.4 - Math.abs(Math.sin((x + m * 300) * 0.001)) * mh * 0.3);
+        }
+        ctx.lineTo(maxX + 500, WORLD_H + 500);
+        ctx.lineTo(minX, WORLD_H + 500);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // Bamboo / grass swaying on edges — capped
+      ctx.strokeStyle = "rgba(20, 50, 20, 0.2)";
+      ctx.lineWidth = 1.5;
+      const grassStart = Math.max(0, Math.floor(minX / 40) * 40);
+      const grassEnd   = Math.min(WORLD_W, Math.ceil(maxX / 40) * 40);
+      for (let i = grassStart; i < grassEnd; i += 40) {
+        const h = 20 + Math.sin(i * 0.05) * 15;
+        const sway = Math.sin(i * 0.02 + performance.now() * 0.0005) * 5;
+        ctx.beginPath();
+        ctx.moveTo(i, WORLD_H * 0.45);
+        ctx.quadraticCurveTo(i + sway, WORLD_H * 0.45 - h * 0.5, i + sway * 0.3, WORLD_H * 0.45 - h);
+        ctx.stroke();
+      }
+
+      // Subtle radial glow centered on track
+      const centerX = WORLD_W / 2;
+      const centerY = WORLD_H / 2;
+      const glowR = Math.min(WORLD_W * 0.7, 3000);
+      const glow = ctx.createRadialGradient(centerX, centerY, 100, centerX, centerY, glowR);
+      glow.addColorStop(0, "rgba(255, 80, 20, 0.04)");
+      glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+      ctx.fillStyle = glow;
+      ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+    } else {
+      // Cyberpunk canvas
+      const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+      grad.addColorStop(0, "#060514");
+      grad.addColorStop(1, "#0c0a24");
+      ctx.fillStyle = grad;
+      ctx.fillRect(-500, -500, WORLD_W + 1000, WORLD_H + 1000);
+
+      // Dynamic gridlines
+      ctx.strokeStyle = "rgba(123, 117, 255, 0.08)";
+      ctx.lineWidth = 1;
+      for (let y = 0; y < WORLD_H; y += 80) {
+        ctx.beginPath();
+        ctx.moveTo(-500, y);
+        ctx.lineTo(WORLD_W + 500, y);
+        ctx.stroke();
+      }
+      for (let x = 0; x < WORLD_W; x += 80) {
+        ctx.beginPath();
+        ctx.moveTo(x, -500);
+        ctx.lineTo(x, WORLD_H + 500);
+        ctx.stroke();
+      }
     }
   }
 
@@ -2310,47 +2737,113 @@ class Track {
     for (const p of this.decorations) {
       const pulse = 0.85 + 0.15 * Math.sin(time * 0.003 + p.pulseOffset);
       const h = p.h * pulse;
-      
-      // Draw neon holographic pillar
+
       ctx.save();
       ctx.translate(p.x, p.y);
-      
-      // Outer glow aura
-      ctx.shadowBlur = 15 * pulse;
-      ctx.shadowColor = p.color;
-      
-      // Cylindrical/Pillar glassmorphic base
-      ctx.fillStyle = hexToRgba(p.color, 0.15);
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = 1.5;
-      
-      ctx.beginPath();
-      ctx.moveTo(-p.r, 0);
-      ctx.lineTo(-p.r, -h);
-      ctx.quadraticCurveTo(0, -h - p.r * 0.4, p.r, -h);
-      ctx.lineTo(p.r, 0);
-      ctx.quadraticCurveTo(0, p.r * 0.4, -p.r, 0);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      
-      // Bright core wireframe line
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255,255,255,0.7)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(0, -h);
-      ctx.stroke();
-      
-      // Crystalline top cap node
-      ctx.fillStyle = "#ffffff";
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = p.color;
-      ctx.beginPath();
-      ctx.arc(0, -h, p.r * 0.35, 0, TAU);
-      ctx.fill();
-      
+
+      if (p.isJapanese) {
+        if (p.type === "lantern") {
+          // Japanese paper lantern
+          ctx.shadowBlur = 18 * pulse;
+          ctx.shadowColor = p.color;
+          ctx.fillStyle = hexToRgba(p.color, 0.35);
+          ctx.strokeStyle = p.color;
+          ctx.lineWidth = 2;
+          // Rounded lantern body
+          ctx.beginPath();
+          ctx.ellipse(0, -h * 0.5, p.r, h * 0.45, 0, 0, TAU);
+          ctx.fill();
+          ctx.stroke();
+          // Top/bottom rings
+          ctx.fillStyle = "#2a0a0a";
+          ctx.fillRect(-p.r * 1.1, -h * 0.05, p.r * 2.2, 4);
+          ctx.fillRect(-p.r * 1.1, -h * 0.95, p.r * 2.2, 4);
+          // Glowing center
+          ctx.shadowBlur = 0;
+          ctx.fillStyle = hexToRgba("#ffeebb", 0.6);
+          ctx.beginPath();
+          ctx.ellipse(0, -h * 0.5, p.r * 0.5, h * 0.2, 0, 0, TAU);
+          ctx.fill();
+        } else if (p.type === "torii") {
+          // Mini torii gate
+          const tw = p.r * 2.5;
+          const th = h * 0.8;
+          ctx.shadowBlur = 12 * pulse;
+          ctx.shadowColor = "#c0392b";
+          ctx.strokeStyle = "#c0392b";
+          ctx.fillStyle = "#c0392b";
+          ctx.lineWidth = 3;
+          // Two vertical pillars
+          ctx.fillRect(-tw * 0.35, -th, 5, th);
+          ctx.fillRect(tw * 0.35 - 5, -th, 5, th);
+          // Top crossbar (kasagi)
+          ctx.fillStyle = "#a93226";
+          ctx.fillRect(-tw * 0.55, -th - 4, tw * 1.1, 7);
+          // Lower lintel (shimaki)
+          ctx.fillStyle = "#c0392b";
+          ctx.fillRect(-tw * 0.45, -th * 0.75, tw * 0.9, 4);
+        } else {
+          // Sakura cherry blossom tree
+          ctx.shadowBlur = 0;
+          // Trunk
+          ctx.strokeStyle = "#5c3a21";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.quadraticCurveTo(p.r * 0.3, -h * 0.3, 0, -h * 0.6);
+          ctx.stroke();
+          // Branches
+          ctx.strokeStyle = "#5c3a21";
+          ctx.lineWidth = 1.5;
+          for (let b = 0; b < 5; b++) {
+            const ba = (b / 5) * Math.PI - Math.PI * 0.2;
+            ctx.beginPath();
+            ctx.moveTo(0, -h * 0.55);
+            ctx.lineTo(Math.cos(ba) * p.r, -h * 0.55 + Math.sin(ba) * p.r * 0.5);
+            ctx.stroke();
+          }
+          // Cherry blossom clusters
+          ctx.shadowBlur = 8 * pulse;
+          ctx.shadowColor = p.color;
+          ctx.fillStyle = p.color;
+          for (let c = 0; c < 6; c++) {
+            const ca = (c / 6) * TAU + p.pulseOffset;
+            const cr = p.r * 0.6;
+            ctx.beginPath();
+            ctx.arc(Math.cos(ca) * cr, -h * 0.55 + Math.sin(ca) * cr * 0.3, 3 + pulse * 2, 0, TAU);
+            ctx.fill();
+          }
+        }
+      } else {
+        // Default cyberpunk pillar
+        ctx.shadowBlur = 15 * pulse;
+        ctx.shadowColor = p.color;
+        ctx.fillStyle = hexToRgba(p.color, 0.15);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-p.r, 0);
+        ctx.lineTo(-p.r, -h);
+        ctx.quadraticCurveTo(0, -h - p.r * 0.4, p.r, -h);
+        ctx.lineTo(p.r, 0);
+        ctx.quadraticCurveTo(0, p.r * 0.4, -p.r, 0);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, -h);
+        ctx.stroke();
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = p.color;
+        ctx.beginPath();
+        ctx.arc(0, -h, p.r * 0.35, 0, TAU);
+        ctx.fill();
+      }
       ctx.restore();
     }
   }
@@ -2727,6 +3220,117 @@ class DossierProjectile {
 }
 
 /* ============================================================
+   DRAGON FIRE HAZARD
+   ============================================================ */
+class DragonFire {
+  constructor(x, y, heading, speed) {
+    this.x = x;
+    this.y = y;
+    this.heading = heading;
+    this.speed = speed || 6.0;
+    this.vx = Math.cos(heading) * this.speed;
+    this.vy = Math.sin(heading) * this.speed;
+    this.r = 18;
+    this.active = true;
+    this.life = 420; // 7 seconds
+    this.pulsePhase = Math.random() * Math.PI * 2;
+    this.sizePhase = 0;
+  }
+
+  update(dt) {
+    this.sizePhase += 0.08 * dt;
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.life -= dt;
+    if (this.life <= 0) {
+      this.active = false;
+    }
+  }
+
+  draw(ctx, time) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    const pulse = 0.80 + 0.20 * Math.sin(this.sizePhase * 4 + this.pulsePhase);
+    const baseR = this.r * pulse;
+
+    // ---- Directional motion blur trail ----
+    const trailLen = this.speed * 3.5;
+    const trailGrad = ctx.createLinearGradient(0, 0, -Math.cos(this.heading) * trailLen, -Math.sin(this.heading) * trailLen);
+    trailGrad.addColorStop(0, `rgba(255, 200, 40, 0.5)`);
+    trailGrad.addColorStop(0.5, `rgba(255, 80, 0, 0.25)`);
+    trailGrad.addColorStop(1, `rgba(180, 0, 0, 0)`);
+    ctx.fillStyle = trailGrad;
+    ctx.beginPath();
+    ctx.ellipse(-Math.cos(this.heading) * trailLen * 0.3, -Math.sin(this.heading) * trailLen * 0.3, trailLen * 0.7, baseR * 1.2, this.heading, 0, TAU);
+    ctx.fill();
+
+    // ---- Outer fiery aura (2 layers for depth) ----
+    const outerGlow = ctx.createRadialGradient(0, 0, baseR * 0.2, 0, 0, baseR * 3.2);
+    outerGlow.addColorStop(0, "rgba(255, 220, 80, 0.8)");
+    outerGlow.addColorStop(0.25, "rgba(255, 120, 20, 0.55)");
+    outerGlow.addColorStop(0.55, "rgba(255, 40, 0, 0.2)");
+    outerGlow.addColorStop(1, "rgba(120, 0, 0, 0)");
+    ctx.fillStyle = outerGlow;
+    ctx.beginPath();
+    ctx.arc(0, 0, baseR * 3.2, 0, TAU);
+    ctx.fill();
+
+    const innerGlow = ctx.createRadialGradient(0, 0, baseR * 0.15, 0, 0, baseR * 2.0);
+    innerGlow.addColorStop(0, "rgba(255, 200, 60, 0.6)");
+    innerGlow.addColorStop(0.4, "rgba(255, 90, 15, 0.35)");
+    innerGlow.addColorStop(1, "rgba(150, 0, 0, 0)");
+    ctx.fillStyle = innerGlow;
+    ctx.beginPath();
+    ctx.arc(0, 0, baseR * 2.0, 0, TAU);
+    ctx.fill();
+
+    // ---- Core ember body ----
+    ctx.fillStyle = `rgba(255, ${180 + Math.floor(Math.random() * 75)}, ${40 + Math.floor(Math.random() * 60)}, 0.92)`;
+    ctx.beginPath();
+    ctx.arc(0, 0, baseR * 0.65, 0, TAU);
+    ctx.fill();
+
+    // ---- White-hot inner core ----
+    ctx.fillStyle = "rgba(255, 250, 220, 0.95)";
+    ctx.beginPath();
+    ctx.arc(0, 0, baseR * 0.28, 0, TAU);
+    ctx.fill();
+
+    // ---- Rotating flame tongues (more organic) ----
+    const tongues = 7;
+    for (let i = 0; i < tongues; i++) {
+      const tAng = (i / tongues) * TAU + this.sizePhase * 3 + this.pulsePhase + Math.sin(i * 0.8) * 0.3;
+      const tLen = baseR * (0.9 + 0.7 * Math.sin(this.sizePhase * 4 + i * 1.3));
+      const tWidth = 2.5 + Math.sin(this.sizePhase * 6 + i * 2) * 1.2;
+      ctx.strokeStyle = `rgba(255, ${140 + i * 15}, ${20 + i * 5}, 0.75)`;
+      ctx.lineWidth = tWidth;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(tAng) * baseR * 0.5, Math.sin(tAng) * baseR * 0.5);
+      const midX = Math.cos(tAng - 0.1 * Math.sin(this.sizePhase * 2 + i)) * tLen * 0.6;
+      const midY = Math.sin(tAng - 0.1 * Math.sin(this.sizePhase * 2 + i)) * tLen * 0.6;
+      const endX = Math.cos(tAng + 0.15 * Math.cos(this.sizePhase * 3 + i)) * tLen;
+      const endY = Math.sin(tAng + 0.15 * Math.cos(this.sizePhase * 3 + i)) * tLen;
+      ctx.quadraticCurveTo(midX, midY, endX, endY);
+      ctx.stroke();
+    }
+
+    // ---- Small random ember sparks inside ----
+    ctx.fillStyle = "rgba(255, 255, 200, 0.7)";
+    for (let i = 0; i < 3; i++) {
+      const spkAng = (this.sizePhase * 2 + i * 2.1) % TAU;
+      const spkDist = baseR * (0.3 + 0.3 * Math.random());
+      ctx.beginPath();
+      ctx.arc(Math.cos(spkAng) * spkDist, Math.sin(spkAng) * spkDist, 1.5 + Math.random() * 2, 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  }
+}
+
+/* ============================================================
    KART BASE — physics shared by player & AI
    ============================================================ */
 class Kart {
@@ -2740,6 +3344,7 @@ class Kart {
     this.isPlayer = isPlayer;
 
     // Tunables from character configuration
+    this.baseMaxSpeed = char.maxSpeed;
     this.maxSpeed = char.maxSpeed;
     this.reverseMax = 2.4;
     this.acceleration = char.acceleration;
@@ -3425,7 +4030,7 @@ class AIKart extends Kart {
   constructor(x, y, heading, char, skill = 1.0) {
     super(x, y, heading, char, false);
     this.skill = skill;
-    this.maxSpeed = char.maxSpeed * (0.91 + skill * 0.1);
+    this.maxSpeed = this.baseMaxSpeed * (0.91 + skill * 0.1);
     this.acceleration = char.acceleration * (0.92 + skill * 0.08);
     this.turnSpeed = char.turnSpeed * (0.92 + skill * 0.08);
     this.aiTargetIdx = 1;
@@ -3682,6 +4287,10 @@ const game = {
   totalRacers: 4,
   finishOrder: [],
   raceFinishedAt: 0,
+  dragonTimer: 0,
+  dragonFireTimer: 0,
+  dragonWarnTimer: 0,
+  bestLap: 0,
 };
 
 function renderSelectScreen() {
@@ -3941,6 +4550,19 @@ function buildRace() {
   game.coinsCollected = 0;
   game.finishOrder = [];
   game.hazards = []; // Initialize active physical hazard block elements!
+  game.dragonTimer = 0;
+  game.dragonFireTimer = 0;
+  game.dragonWarnTimer = 60; // First warning after about 1 second
+
+  // Set music style based on map
+  const mapId = MAPS[game.selectedMapIdx || 0].id;
+  Sound.mapStyle = (mapId === "dragon_escape") ? "japanese" : "retro";
+  Sound.tempo = (mapId === "dragon_escape") ? 90 : 124;
+  // Restart music to pick up style change
+  if (Sound.ctx) {
+    Sound.stopMusic();
+    Sound.startMusic();
+  }
 
   // Line up karts on starting grid (across from start line)
   const seg0 = game.track.segments[0];
@@ -4054,9 +4676,15 @@ function finishRace() {
 
 function progressValue(k) {
   if (!k) return 0;
-  // Linearize: laps * N + checkpointsThisLap + segmentProgress
+  if (game.track.isOpen) {
+    const seg = game.track.segments[Math.min(k.nextCheckpoint, game.track.segments.length - 1)];
+    const prev = game.track.waypoints[Math.max(0, k.nextCheckpoint - 1)];
+    const target = game.track.waypoints[Math.min(k.nextCheckpoint, game.track.n - 1)];
+    if (!seg || !prev || !target) return k.nextCheckpoint;
+    const proj = pointSegProjection(k.x, k.y, prev.x, prev.y, target.x, target.y);
+    return k.lap * 100000 + k.nextCheckpoint + clamp(proj.t, 0, 1);
+  }
   const seg = game.track.segments[(k.nextCheckpoint - 1 + game.track.n) % game.track.n];
-  // Project current position onto the next segment
   const target = game.track.waypoints[k.nextCheckpoint];
   const prev = game.track.waypoints[(k.nextCheckpoint - 1 + game.track.n) % game.track.n];
   const proj = pointSegProjection(k.x, k.y, prev.x, prev.y, target.x, target.y);
@@ -4076,76 +4704,74 @@ function rankAll() {
 
 function checkProgress(kart) {
   if (kart.finished) return;
+  const open = game.track.isOpen;
   const target = game.track.waypoints[kart.nextCheckpoint];
   let hitCheckpoint = false;
 
-  // 1. Precise proximity check (standard)
-  if (dist(kart.x, kart.y, target.x, target.y) < CHECKPOINT_RADIUS) {
+  // 1. Precise proximity check
+  if (target && dist(kart.x, kart.y, target.x, target.y) < CHECKPOINT_RADIUS) {
     hitCheckpoint = true;
   } else {
-    // 2. Continuous "self-healing" segment progress check (for wide drifts)
     const cs = game.track.closestSegment(kart.x, kart.y);
-    if (cs.dist < 260) { // must be near the track
-      // If player drifts past the checkpoint and is already on the next segment
-      if (cs.idx === kart.nextCheckpoint) {
-        hitCheckpoint = true;
-      }
+    if (cs.dist < 260 && cs.idx === kart.nextCheckpoint) {
+      hitCheckpoint = true;
     }
   }
 
   if (hitCheckpoint) {
-    const wasIdx = kart.nextCheckpoint;
-    kart.nextCheckpoint = (kart.nextCheckpoint + 1) % game.track.n;
-    if (wasIdx === 0) {
-      // Crossed start line
-      if (kart.checkpointsThisLap >= game.track.n - 1) {
+    kart.nextCheckpoint++;
+    kart.checkpointsThisLap++;
+
+    if (open) {
+      // Lap milestone every 30 checkpoints
+      if (kart.checkpointsThisLap >= 30) {
         kart.lap++;
+        kart.checkpointsThisLap = 0;
         triggerQuote(kart, "lap");
-        if (kart.isPlayer) Sound.lap();
-        if (kart.lap >= TOTAL_LAPS) {
-          kart.finished = true;
-          kart.finishTime = (performance.now() - game.startTime) / 1000;
-          if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
-          
-          if (kart.isPlayer) {
-            // Trigger spectacular neon confetti explosion on player finish!
-            const colors = ["#ff4d6d", "#a4ff80", "#7b75ff", "#ffd86b", "#00f0ff"];
-            for (let i = 0; i < 75; i++) {
-              const ang = Math.random() * Math.PI * 2;
-              const sp = rand(3, 10);
-              game.particles.add({
-                type: "rect",
-                x: kart.x,
-                y: kart.y,
-                vx: Math.cos(ang) * sp,
-                vy: Math.sin(ang) * sp,
-                life: rand(45, 90),
-                maxLife: 90,
-                size: rand(6, 13),
-                color: colors[Math.floor(Math.random() * colors.length)],
-                drag: 0.95,
-                angle: Math.random() * Math.PI * 2,
-                spin: rand(-0.15, 0.15),
-              });
-            }
-
-            // Set matrix camera slow-motion duration (1.5 seconds)
-            game.slowMoEnd = performance.now() + 1500;
-
-            // Symmetrical check: only trigger finish race when all active humans have finished!
-            let allHumanFinished = true;
-            if (game.player && !game.player.finished) allHumanFinished = false;
-            if (game.multiplayer && game.player2 && !game.player2.finished) allHumanFinished = false;
-            
-            if (allHumanFinished) {
-              setTimeout(() => finishRace(), 1500);
+        if (kart.isPlayer) {
+          Sound.lap();
+          game.bestLap = Math.max(game.bestLap || 0, kart.lap);
+        }
+      }
+      // End-of-trail safety (shouldn't happen)
+      if (kart.nextCheckpoint >= game.track.n) {
+        kart.nextCheckpoint = game.track.n - 1;
+      }
+    } else {
+      // Closed circuit: wrap and check finish
+      if (kart.nextCheckpoint >= game.track.n) {
+        kart.nextCheckpoint = 0;
+        if (kart.checkpointsThisLap >= game.track.n - 1) {
+          kart.lap++;
+          triggerQuote(kart, "lap");
+          if (kart.isPlayer) Sound.lap();
+          if (kart.lap >= TOTAL_LAPS) {
+            kart.finished = true;
+            kart.finishTime = (performance.now() - game.startTime) / 1000;
+            if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
+            if (kart.isPlayer) {
+              const colors = ["#ff4d6d", "#a4ff80", "#7b75ff", "#ffd86b", "#00f0ff"];
+              for (let i = 0; i < 75; i++) {
+                const ang = Math.random() * Math.PI * 2;
+                const sp = rand(3, 10);
+                game.particles.add({
+                  type: "rect", x: kart.x, y: kart.y,
+                  vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+                  life: rand(45, 90), maxLife: 90, size: rand(6, 13),
+                  color: colors[Math.floor(Math.random() * colors.length)],
+                  drag: 0.95, angle: Math.random() * Math.PI * 2, spin: rand(-0.15, 0.15),
+                });
+              }
+              game.slowMoEnd = performance.now() + 1500;
+              let allHumanFinished = true;
+              if (game.player && !game.player.finished) allHumanFinished = false;
+              if (game.multiplayer && game.player2 && !game.player2.finished) allHumanFinished = false;
+              if (allHumanFinished) setTimeout(() => finishRace(), 1500);
             }
           }
         }
+        kart.checkpointsThisLap = 0;
       }
-      kart.checkpointsThisLap = 0;
-    } else {
-      kart.checkpointsThisLap++;
     }
   }
 }
@@ -4465,8 +5091,8 @@ function update(dt, time) {
   if (game.state === STATE.RACING) {
     game.raceTime = (performance.now() - game.startTime) / 1000;
 
-    // Dynamic Retro Soundtrack Final Lap Tempo surge
-    if (game.player) {
+    // Dynamic Retro Soundtrack Final Lap Tempo surge (only for retro music)
+    if (game.player && Sound.mapStyle === "retro") {
       Sound.tempo = game.player.lap >= TOTAL_LAPS - 1 ? 142 : 124;
     }
 
@@ -4500,72 +5126,111 @@ function update(dt, time) {
       }
     }
 
-    // Update physical hazards and check collisions
-    if (game.hazards) {
-      for (let i = game.hazards.length - 1; i >= 0; i--) {
-        const h = game.hazards[i];
-        
-        if (h instanceof DossierProjectile) {
-          h.update(dt, game.track);
-        } else {
-          h.update(dt);
-        }
-        
-        for (const kart of activeKarts) {
-          if (h instanceof DossierProjectile && h.owner === kart && h.ignoreOwnerTimer > 0) {
-            continue;
-          }
-          
-          if (kart.spinoutTimer <= 0 && dist(kart.x, kart.y, h.x, h.y) < 24) {
-            game.hazards.splice(i, 1);
-            if (kart.shieldTimer > 0) {
-              kart.shieldTimer = 0; // Consume shield
-              if (kart.isPlayer) {
-                Sound.tone(600, 0.1, "square", 0.1, 300);
-              }
-              game.particles.burst(h.x, h.y, "#78dcff", 15, { type: "spark", spdMin: 1.5, spdMax: 4 });
-            } else {
-              const isDossier = (h instanceof DossierProjectile);
-              if (isDossier && kart.charId === "florian") {
-                kart.spinoutTimer = 22; // cuts spinout in half
-                kart.spinAngle = 0;
-                kart.vx *= 0.5; kart.vy *= 0.5;
-                kart.shieldTimer = 360; // instantly generates Compliance Shield
-                if (kart.isPlayer) {
-                  Sound.tone(500, 0.25, "sine", 0.15, 150);
-                }
-                game.particles.burst(h.x, h.y, "#57f2ff", 20, { type: "spark", spdMin: 1, spdMax: 3 });
-                game.particles.add({
-                  type: "text", text: "COMPLIANCE SHIELD!", x: h.x, y: h.y - 20,
-                  vx: rand(-0.5, 0.5), vy: -1.2, life: 75, maxLife: 75, size: 18, color: "#57f2ff", drag: 0.98
-                });
-                triggerQuote(kart, "boost");
+    // Hazard update + collision (host authoritative)
+    if (!game.p2pMode || game.p2pRole === "host") {
+      if (game.hazards) {
+        for (let i = game.hazards.length - 1; i >= 0; i--) {
+          const h = game.hazards[i];
+          if (h instanceof DossierProjectile) h.update(dt, game.track);
+          else h.update(dt);
+          if (!h.active) { game.hazards.splice(i, 1); continue; }
+
+          for (const kart of activeKarts) {
+            if (h instanceof DossierProjectile && h.owner === kart && h.ignoreOwnerTimer > 0) continue;
+            const hitR = (h instanceof DragonFire) ? (h.r + 12) : 24;
+            if (kart.spinoutTimer <= 0 && dist(kart.x, kart.y, h.x, h.y) < hitR) {
+              game.hazards.splice(i, 1);
+              if (kart.shieldTimer > 0) {
+                kart.shieldTimer = 0;
+                if (kart.isPlayer) Sound.tone(600, 0.1, "square", 0.1, 300);
+                game.particles.burst(h.x, h.y, "#78dcff", 15, { type: "spark", spdMin: 1.5, spdMax: 4 });
               } else {
-                kart.spinoutTimer = 45;
-                kart.spinAngle = 0;
-                kart.vx = 0; kart.vy = 0;
-                if (kart.isPlayer) {
-                  Sound.crash();
-                  game.shake = Math.max(game.shake, 8);
+                const isDossier = (h instanceof DossierProjectile);
+                if (isDossier && kart.charId === "florian") {
+                  kart.spinoutTimer = 22; kart.spinAngle = 0;
+                  kart.vx *= 0.5; kart.vy *= 0.5;
+                  kart.shieldTimer = 360;
+                  if (kart.isPlayer) Sound.tone(500, 0.25, "sine", 0.15, 150);
+                  game.particles.burst(h.x, h.y, "#57f2ff", 20, { type: "spark", spdMin: 1, spdMax: 3 });
+                  game.particles.add({ type: "text", text: "COMPLIANCE SHIELD!", x: h.x, y: h.y - 20,
+                    vx: rand(-0.5, 0.5), vy: -1.2, life: 75, maxLife: 75, size: 18, color: "#57f2ff", drag: 0.98 });
+                  triggerQuote(kart, "boost");
+                } else if (h instanceof DragonFire && isDragonEscape() && kart.isPlayer) {
+                  // One hit = dead (infinite survival)
+                  kart.finished = true; kart.finishTime = (performance.now() - game.startTime) / 1000;
+                  if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
+                  Sound.crash(); game.shake = Math.max(game.shake, 14);
+                  game.particles.burst(h.x, h.y, "#ff2200", 40, { type: "spark", spdMin: 2, spdMax: 8 });
+                  game.particles.add({ type: "text", text: "GOT THE HANDS!", x: h.x, y: h.y - 30,
+                    vx: 0, vy: -1.5, life: 90, maxLife: 90, size: 26, color: "#ff1a1a", drag: 0.97 });
+                  triggerQuote(kart, "crash");
+                  let allHumanFinished = true;
+                  if (game.player && !game.player.finished) allHumanFinished = false;
+                  if (game.multiplayer && game.player2 && !game.player2.finished) allHumanFinished = false;
+                  if (allHumanFinished) setTimeout(() => finishRace(), 1800);
+                } else {
+                  kart.spinoutTimer = 45; kart.spinAngle = 0; kart.vx = 0; kart.vy = 0;
+                  if (kart.isPlayer) { Sound.crash(); game.shake = Math.max(game.shake, 8); }
+                  game.particles.burst(h.x, h.y, isDossier ? "#57f2ff" : "#ff4d6d", 20, { type: "spark", spdMin: 2, spdMax: 5.5 });
+                  game.particles.add({ type: "text", text: h instanceof DragonFire ? "BURNED!" : (isDossier ? "AUDITED!" : "CONFLICT!"), x: h.x, y: h.y - 20,
+                    vx: rand(-0.5, 0.5), vy: -1.2, life: 75, maxLife: 75, size: 20, color: isDossier ? "#57f2ff" : "#ff4d6d", drag: 0.98 });
+                  triggerQuote(kart, "crash");
                 }
-                game.particles.burst(h.x, h.y, isDossier ? "#57f2ff" : "#ff4d6d", 20, { type: "spark", spdMin: 2, spdMax: 5.5 });
-                game.particles.add({
-                  type: "text", text: isDossier ? "AUDITED!" : "CONFLICT!", x: h.x, y: h.y - 20,
-                  vx: rand(-0.5, 0.5), vy: -1.2, life: 75, maxLife: 75, size: 20, color: isDossier ? "#57f2ff" : "#ff4d6d", drag: 0.98
-                });
-                triggerQuote(kart, "crash");
               }
-              
-              if (kart.isPlayer && game.p2pMode && game.p2pRole === "guest") {
-                sendP2pMessage({
-                  type: "hazard_collision",
-                  x: h.x,
-                  y: h.y
-                });
+              break;
+            }
+          }
+        }
+      }
+
+      // Dragon Fire spawning (host only)
+      if (isDragonEscape()) {
+        const raceProgress = clamp(game.raceTime / 90, 0, 1);
+        const lapProgress = clamp(game.raceTime / 150, 0, 1);
+        const intensity = Math.max(raceProgress, lapProgress);
+        game.dragonWarnTimer -= dt;
+        if (game.dragonWarnTimer <= 0) {
+          game.dragonWarnTimer = (7 + Math.random() * 7) / (1 + intensity * 0.5);
+          const targets = activeKarts.filter(k => k.spinoutTimer <= 0 && !k.finished);
+          if (targets.length > 0) {
+            const target = pick(targets);
+            game.particles.add({ type: "text", text: "DRAGON FIRE!", x: target.x, y: target.y - 40,
+              vx: 0, vy: -0.8, life: 50, maxLife: 50, size: 18, color: "#ff3a1f", drag: 0.96 });
+            if (target.isPlayer) game.shake = Math.max(game.shake, 3);
+            // Number grows 2→7, speed 4→9, spawn slides closer over time
+            const numFire = 2 + Math.floor(intensity * 5);
+            const fireSpeed = 4 + intensity * 5.5;
+            const spawnMin = lerp(1100, 550, intensity);
+            const spawnMax = lerp(1700, 1000, intensity);
+            const spread = 0.18 + intensity * 0.25;
+            // Occasional "fire wall" at higher intensity: vertical curtain
+            const isFireWall = intensity > 0.35 && Math.random() < intensity * 0.45;
+            if (isFireWall) {
+              const wallCount = 5 + Math.floor(intensity * 7); // 5–12
+              const wallTop = target.y - 280;
+              for (let i = 0; i < wallCount; i++) {
+                const startY = wallTop + (i / (wallCount - 1)) * 560;
+                const startX = target.x - rand(spawnMin, spawnMax);
+                const angle = Math.atan2(target.y - startY, target.x - startX) + rand(-0.08, 0.08);
+                game.hazards.push(new DragonFire(startX, startY, angle, fireSpeed));
+              }
+            } else {
+              for (let i = 0; i < numFire; i++) {
+                const startY = target.y + rand(-220, 220);
+                const startX = target.x - rand(spawnMin, spawnMax);
+                const angle = Math.atan2(target.y - startY, target.x - startX) + rand(-spread, spread);
+                game.hazards.push(new DragonFire(startX, startY, angle, fireSpeed));
               }
             }
-            break;
+            const anyPlayer = activeKarts.find(k => k.isPlayer && dist(k.x, k.y, target.x, target.y) < 400);
+            if (anyPlayer) Sound.dragonBreath();
           }
+        }
+        for (const kart of activeKarts) {
+          kart.maxSpeed = kart.baseMaxSpeed * (1 + intensity * 0.55);
+        }
+        if (Sound.mapStyle === "japanese") {
+          Sound.tempo = 90 + Math.floor(intensity * 60);
         }
       }
     }
@@ -4720,6 +5385,11 @@ function drawWorld(pKart, left, top, width, height, time, isP2) {
     }
   }
 
+  // Dragon head visual for Dragon's Escape map
+  if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
+    drawDragonHead(ctx, pKart, time);
+  }
+
   // Karts sorted by depth
   const activeKarts = getActiveKarts();
   const sorted = activeKarts.slice().sort((a, b) => a.y - b.y);
@@ -4736,6 +5406,309 @@ function drawWorld(pKart, left, top, width, height, time, isP2) {
   // Speed lines while boosting
   if (pKart.boostTimer > 0) {
     drawSpeedLinesViewport(ctx, left, top, width, height, time);
+  }
+
+  ctx.restore();
+}
+
+function drawDragonHead(ctx, pKart, time) {
+  // Dragon pursues from the left edge, bobbing and menacing, now with full body
+  const headX = pKart.camX - VIEW_W / (2 * pKart.camScale) - 40;
+  const headY = pKart.camY - 60 + Math.sin(time * 0.0018) * 40 + Math.sin(time * 0.004) * 15;
+
+  ctx.save();
+  ctx.translate(headX, headY);
+  // The dragon faces right (toward the player)
+
+  const headScale = clamp(1.0 - (pKart.camScale - 0.85) * 0.3, 0.65, 1.1);
+  ctx.scale(headScale, headScale);
+
+  const breathe = Math.sin(time * 0.002);
+  const eyeGlow = 0.85 + 0.15 * Math.sin(time * 0.006);
+  const wingFlap = Math.sin(time * 0.004) * 0.15;
+
+  // ---- Shadow ----
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.beginPath();
+  ctx.ellipse(10, 150, 120, 22, 0, 0, TAU);
+  ctx.fill();
+
+  // ---- WINGS (drawn behind body) ----
+  // Back wing (darker, offset)
+  ctx.save();
+  ctx.shadowBlur = 12;
+  ctx.shadowColor = "#660000";
+  ctx.fillStyle = "#1a0a05";
+  ctx.beginPath();
+  ctx.moveTo(-40, -20);
+  ctx.quadraticCurveTo(-200, -220 + wingFlap * 60, -320, -120 + wingFlap * 90);
+  ctx.quadraticCurveTo(-240, -60 + wingFlap * 40, -180, -40 + wingFlap * 20);
+  ctx.quadraticCurveTo(-140, -10 + wingFlap * 10, -50, 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#4a1a0a";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  // Wing membrane veins
+  ctx.strokeStyle = "rgba(255, 50, 0, 0.2)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.moveTo(-40, -20);
+    ctx.quadraticCurveTo(-160 - i * 30, -140 + wingFlap * 50 + i * 15, -280 - i * 15, -100 + wingFlap * 80);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Front wing (slightly lighter, different flap phase)
+  ctx.save();
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = "#aa2200";
+  ctx.fillStyle = "#2a1008";
+  const flap2 = Math.sin(time * 0.004 + 1.2) * 0.12;
+  ctx.beginPath();
+  ctx.moveTo(-10, 10);
+  ctx.quadraticCurveTo(-180, -180 + flap2 * 70, -290, -80 + flap2 * 100);
+  ctx.quadraticCurveTo(-220, -30 + flap2 * 45, -150, -10 + flap2 * 25);
+  ctx.quadraticCurveTo(-110, 20 + flap2 * 15, -20, 50);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#5c1a0a";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.restore();
+
+  // ---- Serpentine BODY/NECK trailing back ----
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "#551100";
+  ctx.fillStyle = "#1e0d06";
+  ctx.beginPath();
+  ctx.moveTo(-50, 40);
+  ctx.quadraticCurveTo(-120, 80 + breathe * 10, -180, 40 + breathe * 15);
+  ctx.quadraticCurveTo(-260, 10 + breathe * 20, -340, -30 + breathe * 25);
+  ctx.quadraticCurveTo(-400, -60 + breathe * 30, -450, -20 + breathe * 20);
+  ctx.lineTo(-460, -10 + breathe * 20);
+  ctx.quadraticCurveTo(-400, 40 + breathe * 25, -320, 80 + breathe * 15);
+  ctx.quadraticCurveTo(-200, 120 + breathe * 10, -80, 70);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#3a1208";
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // ---- Dorsal spikes along neck ----
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = "#aa0000";
+  ctx.fillStyle = "#8b0000";
+  const spikePts = [
+    [-60, 20, 25], [-110, 50, 22], [-170, 30, 28], [-240, 5, 24],
+    [-310, -15, 26], [-380, -40, 30], [-440, -15, 22]
+  ];
+  for (const [sx, sy, sh] of spikePts) {
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx - 8, sy - sh);
+    ctx.lineTo(sx + 8, sy - sh + 6);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ---- MAIN HEAD (serpentine, menacing) ----
+  ctx.shadowBlur = 20;
+  ctx.shadowColor = "#ff2200";
+  ctx.fillStyle = "#2a1010";
+  ctx.beginPath();
+  // Top of skull
+  ctx.moveTo(-70, -50);
+  ctx.quadraticCurveTo(-20, -120, 50, -80);
+  ctx.quadraticCurveTo(90, -60, 110, -20);
+  // Snout top
+  ctx.quadraticCurveTo(125, 0, 130, 30);
+  // Upper jaw / teeth line
+  ctx.quadraticCurveTo(120, 45, 100, 45);
+  // Mouth interior
+  ctx.quadraticCurveTo(70, 40, 40, 35);
+  // Lower jaw bottom
+  ctx.quadraticCurveTo(20, 70, -20, 65);
+  // Jaw hinge
+  ctx.quadraticCurveTo(-40, 55, -50, 40);
+  // Throat / neck down
+  ctx.quadraticCurveTo(-80, 30, -90, 0);
+  ctx.quadraticCurveTo(-100, -30, -70, -50);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "#c0392b";
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // ---- Jaw interior (dark fleshy cavity) ----
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = "#ff6600";
+  ctx.fillStyle = "#0a0302";
+  ctx.beginPath();
+  ctx.moveTo(30, 35);
+  ctx.quadraticCurveTo(80, 40, 110, 30);
+  ctx.quadraticCurveTo(100, 55, 60, 58);
+  ctx.quadraticCurveTo(20, 55, 0, 45);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- TEETH (upper row) ----
+  ctx.shadowBlur = 4;
+  ctx.shadowColor = "#ffffff";
+  ctx.fillStyle = "#e8e0d0";
+  for (let i = 0; i < 7; i++) {
+    const tx = 45 + i * 12;
+    const ty = 35 + (i % 2) * 5;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx + 4, ty + 14);
+    ctx.lineTo(tx + 8, ty + 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ---- TEETH (lower row) ----
+  for (let i = 0; i < 5; i++) {
+    const tx = 55 + i * 11;
+    const ty = 55 - (i % 2) * 4;
+    ctx.beginPath();
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(tx + 3, ty - 10);
+    ctx.lineTo(tx + 6, ty + 1);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ---- EYES (glowing demonic) ----
+  ctx.shadowBlur = 25 * eyeGlow;
+  ctx.shadowColor = "#ffcc00";
+  ctx.fillStyle = "#ffaa00";
+  // Eye sockets (larger)
+  ctx.beginPath();
+  ctx.ellipse(30, -50, 18, 14, 0.15, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(75, -55, 14, 10, 0.1, 0, TAU);
+  ctx.fill();
+  // Pupils (vertical cat-like slits)
+  ctx.shadowBlur = 10;
+  ctx.shadowColor = "#ff0000";
+  ctx.fillStyle = "#110000";
+  ctx.beginPath();
+  ctx.ellipse(33, -50, 3.5, 12, 0.15, 0, TAU);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(77, -55, 2.5, 8, 0.1, 0, TAU);
+  ctx.fill();
+  // Eye highlight glint
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(35, -54, 2.5, 0, TAU); ctx.fill();
+  ctx.beginPath();
+  ctx.arc(79, -58, 1.8, 0, TAU); ctx.fill();
+
+  // ---- Forehead ridge / brow ----
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = "#551100";
+  ctx.fillStyle = "#3a1510";
+  ctx.beginPath();
+  ctx.moveTo(10, -75);
+  ctx.quadraticCurveTo(50, -95, 100, -70);
+  ctx.quadraticCurveTo(80, -60, 40, -65);
+  ctx.closePath();
+  ctx.fill();
+
+  // ---- Horns (swept back, much larger) ----
+  ctx.shadowBlur = 15;
+  ctx.shadowColor = "#883311";
+  ctx.strokeStyle = "#4a2818";
+  ctx.fillStyle = "#4a2818";
+  ctx.lineWidth = 6;
+  // Main left horn
+  ctx.beginPath();
+  ctx.moveTo(5, -80);
+  ctx.quadraticCurveTo(-40, -160, -30, -260);
+  ctx.lineWidth = 5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(-30, -260, 7, 0, TAU); ctx.fill();
+  // Branch offshoot
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-20, -180);
+  ctx.quadraticCurveTo(-60, -220, -70, -190);
+  ctx.stroke();
+  // Main right horn
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(70, -85);
+  ctx.quadraticCurveTo(110, -170, 130, -240);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(130, -240, 6, 0, TAU); ctx.fill();
+  // Branch offshoot
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(100, -160);
+  ctx.quadraticCurveTo(150, -200, 155, -170);
+  ctx.stroke();
+
+  // ---- Nostril slits ----
+  ctx.shadowBlur = 6;
+  ctx.shadowColor = "#ff3300";
+  ctx.fillStyle = "#1a0300";
+  ctx.beginPath();
+  ctx.ellipse(120, 20, 5, 3, 0.2, 0, TAU); ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(128, 18, 4, 2.5, 0.2, 0, TAU); ctx.fill();
+
+  // ---- Scales on neck and jaw ----
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(255, 60, 20, 0.35)";
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < 6; i++) {
+    const sy = -60 + i * 18;
+    for (let j = 0; j < 4; j++) {
+      const sx = -55 + j * 30 + (i % 2) * 15;
+      ctx.beginPath();
+      ctx.arc(sx, sy + 80, 7, 0, Math.PI);
+      ctx.stroke();
+    }
+  }
+
+  // ---- Scattered glowing embers floating off the dragon ----
+  const emberPhase = (time * 0.003) % 1;
+  ctx.shadowBlur = 8;
+  for (let i = 0; i < 8; i++) {
+    const eph = (emberPhase + i / 8) % 1;
+    const ex = -20 + i * 15 + eph * 30;
+    const ey = -30 + Math.sin(eph * Math.PI * 3 + i) * 25 + eph * 80;
+    const er = 3 + eph * 4;
+    ctx.shadowColor = `rgba(255, ${80 + i * 20}, 0, ${1 - eph})`;
+    ctx.fillStyle = `rgba(255, ${80 + i * 20}, 0, ${1 - eph})`;
+    ctx.beginPath();
+    ctx.arc(ex, ey, er, 0, TAU);
+    ctx.fill();
+  }
+
+  // ---- Occasional continuous fire breath from nostrils ----
+  if (breathe > 0.3) {
+    ctx.shadowBlur = 20 + breathe * 15;
+    ctx.shadowColor = "#ff4400";
+    const fGrad = ctx.createRadialGradient(124, 19, 2, 124, 19, 40 + breathe * 30);
+    fGrad.addColorStop(0, `rgba(255, 240, 100, ${0.8})`);
+    fGrad.addColorStop(0.3, `rgba(255, 120, 20, ${0.5})`);
+    fGrad.addColorStop(1, "rgba(200, 0, 0, 0)");
+    ctx.fillStyle = fGrad;
+    ctx.beginPath();
+    ctx.moveTo(120, 15);
+    ctx.quadraticCurveTo(170, 10, 210 + breathe * 40, 30 + Math.sin(time * 0.01) * 15);
+    ctx.quadraticCurveTo(180, 35, 125, 25);
+    ctx.closePath();
+    ctx.fill();
   }
 
   ctx.restore();
@@ -4857,15 +5830,22 @@ function drawHUD(time) {
   if (!game.player) return;
   ctx.save();
 
-  // Top-left: Lap, Position, Time
+  // Top-left: Lap/Distance, Position, Time
   drawHUDPanel(20, 20, 220, 92, () => {
     ctx.fillStyle = "#a8acd0";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText("LAP", 18, 14);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 28px sans-serif";
-    ctx.fillText(`${Math.min(game.player.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 18, 28);
+    if (isDragonEscape()) {
+      ctx.fillText("DIST", 18, 14);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 24px 'SFMono-Regular', Consolas, monospace";
+      ctx.fillText(`${(game.player.lap * game.track.n + game.player.checkpointsThisLap) * 0.1}km`, 18, 28);
+    } else {
+      ctx.fillText("LAP", 18, 14);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillText(`${Math.min(game.player.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 18, 28);
+    }
 
     ctx.fillStyle = "#a8acd0";
     ctx.font = "11px sans-serif";
@@ -5124,10 +6104,8 @@ function drawHUDMultiplayer(time) {
     ctx.font = "10px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "top";
     
-    ctx.fillText("LAP", 12, 10);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText(`${Math.min(game.player.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 12, 22);
+    if (isDragonEscape()) { ctx.fillText("DIST", 12, 10); ctx.fillStyle = "#fff"; ctx.font = "bold 18px 'SFMono-Regular', Consolas, monospace"; ctx.fillText(`${((game.player.lap * game.track.n + game.player.checkpointsThisLap) * 0.1)}km`, 12, 22); }
+    else { ctx.fillText("LAP", 12, 10); ctx.fillStyle = "#fff"; ctx.font = "bold 20px sans-serif"; ctx.fillText(`${Math.min(game.player.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 12, 22); }
 
     ctx.fillStyle = "#a8acd0";
     ctx.font = "10px sans-serif";
@@ -5157,10 +6135,8 @@ function drawHUDMultiplayer(time) {
     ctx.font = "10px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "top";
     
-    ctx.fillText("LAP", 12, 10);
-    ctx.fillStyle = "#fff";
-    ctx.font = "bold 20px sans-serif";
-    ctx.fillText(`${Math.min(game.player2.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 12, 22);
+    if (isDragonEscape()) { ctx.fillText("DIST", 12, 10); ctx.fillStyle = "#fff"; ctx.font = "bold 18px 'SFMono-Regular', Consolas, monospace"; ctx.fillText(`${((game.player2.lap * game.track.n + game.player2.checkpointsThisLap) * 0.1)}km`, 12, 22); }
+    else { ctx.fillText("LAP", 12, 10); ctx.fillStyle = "#fff"; ctx.font = "bold 20px sans-serif"; ctx.fillText(`${Math.min(game.player2.lap + 1, TOTAL_LAPS)} / ${TOTAL_LAPS}`, 12, 22); }
 
     ctx.fillStyle = "#a8acd0";
     ctx.font = "10px sans-serif";
@@ -5337,19 +6313,20 @@ function drawMinimap(x, y, size) {
   const ox = pad + ((size - pad * 2) - WORLD_W * s) / 2;
   const oy = pad + ((size - pad * 2) - WORLD_H * s) / 2;
 
-  // Track outline
+  // Track outline (sample for huge worlds)
   ctx.strokeStyle = "rgba(255,255,255,0.7)";
   ctx.lineWidth = 6;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
-  for (let i = 0; i < game.track.n; i++) {
+  const step = game.track.isOpen ? 12 : 1;
+  for (let i = 0; i < game.track.n; i += step) {
     const w = game.track.waypoints[i];
     const px = ox + w.x * s, py = oy + w.y * s;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
   }
-  ctx.closePath();
+  if (!game.track.isOpen) ctx.closePath();
   ctx.stroke();
   ctx.strokeStyle = "rgba(58, 61, 73, 1)";
   ctx.lineWidth = 4;
@@ -5463,72 +6440,157 @@ function showFinishScreen() {
   const ranking = game.finalRanking || rankAll();
   
   if (game.multiplayer && game.player2) {
-    const p1Place = ranking.indexOf(game.player) + 1;
-    const p2Place = ranking.indexOf(game.player2) + 1;
-    
-    let winnerName = "";
-    if (p1Place < p2Place) winnerName = "P1 " + game.player.name + " Wins!";
-    else if (p2Place < p1Place) winnerName = "P2 " + game.player2.name + " Wins!";
-    else winnerName = "It's a Tie!";
+    if (isDragonEscape()) {
+      // Dragon survival multiplayer results
+      const p1Time = (game.player.finishTime || game.raceTime).toFixed(1);
+      const p2Time = (game.player2.finishTime || game.raceTime).toFixed(1);
+      const p1Lap = game.player.lap;
+      const p2Lap = game.player2.lap;
+      const p1Dist = ((game.player.lap * game.track.n + game.player.checkpointsThisLap) * 0.1).toFixed(1);
+      const p2Dist = ((game.player2.lap * game.track.n + game.player2.checkpointsThisLap) * 0.1).toFixed(1);
 
-    finishTitle.textContent = winnerName;
-    finishTitle.style.background = "";
+      let winnerName = "";
+      if (p1Lap > p2Lap) winnerName = "P1 " + game.player.name + " Outran the Dragon!";
+      else if (p2Lap > p1Lap) winnerName = "P2 " + game.player2.name + " Outran the Dragon!";
+      else if (parseFloat(p1Dist) > parseFloat(p2Dist)) winnerName = "P1 " + game.player.name + " Outran the Dragon!";
+      else if (parseFloat(p2Dist) > parseFloat(p1Dist)) winnerName = "P2 " + game.player2.name + " Outran the Dragon!";
+      else winnerName = "Both Cooked by the Dragon!";
 
-    let html = "";
-    
-    html += `<div style="display: flex; gap: 15px; width: 100%; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px;">`;
-    
-    // Player 1 Column
-    html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(123, 117, 255, 0.08); border-radius: 12px; border: 1px solid rgba(123, 117, 255, 0.2);">`;
-    html += `<div style="font-weight: 900; color: #7b75ff; border-bottom: 1px solid rgba(123,117,255,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 1 (${game.player.name})</div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p1Place, 4)}">${ordinal(p1Place)}</span></span></div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : "DNF"}</span></div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player.coinsCollected}</span></div>`;
-    const p1Score = game.player.coinsCollected * 10 + Math.max(0, (5 - p1Place) * 250);
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
-    html += `</div>`;
+      finishTitle.textContent = winnerName;
+      finishTitle.style.background = "linear-gradient(90deg, #ff4d4d, #ff8a00)";
+      finishTitle.style.webkitBackgroundClip = "text";
+      finishTitle.style.backgroundClip = "text";
+      finishTitle.style.color = "transparent";
 
-    // Player 2 Column
-    html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(255, 77, 109, 0.08); border-radius: 12px; border: 1px solid rgba(255, 77, 109, 0.2);">`;
-    html += `<div style="font-weight: 900; color: #ff4d6d; border-bottom: 1px solid rgba(255,77,109,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 2 (${game.player2.name})</div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p2Place, 4)}">${ordinal(p2Place)}</span></span></div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player2.finished ? formatTime(game.player2.finishTime) : "DNF"}</span></div>`;
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player2.coinsCollected}</span></div>`;
-    const p2Score = game.player2.coinsCollected * 10 + Math.max(0, (5 - p2Place) * 250);
-    html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
-    html += `</div>`;
+      let html = "";
+      html += `<div style="display: flex; gap: 15px; width: 100%; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px;">`;
+      // P1 Column
+      html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(123, 117, 255, 0.08); border-radius: 12px; border: 1px solid rgba(123, 117, 255, 0.2);">`;
+      html += `<div style="font-weight: 900; color: #7b75ff; border-bottom: 1px solid rgba(123,117,255,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 1 (${game.player.name})</div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Survival</span><span class="value">${formatTime(game.player.finishTime || game.raceTime)}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Distance</span><span class="value">${p1Dist} km</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Laps</span><span class="value">${p1Lap}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      const p1Score = game.player.coinsCollected * 15 + p1Lap * 500 + Math.floor((game.player.finishTime || game.raceTime) * 10);
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
+      html += `</div>`;
+      // P2 Column
+      html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(255, 77, 109, 0.08); border-radius: 12px; border: 1px solid rgba(255, 77, 109, 0.2);">`;
+      html += `<div style="font-weight: 900; color: #ff4d6d; border-bottom: 1px solid rgba(255,77,109,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 2 (${game.player2.name})</div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Survival</span><span class="value">${formatTime(game.player2.finishTime || game.raceTime)}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Distance</span><span class="value">${p2Dist} km</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Laps</span><span class="value">${p2Lap}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player2.coinsCollected}</span></div>`;
+      const p2Score = game.player2.coinsCollected * 15 + p2Lap * 500 + Math.floor((game.player2.finishTime || game.raceTime) * 10);
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
+      html += `</div>`;
+      html += `</div>`;
 
-    html += `</div>`;
+      // Rankings by who survived longest
+      html += `<div class="row" style="margin-top:6px; font-weight: 900; color: #fff;"><span class="label">Survival Ranking</span><span></span></div>`;
+      ranking.forEach((k, i) => {
+        if (k.isPlayer) {
+          html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${k.finished ? "Cooked!" : formatTime(k.finishTime || game.raceTime)}</span></div>`;
+        }
+      });
 
-    // Full ranking
-    html += `<div class="row" style="margin-top:6px; font-weight: 900; color: #fff;"><span class="label">Final Grid Leaderboard</span><span></span></div>`;
-    ranking.forEach((k, i) => {
-      const time = k.finished ? formatTime(k.finishTime) : "DNF";
-      html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${time}</span></div>`;
-    });
+      finishResults.innerHTML = html;
+    } else {
+      // Normal circuit multiplayer results
+      const p1Place = ranking.indexOf(game.player) + 1;
+      const p2Place = ranking.indexOf(game.player2) + 1;
+      
+      let winnerName = "";
+      if (p1Place < p2Place) winnerName = "P1 " + game.player.name + " Wins!";
+      else if (p2Place < p1Place) winnerName = "P2 " + game.player2.name + " Wins!";
+      else winnerName = "It's a Tie!";
 
-    finishResults.innerHTML = html;
+      finishTitle.textContent = winnerName;
+      finishTitle.style.background = "";
+
+      let html = "";
+      
+      html += `<div style="display: flex; gap: 15px; width: 100%; margin-bottom: 15px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px;">`;
+      
+      // Player 1 Column
+      html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(123, 117, 255, 0.08); border-radius: 12px; border: 1px solid rgba(123, 117, 255, 0.2);">`;
+      html += `<div style="font-weight: 900; color: #7b75ff; border-bottom: 1px solid rgba(123,117,255,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 1 (${game.player.name})</div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p1Place, 4)}">${ordinal(p1Place)}</span></span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : "DNF"}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      const p1Score = game.player.coinsCollected * 10 + Math.max(0, (5 - p1Place) * 250);
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
+      html += `</div>`;
+
+      // Player 2 Column
+      html += `<div style="flex: 1; text-align: left; padding: 12px; background: rgba(255, 77, 109, 0.08); border-radius: 12px; border: 1px solid rgba(255, 77, 109, 0.2);">`;
+      html += `<div style="font-weight: 900; color: #ff4d6d; border-bottom: 1px solid rgba(255,77,109,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 2 (${game.player2.name})</div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p2Place, 4)}">${ordinal(p2Place)}</span></span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player2.finished ? formatTime(game.player2.finishTime) : "DNF"}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player2.coinsCollected}</span></div>`;
+      const p2Score = game.player2.coinsCollected * 10 + Math.max(0, (5 - p2Place) * 250);
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
+      html += `</div>`;
+
+      html += `</div>`;
+
+      // Full ranking
+      html += `<div class="row" style="margin-top:6px; font-weight: 900; color: #fff;"><span class="label">Final Grid Leaderboard</span><span></span></div>`;
+      ranking.forEach((k, i) => {
+        const time = k.finished ? formatTime(k.finishTime) : "DNF";
+        html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${time}</span></div>`;
+      });
+
+      finishResults.innerHTML = html;
+    }
   } else {
     const playerPlace = ranking.indexOf(game.player) + 1;
+    const isDragon = isDragonEscape();
 
-    finishTitle.textContent = playerPlace === 1 ? "Victory!" : "Race Over";
-    finishTitle.style.background = "";
-    let html = "";
-    html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
-    html += `<div class="row"><span class="label">Final Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : formatTime(game.raceTime)}</span></div>`;
-    html += `<div class="row"><span class="label">Coins Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
-    const score = game.player.coinsCollected * 10 + Math.max(0, (5 - playerPlace) * 250) + Math.max(0, Math.floor(60 - game.raceTime) * 5);
-    html += `<div class="row"><span class="label">Score</span><span class="value">${score}</span></div>`;
-    html += `<div class="row"><span class="label">Laps Completed</span><span class="value">${game.player.lap} / ${TOTAL_LAPS}</span></div>`;
+    if (isDragon) {
+      const bestDist = ((game.player.lap * game.track.n + game.player.checkpointsThisLap) * 0.1).toFixed(1);
+      finishTitle.textContent = "Dragon's Wrath!";
+      finishTitle.style.background = "linear-gradient(90deg, #ff4d4d, #ff8a00)";
+      finishTitle.style.webkitBackgroundClip = "text";
+      finishTitle.style.backgroundClip = "text";
+      finishTitle.style.color = "transparent";
+      let html = "";
+      html += `<div class="row"><span class="label">Survival Time</span><span class="value">${formatTime(game.player.finishTime || game.raceTime)}</span></div>`;
+      html += `<div class="row"><span class="label">Distance Escaped</span><span class="value">${bestDist} km</span></div>`;
+      html += `<div class="row"><span class="label">Laps Survived</span><span class="value">${game.player.lap}</span></div>`;
+      html += `<div class="row"><span class="label">Coins Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      const dragonScore = Math.floor(game.player.lap * 500 + game.player.coinsCollected * 15 + game.player.finishTime * 10);
+      html += `<div class="row"><span class="label">Score</span><span class="value">${dragonScore}</span></div>`;
 
-    // Full ranking
-    html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Ranking</span><span></span></div>`;
-    ranking.forEach((k, i) => {
-      const time = k.finished ? formatTime(k.finishTime) : "—";
-      html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${time}</span></div>`;
-    });
+      // Full ranking (just human and how long they survived)
+      html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Survival Ranking</span><span></span></div>`;
+      ranking.forEach((k, i) => {
+        if (k.isPlayer) {
+          html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${k.finished ? "Cooked!" : formatTime(k.finishTime || game.raceTime)}</span></div>`;
+        }
+      });
 
-    finishResults.innerHTML = html;
+      finishResults.innerHTML = html;
+    } else {
+      finishTitle.textContent = playerPlace === 1 ? "Victory!" : "Race Over";
+      finishTitle.style.background = "";
+      let html = "";
+      html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
+      html += `<div class="row"><span class="label">Final Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : formatTime(game.raceTime)}</span></div>`;
+      html += `<div class="row"><span class="label">Coins Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      const score = game.player.coinsCollected * 10 + Math.max(0, (5 - playerPlace) * 250) + Math.max(0, Math.floor(60 - game.raceTime) * 5);
+      html += `<div class="row"><span class="label">Score</span><span class="value">${score}</span></div>`;
+      html += `<div class="row"><span class="label">Laps Completed</span><span class="value">${game.player.lap} / ${TOTAL_LAPS}</span></div>`;
+
+      // Full ranking
+      html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Ranking</span><span></span></div>`;
+      ranking.forEach((k, i) => {
+        const time = k.finished ? formatTime(k.finishTime) : "—";
+        html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${time}</span></div>`;
+      });
+
+      finishResults.innerHTML = html;
+    }
   }
   
   finishScreen.classList.remove("hidden");
@@ -5766,13 +6828,19 @@ function sendHostSync() {
     itemBoxes: game.track.itemBoxes.map(b => b.active),
     hazards: (game.hazards || []).map(h => ({
       isDossier: h instanceof DossierProjectile,
+      isDragonFire: h instanceof DragonFire,
       x: h.x,
       y: h.y,
       heading: h.heading || 0,
       vx: h.vx || 0,
       vy: h.vy || 0,
       spin: h.spin || 0,
-      active: h.active
+      active: h.active,
+      speed: h.speed || 0,
+      life: h.life || 0,
+      r: h.r || 0,
+      pulsePhase: h.pulsePhase || 0,
+      sizePhase: h.sizePhase || 0
     }))
   };
   sendP2pMessage(sync);
@@ -5948,6 +7016,16 @@ function handleP2pData(data) {
           dp.spin = h.spin;
           dp.active = h.active;
           return dp;
+        } else if (h.isDragonFire) {
+          const df = new DragonFire(h.x, h.y, h.heading, h.speed);
+          df.vx = h.vx;
+          df.vy = h.vy;
+          df.life = h.life;
+          df.r = h.r || 18;
+          df.pulsePhase = h.pulsePhase || 0;
+          df.sizePhase = h.sizePhase || 0;
+          df.active = h.active !== false;
+          return df;
         } else {
           const mc = new MergeConflict(h.x, h.y);
           mc.spin = h.spin;

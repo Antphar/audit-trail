@@ -46,6 +46,14 @@ Every single sound effect and music track is synthesized on-the-fly using the br
 * Glowing cyan boundaries with scrolling flow arrows on deep indigo highways.
 * Glowing "FINISH!" banners and confetti explosions.
 
+### 🐉 Dragon's Escape Map
+* A **Japanese-themed highland circuit** where you race to escape a massive dragon's wrath.
+* **Dynamic Dragon Fire**: The dragon breathes waves of fire projectiles from the left side of the screen, forcing evasive driving.
+* **Progressive Intensity**: Fire frequency, projectile count, and kart speed all increase over time and each lap.
+* **Japanese Audio**: Procedural Taiko drums, Koto plucks, and Shakuhachi-style melodies that intensify from 90 BPM to 158 BPM as the race heats up.
+* **Japanese Visuals**: Misty mountains, swaying bamboo, Torii gates, paper lanterns, and cherry blossom trees create an authentic atmosphere.
+* A menacing dragon head follows you from the left edge of the screen, breathing fire as intensity rises.
+
 ---
 
 ## 🎮 How to Play
