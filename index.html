@@ -7358,7 +7358,7 @@ function handleP2pData(data, sourceConn = null) {
     const playerId = sourceId || data.playerId;
     const player = game.p2pPlayers.find(p => p.id === playerId);
     if (!player) return;
-    player.charIdx = clamp(data.charIdx, 0, CHARACTERS.length - 1);
+    player.charIdx = Math.round(clamp(Number(data.charIdx), 0, CHARACTERS.length - 1));
     broadcastP2pLobby();
   }
 
