@@ -20,6 +20,35 @@
     background: #152216;
     image-rendering: optimizeSpeed;
   }
+  #crt-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 20;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+    background:
+      linear-gradient(rgba(255,255,255,0.055) 50%, rgba(0,0,0,0.12) 50%),
+      radial-gradient(circle at center, rgba(87,242,255,0.12), rgba(6,5,20,0.22) 65%, rgba(0,0,0,0.42) 100%);
+    background-size: 100% 4px, 100% 100%;
+    box-shadow: inset 0 0 80px rgba(87, 242, 255, 0.12), inset 0 0 180px rgba(123, 117, 255, 0.18);
+    mix-blend-mode: screen;
+  }
+  #crt-overlay.active {
+    opacity: 0.72;
+  }
+  #crt-overlay::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, rgba(255,0,80,0.04), rgba(0,255,255,0.035), rgba(255,255,255,0.02));
+    animation: crtFlicker 2.6s steps(3, end) infinite;
+  }
+  @keyframes crtFlicker {
+    0%, 100% { opacity: 0.42; transform: translateX(0); }
+    45% { opacity: 0.62; transform: translateX(0.6px); }
+    70% { opacity: 0.35; transform: translateX(-0.5px); }
+  }
 
   /* ---- Overlays (title / pause / finish) ---- */
   .overlay {
@@ -110,6 +139,20 @@
   .btn-alt:hover { box-shadow: 0 12px 30px rgba(164, 255, 128, 0.45); }
 
   .hint { font-size: 12px; color: #8a8da8; margin-top: 14px; letter-spacing: 1px; text-transform: uppercase; }
+  .crt-toggle {
+    margin-top: 2px;
+    padding: 9px 18px;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #ebe4ff;
+    border: 1px solid rgba(87, 242, 255, 0.28);
+    box-shadow: 0 0 18px rgba(87, 242, 255, 0.12), inset 0 -2px 0 rgba(0,0,0,0.22);
+  }
+  .crt-toggle.active {
+    color: #060514;
+    background: linear-gradient(135deg, #57f2ff, #a4ff80);
+  }
 
   .results {
     background: rgba(8, 6, 26, 0.65);
@@ -416,6 +459,74 @@
     margin: 5px 0;
   }
 
+  /* Settings menu */
+  .settings-panel {
+    background: rgba(13, 11, 33, 0.58);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(123, 117, 255, 0.18);
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    border-radius: 20px;
+    padding: 26px;
+    width: min(92vw, 760px);
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  .settings-label {
+    color: #ebe4ff;
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .music-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+  }
+  .music-card {
+    background: rgba(8, 6, 26, 0.72);
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    border-radius: 14px;
+    padding: 16px;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  }
+  .music-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(87, 242, 255, 0.55);
+    box-shadow: 0 10px 24px rgba(87, 242, 255, 0.14);
+  }
+  .music-card.selected {
+    border-color: #57f2ff;
+    box-shadow: 0 0 22px rgba(87, 242, 255, 0.42), inset 0 0 10px rgba(87, 242, 255, 0.18);
+    background: rgba(12, 18, 56, 0.88);
+  }
+  .music-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 900;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .music-card-meta {
+    color: #57f2ff;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+  }
+  .settings-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
   /* ---- Map Selection Section ---- */
   .map-select-section {
     width: 100%;
@@ -579,6 +690,7 @@
 </head>
 <body>
   <canvas id="game"></canvas>
+  <div id="crt-overlay" aria-hidden="true"></div>
 
   <!-- Audio Notification Toast -->
   <div id="audio-toast" class="audio-toast hidden">
@@ -607,8 +719,23 @@
       <button class="btn btn-alt" id="start-1p-btn">1 Player Race</button>
       <button class="btn btn-alt" id="start-2p-btn" style="background: rgba(255, 255, 255, 0.05); color: #fff;">2 Players Split-Screen</button>
       <button class="btn" id="start-p2p-btn" style="background: linear-gradient(135deg, #7b75ff, #57f2ff); box-shadow: 0 4px 15px rgba(123, 117, 255, 0.35);">P2P Wi-Fi Multiplayer</button>
+      <button class="btn btn-alt" id="settings-btn" type="button" style="background: rgba(255, 255, 255, 0.08); color: #fff;">Settings</button>
+      <button class="btn crt-toggle" id="crt-toggle-btn" type="button">CRT Overlay: Off</button>
     </div>
     <div class="hint pulse">Choose a mode to start</div>
+  </div>
+
+  <!-- Settings screen -->
+  <div id="settings-screen" class="overlay hidden">
+    <div class="title-text" style="font-size: clamp(32px, 5.5vw, 64px); margin-bottom: 4px;">Settings</div>
+    <div class="subtitle" style="margin-bottom: 12px; color: #57f2ff;">Choose Your Soundtrack</div>
+    <div class="settings-panel">
+      <div class="settings-label">Music Track</div>
+      <div class="music-grid" id="music-settings-container"></div>
+      <div class="settings-actions">
+        <button class="btn btn-alt" id="settings-back-btn" type="button" style="background: rgba(255,255,255,0.06); color: #fff;">Back to Menu</button>
+      </div>
+    </div>
   </div>
 
   <!-- P2P Setup Screen -->
@@ -699,15 +826,21 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const titleScreen = document.getElementById("title-screen");
+const settingsScreen = document.getElementById("settings-screen");
 const selectScreen = document.getElementById("select-screen");
 const pauseScreen = document.getElementById("pause-screen");
 const finishScreen = document.getElementById("finish-screen");
+const crtOverlay = document.getElementById("crt-overlay");
 const finishResults = document.getElementById("finish-results");
 const finishTitle = document.getElementById("finish-title");
 const start1pBtn = document.getElementById("start-1p-btn");
 const start2pBtn = document.getElementById("start-2p-btn");
 const driveBtn = document.getElementById("drive-btn");
 const restartBtn = document.getElementById("restart-btn");
+const settingsBtn = document.getElementById("settings-btn");
+const settingsBackBtn = document.getElementById("settings-back-btn");
+const musicSettingsContainer = document.getElementById("music-settings-container");
+const crtToggleBtn = document.getElementById("crt-toggle-btn");
 
 const startP2pBtn = document.getElementById("start-p2p-btn");
 const p2pScreen = document.getElementById("p2p-screen");
@@ -721,6 +854,7 @@ const p2pJoinStatus = document.getElementById("p2p-join-status");
 const p2pBackBtn = document.getElementById("p2p-back-btn");
 
 let peer = null;
+let crtOverlayEnabled = false;
 
 // ---- Character Configurations ----
 const CHARACTERS = [
@@ -1044,6 +1178,230 @@ function triggerShootEffect(kart, item) {
       // Cyan muzzle burst in front of kart
       game.particles.burst(kart.x + fx * 24, kart.y + fy * 24, "#57f2ff", 15, { spdMin: 2, spdMax: 5 });
     }
+  } else if (item === "deauth") {
+    Sound.spatialTone(kart.x, kart.y, 95, 0.25, "sawtooth", 0.18, 28);
+    Sound.spatialNoise(kart.x, kart.y, 0.22, 0.13, 420);
+    if (game.particles) {
+      for (let i = 0; i < 3; i++) {
+        game.particles.add({
+          type: "ring",
+          x: kart.x,
+          y: kart.y,
+          vx: 0,
+          vy: 0,
+          life: 26 + i * 8,
+          maxLife: 26 + i * 8,
+          size: 95 + i * 34,
+          startSize: 18 + i * 8,
+          color: i === 0 ? "#ff3366" : "rgba(255, 51, 102, 0.65)"
+        });
+      }
+      game.particles.burst(kart.x, kart.y, "#ff3366", 22, { spdMin: 2, spdMax: 6 });
+    }
+  } else if (item === "mergerequest") {
+    Sound.spatialTone(kart.x, kart.y, 320, 0.16, "square", 0.14, 760);
+    Sound.spatialTone(kart.x, kart.y, 640, 0.12, "triangle", 0.10, 960);
+    if (game.particles) {
+      game.particles.add({
+        type: "ring",
+        x: kart.x,
+        y: kart.y,
+        vx: 0,
+        vy: 0,
+        life: 24,
+        maxLife: 24,
+        size: 46,
+        startSize: 8,
+        color: "#39ff14"
+      });
+      game.particles.burst(kart.x + fx * 18, kart.y + fy * 18, "#39ff14", 14, { spdMin: 1.5, spdMax: 4 });
+    }
+  }
+}
+
+function applyDeauthShockwave(sourceKart) {
+  if (!sourceKart) return;
+  const radius = 175;
+  let affected = 0;
+
+  for (const kart of getActiveKarts()) {
+    if (!kart || kart === sourceKart || kart.finished) continue;
+    const d = dist(sourceKart.x, sourceKart.y, kart.x, kart.y);
+    if (d > radius) continue;
+
+    const falloff = 1 - d / radius;
+    const nx = (kart.x - sourceKart.x) / Math.max(0.001, d);
+    const ny = (kart.y - sourceKart.y) / Math.max(0.001, d);
+    kart.vx += nx * (3.5 + falloff * 4.0);
+    kart.vy += ny * (3.5 + falloff * 4.0);
+
+    if (kart.shieldTimer > 0) {
+      kart.shieldTimer = 0;
+      if (game.particles) {
+        game.particles.burst(kart.x, kart.y, "#78dcff", 18, { spdMin: 1.5, spdMax: 4 });
+      }
+    } else {
+      kart.spinoutTimer = Math.max(kart.spinoutTimer, 32);
+      kart.spinAngle = 0;
+      triggerQuote(kart, "crash");
+      if (game.particles) {
+        game.particles.add({
+          type: "text",
+          text: "DE-AUTH!",
+          x: kart.x,
+          y: kart.y - 24,
+          vx: 0,
+          vy: -0.9,
+          life: 45,
+          maxLife: 45,
+          size: 16,
+          color: "#ff3366",
+          drag: 0.98
+        });
+        game.particles.burst(kart.x, kart.y, "#ff3366", 18, { spdMin: 2, spdMax: 5 });
+      }
+    }
+    affected++;
+  }
+
+  if (affected > 0) {
+    game.shake = Math.max(game.shake, 7);
+    game.flash = Math.max(game.flash, 6);
+  }
+}
+
+function findMergeRequestTarget(kart) {
+  const ranking = rankAll().filter(k => k && k !== kart && !k.finished);
+  const myRank = rankAll().indexOf(kart);
+  if (myRank > 0 && ranking[myRank - 1]) return ranking[myRank - 1];
+
+  let best = null;
+  let bestScore = Infinity;
+  const fx = Math.cos(kart.heading);
+  const fy = Math.sin(kart.heading);
+  for (const other of getActiveKarts()) {
+    if (!other || other === kart || other.finished) continue;
+    const dx = other.x - kart.x;
+    const dy = other.y - kart.y;
+    const forward = dx * fx + dy * fy;
+    if (forward <= 20) continue;
+    const lateral = Math.abs(dx * -fy + dy * fx);
+    const score = forward + lateral * 1.8;
+    if (score < bestScore) {
+      bestScore = score;
+      best = other;
+    }
+  }
+  return best;
+}
+
+function startMergeRequestPull(kart) {
+  const target = findMergeRequestTarget(kart);
+  if (!target) {
+    kart.boostTimer = Math.max(kart.boostTimer, 36);
+    if (game.particles) {
+      game.particles.add({
+        type: "text",
+        text: "NO REVIEWER",
+        x: kart.x,
+        y: kart.y - 22,
+        vx: 0,
+        vy: -0.8,
+        life: 36,
+        maxLife: 36,
+        size: 13,
+        color: "#39ff14"
+      });
+    }
+    return;
+  }
+
+  kart.mergePullTarget = target;
+  kart.mergePullTargetId = getKartId(target);
+  kart.mergePullTimer = 95;
+  triggerQuote(kart, "boost");
+  if (game.particles) {
+    game.particles.add({
+      type: "text",
+      text: "MERGE REQUEST!",
+      x: kart.x,
+      y: kart.y - 22,
+      vx: 0,
+      vy: -0.8,
+      life: 42,
+      maxLife: 42,
+      size: 14,
+      color: "#39ff14"
+    });
+  }
+}
+
+function applyMergeRequestPull(kart, dt) {
+  if (!kart.mergePullTimer || kart.mergePullTimer <= 0) return;
+  let target = kart.mergePullTarget;
+  if ((!target || target.finished) && kart.mergePullTargetId) {
+    target = getKartById(kart.mergePullTargetId);
+    kart.mergePullTarget = target;
+  }
+  if (!target || target === kart || target.finished) {
+    kart.mergePullTimer = 0;
+    kart.mergePullTarget = null;
+    kart.mergePullTargetId = null;
+    return;
+  }
+
+  const dx = target.x - kart.x;
+  const dy = target.y - kart.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 58) {
+    kart.mergePullTimer = 0;
+    kart.mergePullTarget = null;
+    kart.mergePullTargetId = null;
+    kart.boostTimer = Math.max(kart.boostTimer, 24);
+    return;
+  }
+
+  const nx = dx / Math.max(0.001, d);
+  const ny = dy / Math.max(0.001, d);
+  const pull = clamp((d - 55) / 360, 0.08, 0.42);
+  kart.vx += nx * pull * dt;
+  kart.vy += ny * pull * dt;
+  kart.mergePullTimer -= dt;
+
+  if (game.particles && Math.random() < 0.35 * dt) {
+    game.particles.add({
+      type: "line",
+      x: kart.x + rand(-4, 4),
+      y: kart.y + rand(-4, 4),
+      vx: nx * rand(2, 4),
+      vy: ny * rand(2, 4),
+      life: 14,
+      maxLife: 14,
+      size: rand(1.5, 3),
+      color: "rgba(57, 255, 20, 0.55)",
+      drag: 0.95
+    });
+  }
+}
+
+function drawMergeRequestTethers(ctx, time) {
+  const pulse = 0.45 + 0.35 * Math.sin(time * 0.018);
+  for (const kart of getActiveKarts()) {
+    if (!kart || !kart.mergePullTimer || kart.mergePullTimer <= 0) continue;
+    const target = kart.mergePullTarget || getKartById(kart.mergePullTargetId);
+    if (!target || target === kart) continue;
+    ctx.save();
+    ctx.strokeStyle = `rgba(57, 255, 20, ${pulse})`;
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = "#39ff14";
+    ctx.setLineDash([10, 7]);
+    ctx.lineDashOffset = -time * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(kart.x, kart.y);
+    ctx.lineTo(target.x, target.y);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -3273,6 +3631,9 @@ class Kart {
     this.draftTimer = 0;
     this.draftBoostTimer = 0;
     this.ultraBoostActive = false;
+    this.mergePullTimer = 0;
+    this.mergePullTarget = null;
+    this.mergePullTargetId = null;
   }
 
   forwardSpeed() {
@@ -3333,6 +3694,18 @@ class Kart {
           heading: this.heading
         });
       }
+    } else if (type === "deauth") {
+      applyDeauthShockwave(this);
+      if (game.p2pMode && game.p2pRole === "guest") {
+        sendP2pMessage({
+          type: "deauth_shockwave",
+          kartId: getKartId(this),
+          x: this.x,
+          y: this.y
+        });
+      }
+    } else if (type === "mergerequest") {
+      startMergeRequestPull(this);
     }
   }
 
@@ -3541,6 +3914,7 @@ class Kart {
     // Recompose velocity
     this.vx = vF * fx + vL * lx;
     this.vy = vF * fy + vL * ly;
+    applyMergeRequestPull(this, dt);
 
     // Move
     this.x += this.vx * dt;
@@ -3691,7 +4065,7 @@ class Kart {
       this.itemRollTimer -= dt;
       if (this.itemRollTimer <= 0) {
         this.itemState = "active";
-        this.itemSlot = pick(["boost", "shield", "handling", "conflict", "dossier"]);
+        this.itemSlot = pick(["boost", "shield", "handling", "conflict", "dossier", "deauth", "mergerequest"]);
         if (!this.isPlayer) {
           this.aiItemUseTimer = rand(60, 180);
         }
@@ -3856,6 +4230,37 @@ class PlayerKart extends Kart {
 
     const onRoad = track.isOnRoad(this.x, this.y);
     const r = this.applyPhysics(input, track, dt, onRoad);
+
+    // Off-road effects (digital green dust particles + spatialized static noise)
+    if (!onRoad && this.speed() > 1.0) {
+      if (!this.offRoadAudioTimer) this.offRoadAudioTimer = 0;
+      this.offRoadAudioTimer -= dt;
+      if (this.offRoadAudioTimer <= 0) {
+        this.offRoadAudioTimer = rand(8, 16);
+        Sound.spatialNoise(this.x, this.y, 0.10, 0.04, 700);
+      }
+      
+      if (Math.random() < 0.4 * dt) {
+        const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
+        const lx = -fy, ly = fx;
+        for (const side of [-1, 1]) {
+          game.particles.add({
+            type: "rect",
+            x: this.x - fx * 12 + lx * side * 6 + rand(-2, 2),
+            y: this.y - fy * 12 + ly * side * 6 + rand(-2, 2),
+            vx: -fx * rand(1.5, 3.5) + rand(-1, 1),
+            vy: -fy * rand(1.5, 3.5) + rand(-1, 1),
+            life: rand(15, 30),
+            maxLife: 30,
+            size: rand(3, 6),
+            angle: rand(0, TAU),
+            spin: rand(-0.2, 0.2),
+            color: pick(["#00ff66", "#adff2f", "#39ff14", "rgba(0, 255, 102, 0.4)"]),
+            drag: 0.92
+          });
+        }
+      }
+    }
 
     // Skid marks (with neon styling for Rissal)
     this.skidEmitTimer -= dt;
@@ -4068,6 +4473,10 @@ class AIKart extends Kart {
         if (rank <= 2 || Math.random() < 0.02 * dt) {
           shouldUse = true;
         }
+      } else if (this.itemSlot === "deauth") {
+        shouldUse = getActiveKarts().some(k => k !== this && !k.finished && dist(this.x, this.y, k.x, k.y) < 150);
+      } else if (this.itemSlot === "mergerequest") {
+        shouldUse = rank > 1 && curvature < 0.35;
       }
       
       if (shouldUse) {
@@ -4099,6 +4508,37 @@ class AIKart extends Kart {
 
     this.maxSpeed = origMaxSpeed;
     this.acceleration = origAcceleration;
+
+    // Off-road effects (digital green dust particles + spatialized static noise)
+    if (!onRoad && this.speed() > 1.0) {
+      if (!this.offRoadAudioTimer) this.offRoadAudioTimer = 0;
+      this.offRoadAudioTimer -= dt;
+      if (this.offRoadAudioTimer <= 0) {
+        this.offRoadAudioTimer = rand(8, 16);
+        Sound.spatialNoise(this.x, this.y, 0.10, 0.04, 700);
+      }
+      
+      if (Math.random() < 0.4 * dt) {
+        const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
+        const lx = -fy, ly = fx;
+        for (const side of [-1, 1]) {
+          game.particles.add({
+            type: "rect",
+            x: this.x - fx * 12 + lx * side * 6 + rand(-2, 2),
+            y: this.y - fy * 12 + ly * side * 6 + rand(-2, 2),
+            vx: -fx * rand(1.5, 3.5) + rand(-1, 1),
+            vy: -fy * rand(1.5, 3.5) + rand(-1, 1),
+            life: rand(15, 30),
+            maxLife: 30,
+            size: rand(3, 6),
+            angle: rand(0, TAU),
+            spin: rand(-0.2, 0.2),
+            color: pick(["#00ff66", "#adff2f", "#39ff14", "rgba(0, 255, 102, 0.4)"]),
+            drag: 0.92
+          });
+        }
+      }
+    }
 
     // AI Skid marks (with neon color for Rissal)
     this.skidEmitTimer -= dt;
@@ -5120,6 +5560,36 @@ function update(dt, time) {
       const isP2Drifting = !!keysP2.drift && p2Speed > 1.5;
       Sound.updateDriftSqueal(2, isP2Drifting, p2Speed);
       Sound.updateEngine(2, p2Speed, game.player2.maxSpeed, game.player2.boostTimer > 0);
+
+      const p2OnRoad = game.track.isOnRoad(game.player2.x, game.player2.y);
+      if (!p2OnRoad && p2Speed > 1.0) {
+        if (!game.player2.offRoadAudioTimer) game.player2.offRoadAudioTimer = 0;
+        game.player2.offRoadAudioTimer -= dt;
+        if (game.player2.offRoadAudioTimer <= 0) {
+          game.player2.offRoadAudioTimer = rand(8, 16);
+          Sound.spatialNoise(game.player2.x, game.player2.y, 0.10, 0.04, 700);
+        }
+        if (Math.random() < 0.4 * dt) {
+          const fx = Math.cos(game.player2.heading), fy = Math.sin(game.player2.heading);
+          const lx = -fy, ly = fx;
+          for (const side of [-1, 1]) {
+            game.particles.add({
+              type: "rect",
+              x: game.player2.x - fx * 12 + lx * side * 6 + rand(-2, 2),
+              y: game.player2.y - fy * 12 + ly * side * 6 + rand(-2, 2),
+              vx: -fx * rand(1.5, 3.5) + rand(-1, 1),
+              vy: -fy * rand(1.5, 3.5) + rand(-1, 1),
+              life: rand(15, 30),
+              maxLife: 30,
+              size: rand(3, 6),
+              angle: rand(0, TAU),
+              spin: rand(-0.2, 0.2),
+              color: pick(["#00ff66", "#adff2f", "#39ff14", "rgba(0, 255, 102, 0.4)"]),
+              drag: 0.92
+            });
+          }
+        }
+      }
     } else {
       Sound.stopRumble(2);
       Sound.stopDriftSqueal(2);
@@ -5218,6 +5688,8 @@ function drawWorld(pKart, left, top, width, height, time, isP2) {
       h.draw(ctx, time);
     }
   }
+
+  drawMergeRequestTethers(ctx, time);
 
   // Karts sorted by depth
   const activeKarts = getActiveKarts();
@@ -5484,7 +5956,7 @@ function drawItemSlot(ctx, x, y, size, kart, time) {
     ctx.textBaseline = "middle";
     ctx.fillText("?", size / 2, size / 2);
   } else if (kart.itemState === "rolling") {
-    const items = ["boost", "shield", "handling", "conflict"];
+    const items = ["boost", "shield", "handling", "conflict", "dossier", "deauth", "mergerequest"];
     const frameIdx = Math.floor(time * 0.05) % items.length;
     const item = items[frameIdx];
     drawItemIcon(ctx, size / 2, size / 2, size * 0.55, item, time);
@@ -5604,6 +6076,55 @@ function drawItemIcon(ctx, cx, cy, sz, item, time) {
     ctx.moveTo(-sz * 0.3, sz * 0.25);
     ctx.lineTo(sz * 0.25, sz * 0.25);
     ctx.stroke();
+  } else if (item === "deauth") {
+    ctx.strokeStyle = "#ff3366";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ff3366";
+    
+    // Draw concentric antenna waves
+    ctx.beginPath();
+    ctx.arc(0, sz * 0.15, sz * 0.12, 0, TAU);
+    ctx.fillStyle = "#ff3366";
+    ctx.fill();
+    
+    ctx.beginPath();
+    ctx.arc(0, sz * 0.15, sz * 0.3, Math.PI * 1.2, Math.PI * 1.8);
+    ctx.stroke();
+    
+    ctx.beginPath();
+    ctx.arc(0, sz * 0.15, sz * 0.52, Math.PI * 1.25, Math.PI * 1.75);
+    ctx.stroke();
+  } else if (item === "mergerequest") {
+    ctx.strokeStyle = "#39ff14";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#39ff14";
+    
+    // Draw bracket < > with a center pull arrow
+    ctx.beginPath();
+    ctx.moveTo(-sz * 0.35, -sz * 0.3);
+    ctx.lineTo(-sz * 0.5, 0);
+    ctx.lineTo(-sz * 0.35, sz * 0.3);
+    
+    ctx.moveTo(sz * 0.35, -sz * 0.3);
+    ctx.lineTo(sz * 0.5, 0);
+    ctx.lineTo(sz * 0.35, sz * 0.3);
+    ctx.stroke();
+    
+    // Center arrow pointing down/in
+    ctx.beginPath();
+    ctx.moveTo(0, -sz * 0.25);
+    ctx.lineTo(0, sz * 0.25);
+    ctx.stroke();
+    
+    ctx.fillStyle = "#39ff14";
+    ctx.beginPath();
+    ctx.moveTo(-sz * 0.15, sz * 0.08);
+    ctx.lineTo(0, sz * 0.25);
+    ctx.lineTo(sz * 0.15, sz * 0.08);
+    ctx.closePath();
+    ctx.fill();
   }
 
   ctx.restore();
@@ -6035,15 +6556,77 @@ function showFinishScreen() {
 
 function hideAll() {
   titleScreen.classList.add("hidden");
+  settingsScreen.classList.add("hidden");
   selectScreen.classList.add("hidden");
   pauseScreen.classList.add("hidden");
   finishScreen.classList.add("hidden");
   p2pScreen.classList.add("hidden");
 }
 
+function renderMusicSettings() {
+  if (!musicSettingsContainer) return;
+  musicSettingsContainer.innerHTML = "";
+  Sound.tracks.forEach((track, idx) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "music-card" + (Sound.trackIdx === idx ? " selected" : "");
+    card.innerHTML = `
+      <div class="music-card-title"><span>${track.icon}</span><span>${track.name}</span></div>
+      <div class="music-card-meta">${track.tempo} BPM · ${idx === 0 ? "Synthwave Cruise" : idx === 1 ? "Acid Sprint" : "Chiptune Flow"}</div>
+    `;
+    card.addEventListener("click", () => {
+      setMusicTrack(idx);
+      Sound.tone(660, 0.08, "square", 0.12);
+    });
+    musicSettingsContainer.appendChild(card);
+  });
+}
+
+function setMusicTrack(idx) {
+  Sound.trackIdx = idx;
+  const track = Sound.tracks[idx];
+  Sound.tempo = track.tempo;
+  if (game.player && game.player.lap >= TOTAL_LAPS - 1) {
+    Sound.tempo = track.tempo + 18;
+  }
+  renderMusicSettings();
+  if (Sound.isPlayingMusic) {
+    Sound.showTrackToast();
+  }
+}
+
+function showSettingsScreen() {
+  hideAll();
+  renderMusicSettings();
+  settingsScreen.classList.remove("hidden");
+}
+
+function setCrtOverlayEnabled(enabled) {
+  crtOverlayEnabled = enabled;
+  crtOverlay.classList.toggle("active", enabled);
+  crtToggleBtn.classList.toggle("active", enabled);
+  crtToggleBtn.textContent = enabled ? "CRT Overlay: On" : "CRT Overlay: Off";
+}
+
 /* ============================================================
    START / RESTART HOOKS
    ============================================================ */
+settingsBtn.addEventListener("click", () => {
+  Sound.ensure(); Sound.resume();
+  showSettingsScreen();
+});
+
+settingsBackBtn.addEventListener("click", () => {
+  Sound.ensure(); Sound.resume();
+  hideAll();
+  titleScreen.classList.remove("hidden");
+});
+
+crtToggleBtn.addEventListener("click", () => {
+  Sound.ensure(); Sound.resume();
+  setCrtOverlayEnabled(!crtOverlayEnabled);
+});
+
 start1pBtn.addEventListener("click", () => {
   Sound.ensure(); Sound.resume();
   game.multiplayer = false;
@@ -6287,7 +6870,9 @@ function sendHostSync() {
       activeQuote: game.player.activeQuote,
       quoteTimer: game.player.quoteTimer,
       spinoutTimer: game.player.spinoutTimer,
-      coinsCollected: game.player.coinsCollected
+      coinsCollected: game.player.coinsCollected,
+      mergePullTimer: game.player.mergePullTimer || 0,
+      mergePullTargetId: game.player.mergePullTargetId || null
     },
     ais: game.ais.map(ai => ({
       x: ai.x,
@@ -6301,7 +6886,9 @@ function sendHostSync() {
       lap: ai.lap,
       spinoutTimer: ai.spinoutTimer,
       activeQuote: ai.activeQuote,
-      quoteTimer: ai.quoteTimer
+      quoteTimer: ai.quoteTimer,
+      mergePullTimer: ai.mergePullTimer || 0,
+      mergePullTargetId: ai.mergePullTargetId || null
     })),
     coins: game.track.coins.map(c => c.collected),
     itemBoxes: game.track.itemBoxes.map(b => b.active),
@@ -6340,7 +6927,9 @@ function sendGuestSync() {
       activeQuote: game.player.activeQuote,
       quoteTimer: game.player.quoteTimer,
       spinoutTimer: game.player.spinoutTimer,
-      coinsCollected: game.player.coinsCollected
+      coinsCollected: game.player.coinsCollected,
+      mergePullTimer: game.player.mergePullTimer || 0,
+      mergePullTargetId: game.player.mergePullTargetId || null
     }
   };
   sendP2pMessage(sync);
@@ -6447,6 +7036,9 @@ function handleP2pData(data) {
       game.player2.quoteTimer = p.quoteTimer;
       game.player2.spinoutTimer = p.spinoutTimer;
       game.player2.coinsCollected = p.coinsCollected;
+      game.player2.mergePullTimer = p.mergePullTimer || 0;
+      game.player2.mergePullTargetId = p.mergePullTargetId || null;
+      game.player2.mergePullTarget = getKartById(game.player2.mergePullTargetId);
     }
 
     if (game.ais && data.ais) {
@@ -6466,6 +7058,9 @@ function handleP2pData(data) {
           ai.spinoutTimer = p.spinoutTimer;
           ai.activeQuote = p.activeQuote;
           ai.quoteTimer = p.quoteTimer;
+          ai.mergePullTimer = p.mergePullTimer || 0;
+          ai.mergePullTargetId = p.mergePullTargetId || null;
+          ai.mergePullTarget = getKartById(ai.mergePullTargetId);
         }
       }
     }
@@ -6521,6 +7116,9 @@ function handleP2pData(data) {
       game.player2.quoteTimer = p.quoteTimer;
       game.player2.spinoutTimer = p.spinoutTimer;
       game.player2.coinsCollected = p.coinsCollected;
+      game.player2.mergePullTimer = p.mergePullTimer || 0;
+      game.player2.mergePullTargetId = p.mergePullTargetId || null;
+      game.player2.mergePullTarget = getKartById(game.player2.mergePullTargetId);
     }
   }
 
@@ -6535,6 +7133,13 @@ function handleP2pData(data) {
     if (game.p2pMode && game.p2pRole === "host" && game.player2) {
       const h = new MergeConflict(data.x, data.y);
       game.hazards.push(h);
+    }
+  }
+
+  else if (data.type === "deauth_shockwave") {
+    if (game.p2pMode && game.p2pRole === "host") {
+      const kart = getKartById(data.kartId);
+      if (kart) applyDeauthShockwave(kart);
     }
   }
 

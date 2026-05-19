@@ -27,6 +27,7 @@ Every single sound effect and music track is synthesized on-the-fly using the br
 * Play with your friends instantly over local networks or across the world with direct peer connections.
 * Host-guest synchronization for local AI bots, item boxes, coin pickups, and hazards.
 * Dynamic guest input and coordinate synchronization packets.
+* Synchronized item activation events with spatialized projectile and shockwave feedback.
 
 ### 🚗 Advanced 2D Physics Engine
 * Realistic vector-based drift mechanics with 3 distinct tiers of neon sparks (Blue -> Orange -> Neon Purple) based on drift duration.
@@ -34,6 +35,13 @@ Every single sound effect and music track is synthesized on-the-fly using the br
 * Traction snapback speed boosts upon drift release.
 * Elastic wall-bouncing physics with angle-based impact recoil.
 * Slipstream drafting tunnels allowing you to lock onto karts ahead and gain overtaking turbo surges.
+* Off-road digital static particles and spatialized tire noise when karts leave the racing surface.
+
+### 🧨 Mainframe Items
+* **Dossier Projectile**: Fire a bouncing audit packet at the kart ahead.
+* **Merge Conflict**: Drop a red hazard block behind you.
+* **De-auth Shockwave**: Trigger an expanding neon pulse that spins out nearby opponents.
+* **Merge Request**: Tether to the kart ahead and pull yourself into review range.
 
 ### 🤖 Smart AI Autopilot Navigation
 * Multi-point waypoint lookahead for proactive cornering.
@@ -59,6 +67,7 @@ Every single sound effect and music track is synthesized on-the-fly using the br
 * **Pause**: `P`
 * **Mute/Unmute**: `M`
 * **Restart**: `R`
+* **CRT Overlay**: Toggle from the title menu
 
 ---
 
