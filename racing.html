@@ -517,10 +517,78 @@
     letter-spacing: 1px;
     box-shadow: 0 2px 6px rgba(0,0,0,0.3);
   }
+
+  /* Audio Toast Notification */
+  .audio-toast {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    background: rgba(10, 8, 28, 0.85);
+    border: 1.5px solid #57f2ff;
+    box-shadow: 0 8px 32px rgba(87, 242, 255, 0.25);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: 12px;
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    z-index: 99999;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    pointer-events: none;
+    transform: translateY(0);
+    opacity: 1;
+  }
+  .audio-toast.hidden {
+    transform: translateY(-20px) scale(0.9);
+    opacity: 0;
+  }
+  .audio-icon {
+    font-size: 24px;
+    animation: bounce 1.2s infinite alternate ease-in-out;
+  }
+  .audio-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .audio-now-playing {
+    font-size: 9px;
+    font-weight: 900;
+    color: #a49fc4;
+    letter-spacing: 1.5px;
+    font-family: monospace;
+  }
+  .audio-track-title {
+    font-size: 15px;
+    font-weight: 800;
+    color: #fff;
+    text-shadow: 0 0 6px rgba(255, 255, 255, 0.3);
+  }
+  .audio-track-tempo {
+    font-size: 10px;
+    font-weight: 500;
+    color: #57f2ff;
+    font-family: monospace;
+  }
+  @keyframes bounce {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-4px); }
+  }
 </style>
 </head>
 <body>
   <canvas id="game"></canvas>
+
+  <!-- Audio Notification Toast -->
+  <div id="audio-toast" class="audio-toast hidden">
+    <div class="audio-icon" id="audio-toast-icon">🎵</div>
+    <div class="audio-info">
+      <div class="audio-now-playing" id="audio-toast-label">NOW PLAYING</div>
+      <div id="audio-track-title" class="audio-track-title">Mainframe Sunset</div>
+      <div id="audio-track-tempo" class="audio-track-tempo">124 BPM</div>
+    </div>
+  </div>
 
   <!-- Title screen -->
   <div id="title-screen" class="overlay">
@@ -897,6 +965,88 @@ function makeTypo(str) {
   return chars.join("");
 }
 
+function triggerShootEffect(kart, item) {
+  const fx = Math.cos(kart.heading);
+  const fy = Math.sin(kart.heading);
+  const lx = -Math.sin(kart.heading);
+  const ly = Math.cos(kart.heading);
+
+  if (item === "boost") {
+    Sound.spatialTone(kart.x, kart.y, 220, 0.45, "sawtooth", 0.16, 880);
+    Sound.spatialNoise(kart.x, kart.y, 0.25, 0.08, 1200);
+    // Smoke & orange sparks behind kart
+    if (game.particles) {
+      game.particles.burst(kart.x - fx * 20, kart.y - fy * 20, "#ff9d00", 15, { spdMin: 1, spdMax: 3 });
+      // Add white/grey smoke
+      for (let i = 0; i < 8; i++) {
+        const ang = kart.heading + Math.PI + rand(-0.3, 0.3);
+        const sp = rand(1, 2.5);
+        game.particles.add({
+          type: "spark",
+          x: kart.x - fx * 20,
+          y: kart.y - fy * 20,
+          vx: Math.cos(ang) * sp,
+          vy: Math.sin(ang) * sp,
+          life: rand(20, 40),
+          maxLife: 40,
+          size: rand(3, 7),
+          color: "rgba(200, 200, 200, 0.4)",
+          drag: 0.94
+        });
+      }
+    }
+  } else if (item === "shield") {
+    Sound.spatialTone(kart.x, kart.y, 440, 0.2, "triangle", 0.12, 880);
+    if (game.particles) {
+      // Circular glow ring
+      game.particles.add({
+        type: "ring",
+        x: kart.x,
+        y: kart.y,
+        vx: 0,
+        vy: 0,
+        life: 25,
+        maxLife: 25,
+        size: 32,
+        startSize: 5,
+        color: "#00ffcc"
+      });
+      game.particles.burst(kart.x, kart.y, "#00ffcc", 10, { spdMin: 1.5, spdMax: 3.5 });
+    }
+  } else if (item === "handling") {
+    Sound.spatialTone(kart.x, kart.y, 600, 0.15, "sine", 0.14, 1200);
+    if (game.particles) {
+      game.particles.add({
+        type: "ring",
+        x: kart.x,
+        y: kart.y,
+        vx: 0,
+        vy: 0,
+        life: 20,
+        maxLife: 20,
+        size: 24,
+        startSize: 3,
+        color: "#d946ef"
+      });
+      game.particles.burst(kart.x, kart.y, "#d946ef", 8, { spdMin: 1, spdMax: 3 });
+    }
+  } else if (item === "conflict") {
+    Sound.spatialTone(kart.x, kart.y, 180, 0.18, "triangle", 0.15, 60);
+    Sound.spatialNoise(kart.x, kart.y, 0.15, 0.12, 300);
+    if (game.particles) {
+      // Burst of red warning particles behind kart
+      game.particles.burst(kart.x - fx * 20, kart.y - fy * 20, "#ff4d6d", 12, { spdMin: 1, spdMax: 2.5 });
+    }
+  } else if (item === "dossier") {
+    Sound.spatialTone(kart.x, kart.y, 350, 0.12, "square", 0.16, 120);
+    Sound.spatialNoise(kart.x, kart.y, 0.10, 0.08, 1000);
+    if (game.particles) {
+      // Cyan muzzle burst in front of kart
+      game.particles.burst(kart.x + fx * 24, kart.y + fy * 24, "#57f2ff", 15, { spdMin: 2, spdMax: 5 });
+    }
+  }
+}
+
 function triggerQuote(kart, event) {
   if (kart.quoteTimer > 40) return; // don't spam too fast
   const charQuotes = QUOTES[kart.charId];
@@ -1119,6 +1269,51 @@ const Sound = {
       g.connect(this.master);
     }
     src.start(t);
+  },
+
+  spatialTone(x, y, freq, dur, type = "square", vol = 0.18, freqEnd, attack = 0.005) {
+    if (!game.player) {
+      this.tone(freq, dur, type, vol, freqEnd, attack, 0);
+      return;
+    }
+    const dx = x - game.player.x;
+    const dy = y - game.player.y;
+    const d = Math.hypot(dx, dy);
+    
+    // Relative panning: positive if to the right, negative if to the left.
+    // Project onto player's local right vector: rx = -sin(heading), ry = cos(heading)
+    const rightX = -Math.sin(game.player.heading);
+    const rightY = Math.cos(game.player.heading);
+    const relX = dx * rightX + dy * rightY;
+    const pan = Math.max(-1, Math.min(1, relX / 300));
+    
+    // Distance volume scaling: clamp(1 - d / 1200, 0, 1)
+    const scaledVol = vol * Math.max(0, Math.min(1, 1 - d / 1200));
+    if (scaledVol <= 0.001) return;
+    
+    this.tone(freq, dur, type, scaledVol, freqEnd, attack, pan);
+  },
+
+  spatialNoise(x, y, dur = 0.18, vol = 0.18, hpFreq = 600) {
+    if (!game.player) {
+      this.noise(dur, vol, hpFreq, 0);
+      return;
+    }
+    const dx = x - game.player.x;
+    const dy = y - game.player.y;
+    const d = Math.hypot(dx, dy);
+    
+    // Relative panning
+    const rightX = -Math.sin(game.player.heading);
+    const rightY = Math.cos(game.player.heading);
+    const relX = dx * rightX + dy * rightY;
+    const pan = Math.max(-1, Math.min(1, relX / 300));
+    
+    // Distance volume scaling
+    const scaledVol = vol * Math.max(0, Math.min(1, 1 - d / 1200));
+    if (scaledVol <= 0.001) return;
+    
+    this.noise(dur, scaledVol, hpFreq, pan);
   },
 
   coin() {
@@ -1413,10 +1608,59 @@ const Sound = {
   stepIndex: 0,
   tempo: 124,
   isPlayingMusic: false,
+  tracks: [
+    {
+      name: "Mainframe Sunset",
+      tempo: 124,
+      icon: "🌅",
+      color: "#57f2ff"
+    },
+    {
+      name: "Neon Acid Overdrive",
+      tempo: 128,
+      icon: "⚡",
+      color: "#ff4d6d"
+    },
+    {
+      name: "Retro Chiptune Horizon",
+      tempo: 118,
+      icon: "👾",
+      color: "#a4ff80"
+    }
+  ],
+  trackIdx: null,
+  toastTimeout: null,
+
+  showTrackToast() {
+    const toast = document.getElementById("audio-toast");
+    const title = document.getElementById("audio-track-title");
+    const tempo = document.getElementById("audio-track-tempo");
+    const icon = document.getElementById("audio-toast-icon");
+    if (!toast || !title || !tempo) return;
+
+    const t = this.tracks[this.trackIdx || 0];
+    title.innerText = t.name;
+    tempo.innerText = this.tempo + " BPM" + (this.tempo > t.tempo ? " (FINAL LAP!)" : "");
+    if (icon) icon.innerText = t.icon;
+    toast.style.borderColor = t.color;
+    toast.style.boxShadow = `0 8px 32px ${hexToRgba(t.color, 0.25)}`;
+
+    toast.classList.remove("hidden");
+    if (this.toastTimeout) clearTimeout(this.toastTimeout);
+    this.toastTimeout = setTimeout(() => {
+      toast.classList.add("hidden");
+    }, 3500);
+  },
 
   startMusic() {
     if (!this.ctx || this.isPlayingMusic) return;
     this.isPlayingMusic = true;
+
+    if (this.trackIdx === null || this.trackIdx === undefined) {
+      this.trackIdx = Math.floor(Math.random() * 3);
+    }
+    const t = this.tracks[this.trackIdx];
+    this.tempo = t.tempo;
 
     this.musicGain = this.ctx.createGain();
     this.musicGain.gain.value = 0.08; // quiet, pleasant background volume
@@ -1439,6 +1683,8 @@ const Sound = {
       this.musicInterval = setTimeout(scheduler, scheduleInterval);
     };
     scheduler();
+
+    this.showTrackToast();
   },
 
   stopMusic() {
@@ -1457,6 +1703,7 @@ const Sound = {
     const bar = Math.floor(step / 16);
     const stepInBar = step % 16;
     const stepDur = 60.0 / this.tempo / 4.0; // length of 16th note
+    const track = this.trackIdx || 0;
 
     // 1. Play bass note
     const bassFreq = this.getBassFreq(step);
@@ -1470,7 +1717,13 @@ const Sound = {
       this.playMelodyNote(leadFreq, time, stepDur * 1.8);
     }
 
-    // 3. Play drum track (no drums during breakdown bars 6 & 7)
+    // 2b. C64-style bubbling chord arpeggiator on off-beats
+    if (bar < 6 && (stepInBar % 2 === 1)) {
+      const chordFreqs = this.getChordFreqs(track, bar);
+      this.playChiptuneArp(chordFreqs, time, stepDur * 0.95);
+    }
+
+    // 3. Play drum track (no drums during breakdown bars 6 & 7, except transition snare roll!)
     if (bar < 6) {
       // Hi-Hats: play off-beats in Chorus section (bars 4-5) on steps 2, 6, 10, 14
       if ((bar === 4 || bar === 5) && (stepInBar === 2 || stepInBar === 6 || stepInBar === 10 || stepInBar === 14)) {
@@ -1494,94 +1747,234 @@ const Sound = {
       if (stepInBar === 4 || stepInBar === 12) {
         this.playRetroSnare(time);
       }
+    } else if (bar === 7 && stepInBar >= 12) {
+      // Progressive build-up snare drum roll
+      const snareVolumeScale = (stepInBar - 11) / 4.0; // 0.25, 0.5, 0.75, 1.0
+      this.playRetroSnare(time, snareVolumeScale);
     }
   },
 
   getBassFreq(step) {
     const bar = Math.floor(step / 16);
     const stepInBar = step % 16;
-    let baseFreq = 82.41; // E2 (Em chord)
-    if (bar === 1 || bar === 5) baseFreq = 65.41; // C2 (C chord)
-    else if (bar === 2) baseFreq = 73.42; // D2 (D chord)
-    else if (bar === 3) baseFreq = 58.27; // B1 (Bm/B chord)
-    else if (bar === 4) baseFreq = 82.41; // E2 (Em chord)
-    else if (bar === 6) baseFreq = 55.00; // A1 (Am chord)
-    else if (bar === 7) baseFreq = 61.74; // B1 (B7 chord)
+    const track = this.trackIdx || 0;
 
-    // Gallop octave jump on off-beats (except during the breakdown bar 6 & 7 where it stays as a suspenseful drone)
-    if (bar < 6 && stepInBar % 2 === 1) {
-      return baseFreq * 2;
+    if (track === 0) {
+      let baseFreq = 82.41; // E2 (Em chord)
+      if (bar === 1 || bar === 5) baseFreq = 65.41; // C2 (C chord)
+      else if (bar === 2) baseFreq = 73.42; // D2 (D chord)
+      else if (bar === 3) baseFreq = 58.27; // B1 (Bm/B chord)
+      else if (bar === 4) baseFreq = 82.41; // E2 (Em chord)
+      else if (bar === 6) baseFreq = 55.00; // A1 (Am chord)
+      else if (bar === 7) baseFreq = 61.74; // B1 (B7 chord)
+
+      if (bar < 6 && stepInBar % 2 === 1) {
+        return baseFreq * 2;
+      }
+      return baseFreq;
     }
-    return baseFreq;
+
+    if (track === 1) {
+      let baseFreq = 55.00; // A1
+      if (bar === 1 || bar === 5) baseFreq = 43.65; // F1
+      else if (bar === 2) baseFreq = 49.00; // G1
+      else if (bar === 3) baseFreq = 41.20; // E1
+      else if (bar === 4) baseFreq = 55.00; // A1
+      else if (bar === 6) baseFreq = 36.71; // D1
+      else if (bar === 7) baseFreq = 41.20; // E1
+
+      if (bar < 6 && (stepInBar === 3 || stepInBar === 7 || stepInBar === 11 || stepInBar === 15)) {
+        return baseFreq * 2;
+      }
+      return baseFreq;
+    }
+
+    if (track === 2) {
+      let baseFreq = 65.41; // C2
+      if (bar === 1 || bar === 5) baseFreq = 98.00; // G2
+      else if (bar === 2) baseFreq = 55.00; // A1
+      else if (bar === 3) baseFreq = 87.31; // F2
+      else if (bar === 4) baseFreq = 65.41; // C2
+      else if (bar === 6) baseFreq = 87.31; // F2
+      else if (bar === 7) baseFreq = 98.00; // G2
+
+      if (bar < 6 && stepInBar % 2 === 1) {
+        return baseFreq * 2;
+      }
+      return baseFreq;
+    }
+
+    return 82.41;
   },
 
   getMelodyNote(step) {
-    // 128 step sequencer arpeggios
-    const stepInPattern = step % 64; // The melody pattern loops its notes every 4 bars (64 steps), but bar 4-5 is octave-doubled in scheduleStep!
-    const m = Array(64).fill(null);
-
-    // Dynamic high-energy syncopated arpeggio lead in E Minor
-    // Chord 1: Em (steps 0-15)
-    m[0]  = 329.63; // E4
-    m[2]  = 392.00; // G4
-    m[3]  = 493.88; // B4
-    m[4]  = 440.00; // A4
-    m[6]  = 392.00; // G4
-    m[8]  = 493.88; // B4
-    m[10] = 587.33; // D5
-    m[11] = 659.25; // E5
-    m[12] = 493.88; // B4
-    m[14] = 440.00; // A4
-
-    // Chord 2: C (steps 16-31)
-    m[16] = 392.00; // G4
-    m[18] = 523.25; // C5
-    m[19] = 659.25; // E5
-    m[20] = 587.33; // D5
-    m[22] = 523.25; // C5
-    m[24] = 659.25; // E5
-    m[26] = 783.99; // G5
-    m[27] = 880.00; // A5
-    m[28] = 659.25; // E5
-    m[30] = 523.25; // C5
-
-    // Chord 3: D (steps 32-47)
-    m[32] = 440.00; // A4
-    m[34] = 587.33; // D5
-    m[35] = 739.99; // F#5
-    m[36] = 659.25; // E5
-    m[38] = 587.33; // D5
-    m[40] = 739.99; // F#5
-    m[42] = 880.00; // A5
-    m[43] = 987.77; // B5
-    m[44] = 739.99; // F#5
-    m[46] = 587.33; // D5
-
-    // Chord 4: Bm (steps 48-63)
-    m[48] = 493.88; // B4
-    m[50] = 587.33; // D5
-    m[51] = 739.99; // F#5
-    m[52] = 493.88; // B4
-    m[54] = 440.00; // A4
-    m[56] = 392.00; // G4
-    m[58] = 369.99; // F#4
-    m[59] = 329.63; // E4
-    m[60] = 369.99; // F#4
-    m[62] = 440.00; // A4
-
-    // If we are in the breakdown (bars 6-7, steps 96-127), we return a custom climbing suspense pattern
+    const track = this.trackIdx || 0;
     const bar = Math.floor(step / 16);
-    if (bar === 6) {
-      // Am suspense climb
-      const amNotes = [440.00, null, 523.25, null, 659.25, null, 783.99, null, 880.00, null, 1046.50, null, 1318.51, null, 1567.98, null];
-      return amNotes[step % 16];
-    } else if (bar === 7) {
-      // B7 tension climb
-      const b7Notes = [493.88, null, 622.25, null, 739.99, null, 880.00, null, 987.77, null, 1244.51, null, 1479.98, null, 1760.00, null];
-      return b7Notes[step % 16];
+
+    if (track === 0) {
+      const stepInPattern = step % 64;
+      const m = Array(64).fill(null);
+      m[0]  = 329.63; // E4
+      m[2]  = 392.00; // G4
+      m[3]  = 493.88; // B4
+      m[4]  = 440.00; // A4
+      m[6]  = 392.00; // G4
+      m[8]  = 493.88; // B4
+      m[10] = 587.33; // D5
+      m[11] = 659.25; // E5
+      m[12] = 493.88; // B4
+      m[14] = 440.00; // A4
+
+      m[16] = 392.00; // G4
+      m[18] = 523.25; // C5
+      m[19] = 659.25; // E5
+      m[20] = 587.33; // D5
+      m[22] = 523.25; // C5
+      m[24] = 659.25; // E5
+      m[26] = 783.99; // G5
+      m[27] = 880.00; // A5
+      m[28] = 659.25; // E5
+      m[30] = 523.25; // C5
+
+      m[32] = 440.00; // A4
+      m[34] = 587.33; // D5
+      m[35] = 739.99; // F#5
+      m[36] = 659.25; // E5
+      m[38] = 587.33; // D5
+      m[40] = 739.99; // F#5
+      m[42] = 880.00; // A5
+      m[43] = 987.77; // B5
+      m[44] = 739.99; // F#5
+      m[46] = 587.33; // D5
+
+      m[48] = 493.88; // B4
+      m[50] = 587.33; // D5
+      m[51] = 739.99; // F#5
+      m[52] = 493.88; // B4
+      m[54] = 440.00; // A4
+      m[56] = 392.00; // G4
+      m[58] = 369.99; // F#4
+      m[59] = 329.63; // E4
+      m[60] = 369.99; // F#4
+      m[62] = 440.00; // A4
+
+      if (bar === 6) {
+        const amNotes = [440.00, null, 523.25, null, 659.25, null, 783.99, null, 880.00, null, 1046.50, null, 1318.51, null, 1567.98, null];
+        return amNotes[step % 16];
+      } else if (bar === 7) {
+        const b7Notes = [493.88, null, 622.25, null, 739.99, null, 880.00, null, 987.77, null, 1244.51, null, 1479.98, null, 1760.00, null];
+        return b7Notes[step % 16];
+      }
+      return m[stepInPattern];
     }
 
-    return m[stepInPattern];
+    if (track === 1) {
+      const stepInPattern = step % 64;
+      const m = Array(64).fill(null);
+      m[0]  = 440.00; // A4
+      m[1]  = 523.25; // C5
+      m[2]  = 587.33; // D5
+      m[4]  = 659.25; // E5
+      m[6]  = 587.33; // D5
+      m[8]  = 523.25; // C5
+      m[9]  = 440.00; // A4
+      m[11] = 523.25; // C5
+      m[12] = 659.25; // E5
+      m[14] = 783.99; // G5
+
+      m[16] = 349.23; // F4
+      m[17] = 440.00; // A4
+      m[18] = 523.25; // C5
+      m[20] = 587.33; // D5
+      m[22] = 523.25; // C5
+      m[24] = 440.00; // A4
+      m[25] = 349.23; // F4
+      m[27] = 440.00; // A4
+      m[28] = 523.25; // C5
+      m[30] = 698.46; // F5
+
+      m[32] = 392.00; // G4
+      m[33] = 493.88; // B4
+      m[34] = 587.33; // D5
+      m[36] = 659.25; // E5
+      m[38] = 587.33; // D5
+      m[40] = 493.88; // B4
+      m[41] = 392.00; // G4
+      m[43] = 493.88; // B4
+      m[44] = 587.33; // D5
+      m[46] = 783.99; // G5
+
+      m[48] = 415.30; // G#4
+      m[49] = 493.88; // B4
+      m[50] = 587.33; // D5
+      m[52] = 659.25; // E5
+      m[54] = 587.33; // D5
+      m[56] = 493.88; // B4
+      m[57] = 415.30; // G#4
+      m[59] = 493.88; // B4
+      m[60] = 659.25; // E5
+      m[62] = 830.61; // G#5
+
+      if (bar === 6) {
+        const dmNotes = [587.33, null, 698.46, null, 880.00, null, 1046.50, null, 1174.66, null, 1396.91, null, 1760.00, null, 2093.00, null];
+        return dmNotes[step % 16];
+      } else if (bar === 7) {
+        const e7Notes = [659.25, null, 830.61, null, 987.77, null, 1174.66, null, 1318.51, null, 1661.22, null, 1975.53, null, 2349.32, null];
+        return e7Notes[step % 16];
+      }
+      return m[stepInPattern];
+    }
+
+    if (track === 2) {
+      const stepInPattern = step % 64;
+      const m = Array(64).fill(null);
+      m[0]  = 523.25; // C5
+      m[2]  = 659.25; // E5
+      m[4]  = 783.99; // G5
+      m[6]  = 659.25; // E5
+      m[8]  = 880.00; // A5
+      m[10] = 783.99; // G5
+      m[12] = 659.25; // E5
+      m[14] = 587.33; // D5
+
+      m[16] = 392.00; // G4
+      m[18] = 493.88; // B4
+      m[20] = 587.33; // D5
+      m[22] = 493.88; // B4
+      m[24] = 659.25; // E5
+      m[26] = 587.33; // D5
+      m[28] = 493.88; // B4
+      m[30] = 440.00; // A4
+
+      m[32] = 440.00; // A4
+      m[34] = 523.25; // C5
+      m[36] = 659.25; // E5
+      m[38] = 523.25; // C5
+      m[40] = 783.99; // G5
+      m[42] = 659.25; // E5
+      m[44] = 523.25; // C5
+      m[46] = 493.88; // B4
+
+      m[48] = 349.23; // F4
+      m[50] = 440.00; // A4
+      m[52] = 523.25; // C5
+      m[54] = 440.00; // A4
+      m[56] = 659.25; // E5
+      m[58] = 523.25; // C5
+      m[60] = 440.00; // A4
+      m[62] = 392.00; // G4
+
+      if (bar === 6) {
+        const fNotes = [698.46, null, 880.00, null, 1046.50, null, 1318.51, null, 1396.91, null, 1760.00, null, 2093.00, null, 2637.02, null];
+        return fNotes[step % 16];
+      } else if (bar === 7) {
+        const gNotes = [783.99, null, 987.77, null, 1174.66, null, 1396.91, null, 1567.98, null, 1975.53, null, 2349.32, null, 2793.83, null];
+        return gNotes[step % 16];
+      }
+      return m[stepInPattern];
+    }
+
+    return null;
   },
 
   playBassNote(freq, time, dur, step) {
@@ -1647,6 +2040,64 @@ const Sound = {
     gritOsc.stop(time + dur + 0.02);
   },
 
+  getChordFreqs(track, bar) {
+    if (track === 0) {
+      // Em, C, D, Bm, Em, C, Am, B7
+      if (bar === 0 || bar === 4) return [329.63, 392.00, 493.88]; // Em (E4, G4, B4)
+      if (bar === 1 || bar === 5) return [261.63, 329.63, 392.00]; // C (C4, E4, G4)
+      if (bar === 2) return [293.66, 369.99, 440.00];             // D (D4, F#4, A4)
+      if (bar === 3) return [246.94, 293.66, 369.99];             // Bm (B3, D4, F#4)
+      if (bar === 6) return [220.00, 261.63, 329.63];             // Am (A3, C4, E4)
+      if (bar === 7) return [246.94, 311.13, 369.99];             // B7 (B3, D#4, F#4)
+    }
+    if (track === 1) {
+      // Am, F, G, Em, Am, F, Dm, E
+      if (bar === 0 || bar === 4) return [440.00, 523.25, 659.25]; // Am (A4, C5, E5)
+      if (bar === 1 || bar === 5) return [349.23, 440.00, 523.25]; // F (F4, A4, C5)
+      if (bar === 2) return [392.00, 493.88, 587.33];             // G (G4, B4, D5)
+      if (bar === 3) return [329.63, 392.00, 493.88];             // Em (E4, G4, B4)
+      if (bar === 6) return [293.66, 349.23, 440.00];             // Dm (D4, F4, A4)
+      if (bar === 7) return [329.63, 415.30, 493.88];             // E (E4, G#4, B4)
+    }
+    if (track === 2) {
+      // C, G, Am, F, C, G, F, G
+      if (bar === 0 || bar === 4) return [523.25, 659.25, 783.99]; // C (C5, E5, G5)
+      if (bar === 1 || bar === 5) return [392.00, 493.88, 587.33]; // G (G4, B4, D5)
+      if (bar === 2) return [440.00, 523.25, 659.25];             // Am (A4, C5, E5)
+      if (bar === 3 || bar === 6) return [349.23, 440.00, 523.25]; // F (F4, A4, C5)
+      if (bar === 7) return [392.00, 493.88, 587.33];             // G (G4, B4, D5)
+    }
+    return [523.25, 659.25, 783.99]; // Default C chord
+  },
+
+  playChiptuneArp(freqs, time, dur) {
+    if (!this.ctx || this.muted) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = "triangle";
+
+    // Sweep the frequencies sequentially at 45ms sweeps!
+    const arpSpeed = 0.045; // 45ms per step
+    let t = time;
+    let idx = 0;
+    while (t < time + dur) {
+      osc.frequency.setValueAtTime(freqs[idx % freqs.length], t);
+      idx++;
+      t += arpSpeed;
+    }
+
+    gain.gain.setValueAtTime(0.001, time);
+    gain.gain.linearRampToValueAtTime(0.07, time + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+
+    osc.connect(gain);
+    gain.connect(this.musicGain);
+
+    osc.start(time);
+    osc.stop(time + dur + 0.02);
+  },
+
   playMelodyNote(freq, time, dur) {
     if (!this.ctx) return;
     const osc = this.ctx.createOscillator();
@@ -1676,7 +2127,29 @@ const Sound = {
     vibrato.start(time);
     osc.connect(filter);
     filter.connect(gain);
+
+    // Lush Stereo Dotted-Eighth Delay Loop
+    const stepDur = 60.0 / this.tempo / 4.0;
+    const delay = this.ctx.createDelay(1.0);
+    delay.delayTime.setValueAtTime(stepDur * 3, time);
+
+    const delayGain = this.ctx.createGain();
+    delayGain.gain.setValueAtTime(0.35, time);
+
+    delay.connect(delayGain);
+    delayGain.connect(delay);
+
     gain.connect(this.musicGain);
+    gain.connect(delay);
+
+    if (this.ctx.createStereoPanner) {
+      const delayPanner = this.ctx.createStereoPanner();
+      delayPanner.pan.setValueAtTime(0.4, time);
+      delayGain.connect(delayPanner);
+      delayPanner.connect(this.musicGain);
+    } else {
+      delayGain.connect(this.musicGain);
+    }
 
     osc.start(time);
     osc.stop(time + dur + 0.02);
@@ -1731,7 +2204,7 @@ const Sound = {
     src.start(time);
   },
 
-  playRetroSnare(time) {
+  playRetroSnare(time, volScale = 1.0) {
     if (!this.ctx) return;
     const dur = 0.08;
     const bufferSize = this.ctx.sampleRate * dur;
@@ -1749,7 +2222,7 @@ const Sound = {
     filter.frequency.setValueAtTime(1000, time);
 
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.05, time);
+    gain.gain.setValueAtTime(0.05 * volScale, time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
 
     src.connect(filter);
@@ -1788,6 +2261,17 @@ window.addEventListener("keydown", (e) => {
   if (key === "m" || key === "M") {
     keysGlobal.mute = true;
     keysGlobal.mutePressed = true;
+  }
+  if (key === "n" || key === "N" || code === "KeyN") {
+    if (Sound.isPlayingMusic) {
+      Sound.trackIdx = (Sound.trackIdx + 1) % 3;
+      const t = Sound.tracks[Sound.trackIdx];
+      Sound.tempo = t.tempo;
+      if (game.player && game.player.lap >= TOTAL_LAPS - 1) {
+        Sound.tempo = t.tempo + 18;
+      }
+      Sound.showTrackToast();
+    }
   }
   if (key === "Enter") {
     keysGlobal.enter = true;
@@ -2803,16 +3287,23 @@ class Kart {
     this.itemState = "empty";
     this.itemSlot = null;
     
+    // Play localized visual feedback and spatialized sound!
+    triggerShootEffect(this, type);
+
+    // If multiplayer, broadcast the action event to peer so they play the spatial audio/particles too!
+    if (game.p2pMode) {
+      sendP2pMessage({
+        type: "action_event",
+        kartId: getKartId(this),
+        item: type
+      });
+    }
+
     if (type === "boost") {
       this.boostTimer = Math.max(this.boostTimer, 75);
       triggerQuote(this, "boost");
-      if (this.isPlayer) {
-        Sound.boost();
-        game.flash = Math.max(game.flash, 8);
-      }
     } else if (type === "shield") {
       this.shieldTimer = this.charId === "rissal" ? 540 : 360;
-      if (this.isPlayer) Sound.shield();
     } else if (type === "handling") {
       this.handlingTimer = 360;
     } else if (type === "conflict") {
@@ -2821,8 +3312,12 @@ class Kart {
       const dropY = this.y - fy * 32;
       const h = new MergeConflict(dropX, dropY);
       game.hazards.push(h);
-      if (this.isPlayer) {
-        Sound.tone(300, 0.15, "sawtooth", 0.12, 100);
+      if (game.p2pMode && game.p2pRole === "guest") {
+        sendP2pMessage({
+          type: "drop_conflict",
+          x: dropX,
+          y: dropY
+        });
       }
     } else if (type === "dossier") {
       const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
@@ -2830,9 +3325,6 @@ class Kart {
       const spawnY = this.y + fy * 32;
       const d = new DossierProjectile(spawnX, spawnY, this.heading, this);
       game.hazards.push(d);
-      if (this.isPlayer) {
-        Sound.tone(450, 0.12, "triangle", 0.15, 100);
-      }
       if (game.p2pMode && game.p2pRole === "guest") {
         sendP2pMessage({
           type: "shoot_dossier",
@@ -4467,7 +4959,14 @@ function update(dt, time) {
 
     // Dynamic Retro Soundtrack Final Lap Tempo surge
     if (game.player) {
-      Sound.tempo = game.player.lap >= TOTAL_LAPS - 1 ? 142 : 124;
+      const activeTrack = Sound.tracks[Sound.trackIdx || 0];
+      const baseTempo = activeTrack.tempo;
+      const finalTempo = activeTrack.tempo + 18;
+      const targetTempo = game.player.lap >= TOTAL_LAPS - 1 ? finalTempo : baseTempo;
+      if (Sound.tempo !== targetTempo) {
+        Sound.tempo = targetTempo;
+        Sound.showTrackToast();
+      }
     }
 
     // Player 1
@@ -5719,6 +6218,48 @@ function generateLobbyCode() {
   return code;
 }
 
+function getKartId(kart) {
+  if (!kart) return null;
+  if (game.p2pMode) {
+    if (game.p2pRole === "host") {
+      if (kart === game.player) return "host";
+      if (kart === game.player2) return "guest";
+    } else {
+      if (kart === game.player) return "guest";
+      if (kart === game.player2) return "host";
+    }
+  } else {
+    if (kart === game.player) return "p1";
+    if (kart === game.player2) return "p2";
+  }
+  if (game.ais) {
+    const idx = game.ais.indexOf(kart);
+    if (idx !== -1) return "ai_" + idx;
+  }
+  return null;
+}
+
+function getKartById(id) {
+  if (!id) return null;
+  if (game.p2pMode) {
+    if (game.p2pRole === "host") {
+      if (id === "host") return game.player;
+      if (id === "guest") return game.player2;
+    } else {
+      if (id === "host") return game.player2;
+      if (id === "guest") return game.player;
+    }
+  } else {
+    if (id === "p1") return game.player;
+    if (id === "p2") return game.player2;
+  }
+  if (id.startsWith("ai_")) {
+    const idx = parseInt(id.slice(3));
+    if (game.ais && game.ais[idx]) return game.ais[idx];
+  }
+  return null;
+}
+
 function sendP2pMessage(data) {
   if (game.p2pConn && game.p2pConn.open) {
     game.p2pConn.send(data);
@@ -5772,7 +6313,9 @@ function sendHostSync() {
       vx: h.vx || 0,
       vy: h.vy || 0,
       spin: h.spin || 0,
-      active: h.active
+      active: h.active,
+      ownerId: getKartId(h.owner),
+      ignoreOwnerTimer: h.ignoreOwnerTimer || 0
     }))
   };
   sendP2pMessage(sync);
@@ -5942,11 +6485,13 @@ function handleP2pData(data) {
     if (data.hazards) {
       game.hazards = data.hazards.map(h => {
         if (h.isDossier) {
-          const dp = new DossierProjectile(h.x, h.y, h.heading, null);
+          const ownerKart = getKartById(h.ownerId);
+          const dp = new DossierProjectile(h.x, h.y, h.heading, ownerKart);
           dp.vx = h.vx;
           dp.vy = h.vy;
           dp.spin = h.spin;
           dp.active = h.active;
+          dp.ignoreOwnerTimer = h.ignoreOwnerTimer !== undefined ? h.ignoreOwnerTimer : 0;
           return dp;
         } else {
           const mc = new MergeConflict(h.x, h.y);
@@ -5983,6 +6528,20 @@ function handleP2pData(data) {
     if (game.player2) {
       const d = new DossierProjectile(data.x, data.y, data.heading, game.player2);
       game.hazards.push(d);
+    }
+  }
+
+  else if (data.type === "drop_conflict") {
+    if (game.p2pMode && game.p2pRole === "host" && game.player2) {
+      const h = new MergeConflict(data.x, data.y);
+      game.hazards.push(h);
+    }
+  }
+
+  else if (data.type === "action_event") {
+    const kart = getKartById(data.kartId);
+    if (kart) {
+      triggerShootEffect(kart, data.item);
     }
   }
 
