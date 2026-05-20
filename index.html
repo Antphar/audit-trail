@@ -6505,11 +6505,13 @@ function renderSelectScreen() {
     card.addEventListener("click", () => {
       if (game.p2pMode && game.p1Locked) return;
       game.selectedCharIdx = idx;
+      if (game.p2pMode) setLocalP2pCharacterIdx(idx);
       updateSelectionHighlight();
       Sound.tone(440, 0.08, "square", 0.12);
       if (game.p2pMode) {
         sendP2pMessage({
           type: "select_update",
+          playerId: game.p2pLocalId,
           charIdx: game.selectedCharIdx,
           locked: game.p1Locked
         });
@@ -6520,39 +6522,80 @@ function renderSelectScreen() {
   });
 }
 
-function checkMultiplayerSelectFinish() {
-  if (game.p1Locked && game.p2Locked) {
-    if (game.p2pMode) {
-      if (game.p2pRole === "host") {
-        setTimeout(() => {
-          if (game.p1Locked && game.p2Locked) {
-            hideAll();
-            buildRace();
-            startCountdown();
-            Sound.startEngine(1);
+function getLocalP2pPlayer() {
+  if (!game.p2pMode || !game.p2pPlayers) return null;
+  return game.p2pPlayers.find(p => p.id === game.p2pLocalId) || null;
+}
 
-            sendP2pMessage({
-              type: "start_race",
-              hostCharIdx: game.selectedCharIdx,
-              guestCharIdx: game.selectedCharIdx2,
-              mapIdx: game.selectedMapIdx
-            });
-          }
-        }, 500);
+function setLocalP2pCharacterIdx(idx) {
+  const safeIdx = Math.round(clamp(Number(idx), 0, CHARACTERS.length - 1));
+  game.selectedCharIdx = safeIdx;
+  const local = getLocalP2pPlayer();
+  if (local) local.charIdx = safeIdx;
+}
+
+function setLocalP2pLocked(locked) {
+  const local = getLocalP2pPlayer();
+  if (local) local.locked = !!locked;
+  game.p1Locked = !!locked;
+}
+
+function getP2pReadyCount() {
+  return (game.p2pPlayers || []).filter(p => p.locked).length;
+}
+
+function areAllP2pPlayersReady() {
+  const players = game.p2pPlayers || [];
+  return players.length >= 2 && players.every(p => p.locked);
+}
+
+function syncP2pSelectionFromRoster({ preserveLocal = false } = {}) {
+  if (!game.p2pMode || !game.p2pPlayers || !game.p2pPlayers.length) return;
+
+  const local = getLocalP2pPlayer();
+  if (local && !preserveLocal) {
+    game.selectedCharIdx = local.charIdx || 0;
+  } else if (local) {
+    local.charIdx = game.selectedCharIdx || 0;
+  }
+  game.p1Locked = !!(local && local.locked);
+  game.p2Locked = (game.p2pPlayers || []).some(p => p.id !== game.p2pLocalId && p.locked);
+
+  const firstRemote = game.p2pPlayers.find(p => p.id !== game.p2pLocalId);
+  if (firstRemote) {
+    game.selectedCharIdx2 = firstRemote.charIdx || 0;
+  }
+}
+
+function checkMultiplayerSelectFinish() {
+  if (game.p2pMode) {
+    if (game.p2pRole !== "host" || !areAllP2pPlayersReady()) return;
+    setTimeout(() => {
+      if (!areAllP2pPlayersReady()) return;
+      hideAll();
+      buildRace();
+      startCountdown();
+      Sound.startEngine(1);
+      sendP2pMessage({
+        type: "start_race",
+        players: game.p2pPlayers,
+        mapIdx: game.selectedMapIdx,
+        trackIdx: Sound.trackIdx
+      });
+    }, 500);
+    return;
+  }
+
+  if (game.p1Locked && game.p2Locked) {
+    setTimeout(() => {
+      if (game.p1Locked && game.p2Locked) {
+        hideAll();
+        buildRace();
+        startCountdown();
+        Sound.startEngine(1);
+        Sound.startEngine(2);
       }
-      // If guest, do nothing! Wait for host's "start_race" packet.
-    } else {
-      // Local 2-player split screen
-      setTimeout(() => {
-        if (game.p1Locked && game.p2Locked) {
-          hideAll();
-          buildRace();
-          startCountdown();
-          Sound.startEngine(1);
-          Sound.startEngine(2);
-        }
-      }, 450);
-    }
+    }, 450);
   }
 }
 
@@ -6565,7 +6608,25 @@ function updateSelectionHighlight() {
     const badges = card.querySelectorAll(".p-badge");
     badges.forEach(b => b.remove());
 
-    if (game.multiplayer) {
+    if (game.p2pMode) {
+      const players = game.p2pPlayers && game.p2pPlayers.length
+        ? game.p2pPlayers
+        : [{ id: game.p2pLocalId || "host", charIdx: game.selectedCharIdx || 0 }];
+      const matches = players.filter(p => (p.charIdx || 0) === idx);
+      if (matches.length) {
+        const hasLocal = matches.some(p => p.id === game.p2pLocalId);
+        card.classList.add(hasLocal ? "selected-p1" : "selected-p2");
+        matches.forEach((player, badgeIdx) => {
+          const badge = document.createElement("div");
+          badge.className = "p-badge " + (player.id === game.p2pLocalId ? "p1" : "p2");
+          const label = player.id === game.p2pLocalId
+            ? (player.locked ? "YOU READY" : "YOU")
+            : (player.locked ? "READY" : getP2pPlayerLabel(player, badgeIdx));
+          badge.innerText = matches.length > 1 ? `${label} ${badgeIdx + 1}` : label;
+          card.appendChild(badge);
+        });
+      }
+    } else if (game.multiplayer) {
       const isP1 = (idx === game.selectedCharIdx);
       const isP2 = (idx === game.selectedCharIdx2);
 
@@ -6613,19 +6674,28 @@ function updateSelectionHighlight() {
     const s1 = document.getElementById("status-p1");
     const s2 = document.getElementById("status-p2");
 
-    if (game.p1Locked) {
-      s1.innerText = "P1: READY!";
+    const local = game.p2pMode ? getLocalP2pPlayer() : null;
+    const localLabel = game.p2pMode ? "You" : "P1";
+    const peerLabel = game.p2pMode ? "Online" : "P2";
+    const readyCount = game.p2pMode ? getP2pReadyCount() : 0;
+    const totalPlayers = game.p2pMode ? (game.p2pPlayers || []).length : 0;
+
+    if (game.p2pMode ? !!(local && local.locked) : game.p1Locked) {
+      s1.innerText = `${localLabel}: READY!`;
       s1.className = "p1-status ready";
     } else {
-      s1.innerText = "P1: Selecting...";
+      s1.innerText = `${localLabel}: Selecting...`;
       s1.className = "p1-status selecting";
     }
 
-    if (game.p2Locked) {
-      s2.innerText = "P2: READY!";
+    if (game.p2pMode) {
+      s2.innerText = `${peerLabel}: ${readyCount}/${totalPlayers} Ready`;
+      s2.className = readyCount === totalPlayers && totalPlayers >= 2 ? "p2-status ready" : "p2-status selecting";
+    } else if (game.p2Locked) {
+      s2.innerText = `${peerLabel}: READY!`;
       s2.className = "p2-status ready";
     } else {
-      s2.innerText = "P2: Selecting...";
+      s2.innerText = `${peerLabel}: Selecting...`;
       s2.className = "p2-status selecting";
     }
   }
@@ -6638,17 +6708,24 @@ function showSelectScreen() {
   game.selectedCharIdx = game.selectedCharIdx || 0;
 
   if (game.multiplayer) {
+    if (game.p2pMode) syncP2pSelectionFromRoster();
     game.selectedCharIdx2 = game.selectedCharIdx2 !== undefined ? game.selectedCharIdx2 : 1;
-    game.p1Locked = false;
-    game.p2Locked = false;
+    if (!game.p2pMode) {
+      game.p1Locked = false;
+      game.p2Locked = false;
+    }
     document.getElementById("status-p1").style.display = "block";
-    document.getElementById("status-p1").innerText = "P1: Selecting";
+    document.getElementById("status-p1").innerText = game.p2pMode && game.p1Locked ? "You: READY!" : (game.p2pMode ? "You: Selecting" : "P1: Selecting");
     document.getElementById("status-p1").className = "p1-status selecting";
     document.getElementById("status-p2").style.display = "block";
-    document.getElementById("status-p2").innerText = "P2: Selecting";
+    document.getElementById("status-p2").innerText = game.p2pMode ? `Online: ${getP2pReadyCount()}/${(game.p2pPlayers || []).length} Ready` : "P2: Selecting";
     document.getElementById("status-p2").className = "p2-status selecting";
-    document.getElementById("lobby-subtitle").innerText = "Lobby: 2 Players Ready Up";
-    document.getElementById("lobby-hint").innerText = "Space to lock P1 · Right Shift to lock P2";
+    document.getElementById("lobby-subtitle").innerText = game.p2pMode
+      ? (game.p2pRole === "host" ? "Online Lobby: Pick Track & Coder" : "Online Lobby: Pick Your Coder")
+      : "Lobby: 2 Players Ready Up";
+    document.getElementById("lobby-hint").innerText = game.p2pMode
+      ? (game.p2pRole === "host" ? "Host picks track · Everyone picks coder · Space/Enter to ready" : "Host picks track · Pick coder · Space/Enter to ready")
+      : "Space to lock P1 · Right Shift to lock P2";
     driveBtn.style.display = "none"; // Hide standard drive button, auto-launch on lock
   } else {
     game.selectedCharIdx2 = undefined;
@@ -6664,6 +6741,7 @@ function showSelectScreen() {
   }
 
   renderSelectScreen();
+  updateSelectionHighlight();
   renderMapSelect();
 }
 
@@ -6714,6 +6792,12 @@ function renderMapSelect() {
   });
 }
 
+function enterP2pSelectScreen() {
+  syncP2pSelectionFromRoster();
+  showSelectScreen();
+  renderMapSelect();
+}
+
 function getActiveKarts() {
   return [
     game.player,
@@ -6735,17 +6819,13 @@ function getP2pRosterHtml() {
   return players.map((player, idx) => {
     const char = CHARACTERS[player.charIdx || 0];
     const localClass = player.id === game.p2pLocalId ? " local" : "";
-    const controls = player.id === game.p2pLocalId
-      ? `<span class="p2p-char-controls">
-          <button class="p2p-char-btn" type="button" data-p2p-char-delta="-1">&lt;</button>
-          <span class="p2p-player-chip">You</span>
-          <button class="p2p-char-btn" type="button" data-p2p-char-delta="1">&gt;</button>
-        </span>`
-      : `<span class="p2p-player-chip">Joined</span>`;
+    const chip = player.id === game.p2pLocalId
+      ? (player.locked ? "You Ready" : "You")
+      : (player.locked ? "Ready" : "Joined");
     return `
       <div class="p2p-player-row${localClass}">
         <span>${getP2pPlayerLabel(player, idx)} · ${char.name}</span>
-        ${controls}
+        <span class="p2p-player-chip">${chip}</span>
       </div>
     `;
   }).join("");
@@ -6755,37 +6835,11 @@ function renderP2pLobby() {
   const html = getP2pRosterHtml();
   if (p2pHostRoster) p2pHostRoster.innerHTML = game.p2pRole === "host" ? html : "";
   if (p2pJoinRoster) p2pJoinRoster.innerHTML = game.p2pRole === "guest" ? html : "";
-  for (const btn of document.querySelectorAll("[data-p2p-char-delta]")) {
-    btn.addEventListener("click", () => {
-      changeLocalP2pCharacter(Number(btn.dataset.p2pCharDelta));
-    });
-  }
-
   if (p2pStartRaceBtn) {
     const canStart = game.p2pRole === "host" && (game.p2pPlayers || []).length >= 2;
     p2pStartRaceBtn.style.display = game.p2pRole === "host" ? "inline-block" : "none";
     p2pStartRaceBtn.disabled = !canStart;
-    p2pStartRaceBtn.textContent = canStart ? "Start Race" : "Waiting For Players";
-  }
-}
-
-function changeLocalP2pCharacter(delta) {
-  if (!game.p2pLocalId) return;
-  const player = game.p2pPlayers.find(p => p.id === game.p2pLocalId);
-  if (!player) return;
-  player.charIdx = (player.charIdx + delta + CHARACTERS.length) % CHARACTERS.length;
-  if (game.p2pLocalId === "host") game.selectedCharIdx = player.charIdx;
-  Sound.tone(520, 0.08, "square", 0.12);
-  renderP2pLobby();
-
-  if (game.p2pRole === "host") {
-    broadcastP2pLobby();
-  } else {
-    sendP2pMessage({
-      type: "lobby_char_update",
-      playerId: game.p2pLocalId,
-      charIdx: player.charIdx
-    });
+    p2pStartRaceBtn.textContent = canStart ? "Open Selection" : "Waiting For Players";
   }
 }
 
@@ -6794,6 +6848,7 @@ function ensureHostP2pPlayer() {
   game.p2pPlayers = [{
     id: "host",
     charIdx: game.selectedCharIdx || 0,
+    locked: false,
     joinedAt: Date.now()
   }];
   renderP2pLobby();
@@ -6816,7 +6871,7 @@ function addP2pGuest(conn) {
     if (!usedChars.has(i)) { charIdx = i; break; }
   }
 
-  const player = { id, charIdx, joinedAt: Date.now() };
+  const player = { id, charIdx, locked: false, joinedAt: Date.now() };
   game.p2pPlayers.push(player);
   p2pConnections.set(id, conn);
   renderP2pLobby();
@@ -7437,10 +7492,12 @@ function update(dt, time) {
       let changed = false;
       if (consumePressed("left") || consumePressedP1("left")) {
         game.selectedCharIdx = (game.selectedCharIdx - 1 + CHARACTERS.length) % CHARACTERS.length;
+        setLocalP2pCharacterIdx(game.selectedCharIdx);
         changed = true;
       }
       if (consumePressed("right") || consumePressedP1("right")) {
         game.selectedCharIdx = (game.selectedCharIdx + 1) % CHARACTERS.length;
+        setLocalP2pCharacterIdx(game.selectedCharIdx);
         changed = true;
       }
       if (changed) {
@@ -7448,18 +7505,22 @@ function update(dt, time) {
         Sound.tone(440, 0.08, "square", 0.1);
         sendP2pMessage({
           type: "select_update",
+          playerId: game.p2pLocalId,
           charIdx: game.selectedCharIdx,
-          locked: game.p1Locked
+          locked: !!(getLocalP2pPlayer() && getLocalP2pPlayer().locked)
         });
       }
       if (consumePressed("enter") || consumePressed("drift") || consumePressedP1("drift")) {
-        game.p1Locked = !game.p1Locked;
+        const nextLocked = !(getLocalP2pPlayer() && getLocalP2pPlayer().locked);
+        setLocalP2pLocked(nextLocked);
         updateSelectionHighlight();
-        Sound.tone(game.p1Locked ? 660 : 330, 0.12, "square", 0.14);
+        renderP2pLobby();
+        Sound.tone(nextLocked ? 660 : 330, 0.12, "square", 0.14);
         sendP2pMessage({
           type: "select_update",
+          playerId: game.p2pLocalId,
           charIdx: game.selectedCharIdx,
-          locked: game.p1Locked
+          locked: nextLocked
         });
         checkMultiplayerSelectFinish();
       }
@@ -9430,6 +9491,13 @@ p2pHostBtn.addEventListener("click", () => {
             trackIdx: Sound.trackIdx
           });
           broadcastP2pLobby();
+          if (game.state !== STATE.SELECT && game.state !== STATE.RACING && game.state !== STATE.COUNTDOWN) {
+            enterP2pSelectScreen();
+          } else if (game.state === STATE.SELECT) {
+            syncP2pSelectionFromRoster({ preserveLocal: true });
+            updateSelectionHighlight();
+          renderP2pLobby();
+          }
         });
         conn.on("data", (data) => {
           handleP2pData(data, conn);
@@ -9521,17 +9589,8 @@ p2pBackBtn.addEventListener("click", () => {
 
 p2pStartRaceBtn.addEventListener("click", () => {
   if (game.p2pRole !== "host" || game.p2pPlayers.length < 2) return;
-  const startPacket = {
-    type: "start_race",
-    players: game.p2pPlayers,
-    mapIdx: game.selectedMapIdx,
-    trackIdx: Sound.trackIdx
-  };
-  broadcastP2pMessage(startPacket);
-  hideAll();
-  buildRace();
-  startCountdown();
-  Sound.startEngine(1);
+  enterP2pSelectScreen();
+  broadcastP2pLobby();
 });
 
 function loadPeerJS(callback) {
@@ -9884,6 +9943,7 @@ function handleP2pData(data, sourceConn = null) {
     renderP2pLobby();
     p2pJoinStatus.innerText = "Connected! Waiting for host to start...";
     p2pJoinStatus.className = "p2p-status ready";
+    enterP2pSelectScreen();
   }
 
   else if (data.type === "lobby_full") {
@@ -9895,7 +9955,12 @@ function handleP2pData(data, sourceConn = null) {
     game.p2pPlayers = data.players || game.p2pPlayers;
     game.selectedMapIdx = data.mapIdx !== undefined ? data.mapIdx : game.selectedMapIdx;
     if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
+    syncP2pSelectionFromRoster();
     renderP2pLobby();
+    if (game.state === STATE.SELECT) {
+      updateSelectionHighlight();
+      renderMapSelect();
+    }
   }
 
   else if (data.type === "lobby_char_update") {
@@ -9905,13 +9970,29 @@ function handleP2pData(data, sourceConn = null) {
     const player = game.p2pPlayers.find(p => p.id === playerId);
     if (!player) return;
     player.charIdx = Math.round(clamp(Number(data.charIdx), 0, CHARACTERS.length - 1));
+    player.locked = !!data.locked;
     broadcastP2pLobby();
+    if (game.state === STATE.SELECT) {
+      syncP2pSelectionFromRoster({ preserveLocal: true });
+      updateSelectionHighlight();
+      checkMultiplayerSelectFinish();
+    }
   }
 
   else if (data.type === "select_update") {
-    game.selectedCharIdx2 = data.charIdx;
-    game.p2Locked = data.locked;
+    const sourceId = getP2pIdForConn(sourceConn);
+    const playerId = sourceId || data.playerId || (game.p2pRole === "guest" ? "host" : "guest_1");
+    const player = game.p2pPlayers && game.p2pPlayers.find(p => p.id === playerId);
+    if (player) {
+      player.charIdx = Math.round(clamp(Number(data.charIdx), 0, CHARACTERS.length - 1));
+      player.locked = !!data.locked;
+    }
+    syncP2pSelectionFromRoster({ preserveLocal: true });
     updateSelectionHighlight();
+    renderP2pLobby();
+    if (game.p2pRole === "host") {
+      broadcastP2pMessage({ ...data, playerId }, sourceConn);
+    }
     checkMultiplayerSelectFinish();
   }
 
