@@ -4400,23 +4400,24 @@ window.addEventListener("keydown", (e) => {
     keysP1.honk = true;
   }
 
-  // Player 2 mappings (Arrow keys + RightShift + . or /)
+  // Player 2 mappings — only in local split-screen (not P2P online)
+  const isSplitScreen = game.multiplayer && !game.p2pMode;
   if (code === "ArrowUp") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       keysP2.up = true;
     } else {
       keysP1.up = true;
     }
   }
   if (code === "ArrowDown") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       keysP2.down = true;
     } else {
       keysP1.down = true;
     }
   }
   if (code === "ArrowLeft") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.left) keysP2.leftPressed = true;
       keysP2.left = true;
     } else {
@@ -4425,7 +4426,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (code === "ArrowRight") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.right) keysP2.rightPressed = true;
       keysP2.right = true;
     } else {
@@ -4434,7 +4435,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (code === "ShiftRight") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.drift) keysP2.driftPressed = true;
       keysP2.drift = true;
     } else {
@@ -4443,7 +4444,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (code === "Slash" || code === "Period" || key === "/" || key === ".") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.item) keysP2.itemPressed = true;
       keysP2.item = true;
     } else {
@@ -4452,7 +4453,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (code === "KeyL") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.ult) keysP2.ultPressed = true;
       keysP2.ult = true;
     } else {
@@ -4461,7 +4462,7 @@ window.addEventListener("keydown", (e) => {
     }
   }
   if (code === "KeyK") {
-    if (game.multiplayer) {
+    if (isSplitScreen) {
       if (!keysP2.honk) keysP2.honkPressed = true;
       keysP2.honk = true;
     } else {
