@@ -2529,7 +2529,7 @@ const Sound = {
         this.scheduleStep(this.stepIndex, this.nextNoteTime);
         const secondsPerStep = 60.0 / this.tempo / 4.0; // 16th notes
         this.nextNoteTime += secondsPerStep;
-        const loopLen = (this.mapStyle === "japanese") ? 512 : 128; // Japanese gets 32-bar epic loops
+        const loopLen = this.getLoopSteps();
         this.stepIndex = (this.stepIndex + 1) % loopLen;
       }
       this.musicInterval = setTimeout(scheduler, scheduleInterval);
@@ -2539,6 +2539,12 @@ const Sound = {
     this.showTrackToast();
 
     if (this.trackIdx === 4) this.startVinylCrackle();
+  },
+
+  getLoopSteps() {
+    if (this.mapStyle === "japanese") return 512;
+    const track = this.trackIdx || 0;
+    return (track === 4 || track === 5) ? 512 : 256;
   },
 
   vinylCrackleNode: null,
@@ -2629,10 +2635,14 @@ const Sound = {
       return;
     }
 
-    const bar = Math.floor(step / 16);
+    const barInLoop = Math.floor(step / 16);
+    const bar = barInLoop % 8;
+    const phrase = Math.floor(barInLoop / 8);
     const stepInBar = step % 16;
     const stepDur = 60.0 / this.tempo / 4.0; // length of 16th note
     const track = this.trackIdx || 0;
+    const loopBars = this.getLoopSteps() / 16;
+    const isFinalBar = barInLoop === loopBars - 1;
 
     // Reactive intensity based on player race position (0.0 = last, 1.0 = first)
     let intensity = 1.0;
@@ -2660,6 +2670,26 @@ const Sound = {
     const melFreq = this.getMelodyNote(step);
     if (melFreq) {
       this.playMelodyNote(melFreq, time, stepDur * (track === 5 ? 3.2 : track === 3 ? 2.6 : track === 4 ? 4.5 : 1.8));
+    }
+
+    // Phrase development layers for longer song forms.
+    if (phrase > 0) {
+      if (track === 0 && (stepInBar === 5 || stepInBar === 13)) {
+        const note = [659.25, 783.99, 880.00, 987.77][(bar + stepInBar) % 4];
+        this.playMelodyNote(note, time, stepDur * 1.2);
+      } else if (track === 1 && (stepInBar === 1 || stepInBar === 9)) {
+        const note = stepInBar === 1 ? 1046.50 : 1174.66;
+        this.playMelodyNote(note, time, stepDur * 0.7);
+      } else if (track === 2 && (stepInBar === 6 || stepInBar === 14)) {
+        const note = [1046.50, 1174.66, 1318.51, 1567.98][bar % 4];
+        this.playMelodyNote(note, time, stepDur * 0.8);
+      } else if (track === 3 && (stepInBar === 3 || stepInBar === 11)) {
+        const note = [932.33, 1046.50, 1244.51, 1396.91][bar % 4];
+        this.playMelodyNote(note, time, stepDur * 1.0);
+      } else if (track === 4 && phrase >= 1 && (stepInBar === 5 || stepInBar === 13)) {
+        const note = [392.00, 440.00, 493.88, 523.25][(bar + phrase) % 4];
+        this.playMelodyNote(note, time, stepDur * 1.6);
+      }
     }
 
     // 2b. Chords/arps/pads
@@ -2786,7 +2816,7 @@ const Sound = {
         hp.Q.setValueAtTime(3.5, time);
         const g = this.ctx.createGain();
         g.gain.setValueAtTime(0.001, time);
-        g.gain.linearRampToValueAtTime(0.035 * progress, time + dur * 0.7);
+        g.gain.linearRampToValueAtTime((isFinalBar ? 0.06 : 0.035) * progress, time + dur * 0.7);
         g.gain.exponentialRampToValueAtTime(0.001, time + dur);
         src.connect(hp);
         hp.connect(g);
@@ -2797,7 +2827,8 @@ const Sound = {
   },
 
   getBassFreq(step) {
-    const bar = Math.floor(step / 16);
+    const barInLoop = Math.floor(step / 16);
+    const bar = barInLoop % 8;
     const stepInBar = step % 16;
     const track = this.trackIdx || 0;
 
@@ -2885,7 +2916,9 @@ const Sound = {
 
   getMelodyNote(step) {
     const track = this.trackIdx || 0;
-    const bar = Math.floor(step / 16);
+    const barInLoop = Math.floor(step / 16);
+    const bar = barInLoop % 8;
+    const phrase = Math.floor(barInLoop / 8);
     const stepInBar = step % 16;
 
     if (track === 0) {
@@ -2979,17 +3012,32 @@ const Sound = {
     }
 
     if (track === 5) {
-      // Sparse, haunting melody in F# minor — only appears bars 4-7
-      if (bar < 4) return null;
-      if (bar === 6) {
-        return [369.99, null, null, null, null, null, 329.63, null, null, null, null, null, 293.66, null, null, null][stepInBar];
-      } else if (bar === 7) {
-        return [349.23, null, null, null, 329.63, null, null, null, 369.99, null, null, null, null, null, null, null][stepInBar];
-      }
-      return this.getPatternNote(step, [
-        [64, 369.99], [72, 329.63], [80, 293.66],
-        [88, 369.99], [95, 329.63]
-      ]);
+      // F# minor: 32-bar minimal techno line, opening from sparse pings into an alarm motif.
+      const phraseMotifs = [
+        [
+          [0, 369.99], [12, 493.88], [24, 415.30], [44, 329.63],
+          [64, 369.99], [76, 554.37], [96, 415.30], [116, 493.88]
+        ],
+        [
+          [128, 369.99], [134, 415.30], [140, 493.88], [148, 554.37],
+          [160, 659.25], [168, 554.37], [176, 493.88], [184, 415.30],
+          [192, 369.99], [204, 493.88], [212, 554.37], [220, 659.25], [236, 493.88], [248, 415.30]
+        ],
+        [
+          [256, 739.99], [260, 659.25], [268, 554.37], [276, 493.88],
+          [288, 554.37], [292, 659.25], [300, 739.99], [308, 880.00],
+          [320, 739.99], [324, 659.25], [332, 554.37], [340, 493.88],
+          [352, 415.30], [364, 493.88], [372, 554.37], [380, 659.25]
+        ],
+        [
+          [384, 554.37], [388, 493.88], [392, 415.30], [396, 369.99],
+          [400, 329.63], [408, 369.99], [416, 415.30], [424, 493.88],
+          [432, 554.37], [436, 659.25], [440, 739.99], [444, 880.00],
+          [448, 739.99], [456, 659.25], [464, 554.37], [472, 493.88],
+          [480, 415.30], [488, 369.99], [496, 493.88], [504, 554.37]
+        ]
+      ];
+      return this.getPatternNote(step, phraseMotifs[phrase] || phraseMotifs[0], 512);
     }
 
     return null;
@@ -3011,6 +3059,13 @@ const Sound = {
     gritOsc.type = isModern ? "square" : "sawtooth";
     gritOsc.frequency.setValueAtTime(freq, time);
     gritOsc.detune.setValueAtTime(isDowntempo ? 15 : isModern ? 12 : 8, time);
+    if (track === 1 && stepInBar % 4 !== 0) {
+      const slideTime = Math.min(0.065, dur * 0.45);
+      subOsc.frequency.setValueAtTime((freq / 2) * 0.92, time);
+      subOsc.frequency.exponentialRampToValueAtTime(freq / 2, time + slideTime);
+      gritOsc.frequency.setValueAtTime(freq * 0.92, time);
+      gritOsc.frequency.exponentialRampToValueAtTime(freq, time + slideTime);
+    }
 
     const dist = this.ctx.createWaveShaper();
     if (!this.distCurve || !this.heavyDistCurve || !this.dirtyDistCurve) {
@@ -3064,12 +3119,12 @@ const Sound = {
         filter.frequency.exponentialRampToValueAtTime(160, time + dur * 0.8);
       }
     } else {
-      filter.Q.setValueAtTime(bar >= 6 ? 1.4 : (track === 1 ? 4.5 : 2.8), time);
+      filter.Q.setValueAtTime(bar >= 6 ? 1.4 : (track === 1 ? 6.2 : 2.8), time);
       if (bar >= 6) {
         filter.frequency.setValueAtTime(250, time);
         filter.frequency.exponentialRampToValueAtTime(100, time + dur * 0.95);
       } else {
-        filter.frequency.setValueAtTime(track === 1 ? 760 : 620, time);
+        filter.frequency.setValueAtTime(track === 1 ? (stepInBar === 0 || stepInBar === 8 ? 1450 : 920) : 620, time);
         filter.frequency.exponentialRampToValueAtTime(100, time + dur * 0.85);
       }
     }
@@ -3253,8 +3308,9 @@ const Sound = {
 
     const gain = this.ctx.createGain();
     gain.gain.setValueAtTime(0.001, time);
-    gain.gain.linearRampToValueAtTime(0.12, time + 0.008);
-    gain.gain.setValueAtTime(0.10, time + 0.03);
+    gain.gain.linearRampToValueAtTime(0.13, time + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.028, time + dur * 0.45);
+    gain.gain.linearRampToValueAtTime(0.078, time + dur * 0.72);
     gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
 
     const oscillators = freqs.map((freq, idx) => {
@@ -3306,7 +3362,11 @@ const Sound = {
     osc.type = isMinimal ? "sine" : isDowntempo ? "sawtooth" : track === 1 ? "sawtooth" : isModern ? "sawtooth" : "triangle";
     osc.frequency.setValueAtTime(freq, time);
     if (isModern) osc.detune.setValueAtTime(6, time);
-    if (isDowntempo) osc.detune.setValueAtTime(4, time);
+    if (isDowntempo) {
+      const drift = rand(-7, 7);
+      osc.detune.setValueAtTime(drift, time);
+      osc.detune.linearRampToValueAtTime(drift + rand(-5, 5), time + dur);
+    }
 
     const vibrato = this.ctx.createOscillator();
     const vibratoGain = this.ctx.createGain();
@@ -3329,10 +3389,17 @@ const Sound = {
       if (isModern) filter.Q.setValueAtTime(2.5, time);
     }
 
-    const peakVol = isDowntempo ? 0.09 : track === 2 ? 0.105 : isModern ? 0.10 : 0.085;
+    const peakVol = isMinimal ? 0.095 : isDowntempo ? 0.09 : track === 2 ? 0.105 : isModern ? 0.10 : 0.085;
     gain.gain.setValueAtTime(0.001, time);
-    gain.gain.linearRampToValueAtTime(peakVol, time + (isDowntempo ? 0.06 : isModern ? 0.008 : 0.02));
-    gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    if (isModern) {
+      gain.gain.linearRampToValueAtTime(peakVol, time + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.035, time + dur * 0.35);
+      gain.gain.linearRampToValueAtTime(peakVol * 0.72, time + dur * 0.65);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    } else {
+      gain.gain.linearRampToValueAtTime(peakVol, time + (isDowntempo ? 0.06 : 0.02));
+      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    }
 
     vibrato.start(time);
     osc.connect(filter);
@@ -3354,6 +3421,8 @@ const Sound = {
       const osc2 = this.ctx.createOscillator();
       osc2.type = "triangle";
       osc2.frequency.setValueAtTime(freq * 2.01, time);
+      osc2.detune.setValueAtTime(rand(-10, 10), time);
+      osc2.detune.linearRampToValueAtTime(rand(-8, 8), time + dur);
       const osc2Gain = this.ctx.createGain();
       osc2Gain.gain.value = 0.15;
       osc2.connect(osc2Gain);
