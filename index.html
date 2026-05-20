@@ -10384,22 +10384,40 @@ function rebuild3DTrack() {
   // Build kart models for all active karts
   buildAllKartModels();
 
-  // Item boxes
+  // Item boxes (neon hypercube with inner diamond and question mark)
   if (game.track.itemBoxes) {
     game.track.itemBoxes.forEach(ib => {
-      const boxGeo = new T.BoxGeometry(14, 14, 14);
-      const boxMat = new T.MeshStandardMaterial({
+      const boxGroup = new T.Group();
+      // Outer wireframe cube
+      const outerGeo = new T.BoxGeometry(18, 18, 18);
+      const outerMat = new T.MeshStandardMaterial({
         color: 0xffd86b,
         emissive: 0xffd86b,
-        emissiveIntensity: 0.5,
+        emissiveIntensity: 0.6,
         transparent: true,
-        opacity: 0.7,
+        opacity: 0.35,
+        wireframe: true,
       });
-      const box = new T.Mesh(boxGeo, boxMat);
-      box.position.set(ib.x, 12, ib.y);
-      box._itemRef = ib;
-      group.add(box);
-      THREE_STATE.itemMeshes.push(box);
+      boxGroup.add(new T.Mesh(outerGeo, outerMat));
+      // Inner solid diamond (rotated cube)
+      const innerGeo = new T.OctahedronGeometry(8);
+      const innerMat = new T.MeshStandardMaterial({
+        color: 0xffffff,
+        emissive: 0xffd86b,
+        emissiveIntensity: 0.9,
+        transparent: true,
+        opacity: 0.85,
+      });
+      boxGroup.add(new T.Mesh(innerGeo, innerMat));
+      // Point light inside
+      const boxLight = new T.PointLight(0xffd86b, 0.4, 80);
+      boxGroup.add(boxLight);
+      boxGroup.position.set(ib.x, 12, ib.y);
+      boxGroup._itemRef = ib;
+      boxGroup._innerMat = innerMat;
+      boxGroup._outerMat = outerMat;
+      group.add(boxGroup);
+      THREE_STATE.itemMeshes.push(boxGroup);
     });
   }
 
@@ -10423,22 +10441,30 @@ function rebuild3DTrack() {
     });
   }
 
-  // Coins
+  // Coins (gold disc with embossed center ring)
   if (game.track.coins) {
     game.track.coins.forEach(c => {
       if (c.collected) return;
-      const coinGeo = new T.CylinderGeometry(5, 5, 2, 8);
-      const coinMat = new T.MeshStandardMaterial({
+      const coinGroup = new T.Group();
+      const discGeo = new T.CylinderGeometry(6, 6, 1.8, 12);
+      const discMat = new T.MeshStandardMaterial({
         color: 0xffd86b,
         emissive: 0xffd86b,
-        emissiveIntensity: 0.3,
-        metalness: 0.8,
+        emissiveIntensity: 0.4,
+        metalness: 0.9,
+        roughness: 0.15,
       });
-      const coin = new T.Mesh(coinGeo, coinMat);
-      coin.position.set(c.x, 8, c.y);
-      coin._coinRef = c;
-      group.add(coin);
-      THREE_STATE.coinMeshes.push(coin);
+      coinGroup.add(new T.Mesh(discGeo, discMat));
+      const ringGeo = new T.TorusGeometry(4, 0.6, 6, 12);
+      const ringMat = new T.MeshStandardMaterial({ color: 0xa87a13, metalness: 0.95, roughness: 0.1 });
+      const ring = new T.Mesh(ringGeo, ringMat);
+      ring.rotation.x = Math.PI / 2;
+      coinGroup.add(ring);
+      coinGroup.position.set(c.x, 8, c.y);
+      coinGroup._coinRef = c;
+      coinGroup._discMat = discMat;
+      group.add(coinGroup);
+      THREE_STATE.coinMeshes.push(coinGroup);
     });
   }
 
@@ -10624,14 +10650,21 @@ function buildKartModel3D(charId, color) {
     group.add(stripe);
   }
 
-  // Shield sphere (hidden by default)
-  const shieldGeo = new T.SphereGeometry(22, 16, 12);
-  const shieldMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.3, transparent: true, opacity: 0, side: T.DoubleSide });
+  // Shield (wireframe icosahedron for hex-grid look + solid inner glow)
+  const shieldGeo = new T.IcosahedronGeometry(22, 1);
+  const shieldMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.5, transparent: true, opacity: 0, wireframe: true, side: T.DoubleSide });
   const shield = new T.Mesh(shieldGeo, shieldMat);
   shield.position.y = 8;
   group.add(shield);
+  const shieldInner = new T.Mesh(
+    new T.IcosahedronGeometry(20, 1),
+    new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.2, transparent: true, opacity: 0, side: T.DoubleSide })
+  );
+  shieldInner.position.y = 8;
+  group.add(shieldInner);
   group._shield = shield;
   group._shieldMat = shieldMat;
+  group._shieldInner = shieldInner;
 
   // Boost flame (hidden by default)
   const flameGeo = new T.ConeGeometry(7, 28, 10);
@@ -10857,9 +10890,17 @@ function sync3DScene(time) {
       model.rotation.y += kart.spinAngle;
     }
 
-    // Shield visibility
+    // Shield visibility + rotation
     if (model._shieldMat) {
-      model._shieldMat.opacity = kart.shieldTimer > 0 ? 0.25 + 0.1 * Math.sin(time * 0.005) : 0;
+      const shieldOn = kart.shieldTimer > 0;
+      model._shieldMat.opacity = shieldOn ? 0.35 + 0.15 * Math.sin(time * 0.005) : 0;
+      if (model._shield) {
+        model._shield.rotation.y = time * 0.001;
+        model._shield.rotation.x = Math.sin(time * 0.0008) * 0.3;
+      }
+      if (model._shieldInner && model._shieldInner.material) {
+        model._shieldInner.material.opacity = shieldOn ? 0.08 + 0.06 * Math.sin(time * 0.007) : 0;
+      }
     }
 
     // Boost glow
@@ -10896,22 +10937,36 @@ function sync3DScene(time) {
     THREE_STATE.playerLight.position.set(pk.x, 150, pk.y);
   }
 
-  // Rotate item boxes
+  // Animate item boxes (hypercube spin + inner diamond counter-rotate + pulse glow)
   THREE_STATE.itemMeshes.forEach(m => {
     if (m._itemRef && !m._itemRef.active) { m.visible = false; return; }
     m.visible = true;
-    m.rotation.y = (m._itemRef?.spin || 0) + time * 0.002;
-    m.rotation.x = Math.sin(time * 0.004 + m.position.x) * 0.4;
-    m.position.y = 12 + Math.sin(time * 0.003 + m.position.x) * 3;
+    const spin = (m._itemRef?.spin || 0) + time * 0.002;
+    m.rotation.y = spin;
+    m.rotation.x = Math.sin(time * 0.004 + m.position.x * 0.01) * 0.3;
+    m.position.y = 14 + Math.sin(time * 0.003 + m.position.x * 0.01) * 4;
+    // Inner diamond counter-rotate
+    if (m.children && m.children[1]) {
+      m.children[1].rotation.y = -spin * 1.5;
+      m.children[1].rotation.x = spin * 0.8;
+    }
+    // Pulse glow
+    if (m._innerMat) m._innerMat.emissiveIntensity = 0.7 + 0.4 * Math.sin(time * 0.008 + m.position.x * 0.01);
+    if (m._outerMat) m._outerMat.opacity = 0.25 + 0.15 * Math.sin(time * 0.006 + m.position.x * 0.01);
   });
 
-  // Rotate coins
+  // Animate coins (spinning gold discs with bob)
   THREE_STATE.coinMeshes.forEach(m => {
     if (m._coinRef && m._coinRef.collected) { m.visible = false; return; }
-    m.rotation.y = time * 0.004;
-    m.rotation.x = Math.PI / 2;
-    m.position.y = 9 + Math.sin(time * 0.004 + m.position.x) * 2;
+    m.visible = true;
+    m.rotation.y = time * 0.005;
+    m.rotation.x = 0;
+    m.position.y = 9 + Math.sin(time * 0.004 + m.position.x * 0.01) * 2.5;
+    if (m._discMat) m._discMat.emissiveIntensity = 0.3 + 0.2 * Math.sin(time * 0.007 + m.position.z * 0.01);
   });
+
+  // Ultimate 3D effects
+  sync3DUltimates(time);
 
   THREE_STATE.boostPadMeshes.forEach(m => {
     const pulse = 0.55 + 0.35 * Math.sin(time * 0.01 + m.position.x * 0.01);
@@ -10954,6 +11009,151 @@ function sync3DScene(time) {
 
   syncHazards3D(time);
   syncDragons3D(time);
+}
+
+function sync3DUltimates(time) {
+  if (!window.THREE || !THREE_STATE.scene) return;
+  const T = window.THREE;
+
+  // Manage per-kart ultimate aura meshes
+  if (!THREE_STATE._ultAuras) THREE_STATE._ultAuras = new Map();
+
+  for (const [kart, model] of THREE_STATE.kartModels) {
+    const active = kart.ultActiveTimer > 0;
+    let aura = THREE_STATE._ultAuras.get(kart);
+
+    if (active && !aura) {
+      aura = new T.Group();
+      const kartColor = new T.Color(kart.color);
+
+      // Expanding rings
+      for (let i = 0; i < 3; i++) {
+        const ringGeo = new T.TorusGeometry(20 + i * 8, 1.5, 8, 24);
+        const ringMat = new T.MeshStandardMaterial({
+          color: kartColor,
+          emissive: kartColor,
+          emissiveIntensity: 1.2,
+          transparent: true,
+          opacity: 0.6,
+          side: T.DoubleSide,
+        });
+        const ring = new T.Mesh(ringGeo, ringMat);
+        ring.rotation.x = Math.PI / 2;
+        ring.position.y = 8 + i * 5;
+        ring._ringIdx = i;
+        ring._ringMat = ringMat;
+        aura.add(ring);
+      }
+
+      // Character-specific ultimate visuals
+      if (kart.charId === "anton") {
+        // Typo Storm: floating red glitch cubes orbiting
+        for (let i = 0; i < 6; i++) {
+          const cube = new T.Mesh(
+            new T.BoxGeometry(4, 6, 1.5),
+            new T.MeshStandardMaterial({ color: 0xff4d6d, emissive: 0xff4d6d, emissiveIntensity: 1.0, transparent: true, opacity: 0.8 })
+          );
+          cube._orbitIdx = i;
+          cube._orbitRadius = 35;
+          aura.add(cube);
+        }
+      } else if (kart.charId === "artur") {
+        // Prayer Protocol: golden fire column
+        const pillarGeo = new T.CylinderGeometry(6, 14, 60, 10);
+        const pillarMat = new T.MeshStandardMaterial({ color: 0xff8a3b, emissive: 0xff8a3b, emissiveIntensity: 1.5, transparent: true, opacity: 0.3 });
+        const pillar = new T.Mesh(pillarGeo, pillarMat);
+        pillar.position.y = 30;
+        aura.add(pillar);
+        aura._pillarMat = pillarMat;
+      } else if (kart.charId === "rissal") {
+        // Panic Deploy: swirling green panic clouds
+        for (let i = 0; i < 4; i++) {
+          const cloud = new T.Mesh(
+            new T.SphereGeometry(10, 8, 6),
+            new T.MeshStandardMaterial({ color: 0x4dffaa, emissive: 0x4dffaa, emissiveIntensity: 0.8, transparent: true, opacity: 0.3 })
+          );
+          cloud._orbitIdx = i;
+          cloud._orbitRadius = 40;
+          aura.add(cloud);
+        }
+      } else if (kart.charId === "pia") {
+        // ThinkPad Slam: purple shockwave spheres
+        const slamSphere = new T.Mesh(
+          new T.SphereGeometry(30, 16, 12),
+          new T.MeshStandardMaterial({ color: 0x9d4dff, emissive: 0x9d4dff, emissiveIntensity: 0.9, transparent: true, opacity: 0.2, side: T.DoubleSide })
+        );
+        slamSphere.position.y = 10;
+        aura.add(slamSphere);
+        aura._slamSphere = slamSphere;
+      } else if (kart.charId === "florian") {
+        // Regulatory Lockdown: cyan holographic shield grid
+        const gridGeo = new T.IcosahedronGeometry(32, 1);
+        const gridMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.7, wireframe: true, transparent: true, opacity: 0.5 });
+        const grid = new T.Mesh(gridGeo, gridMat);
+        grid.position.y = 12;
+        aura.add(grid);
+        aura._gridMat = gridMat;
+      }
+
+      // Aura point light
+      const auraLight = new T.PointLight(kartColor, 1.2, 200);
+      auraLight.position.y = 20;
+      aura.add(auraLight);
+      aura._auraLight = auraLight;
+
+      THREE_STATE.scene.add(aura);
+      THREE_STATE._ultAuras.set(kart, aura);
+    }
+
+    if (aura) {
+      if (!active) {
+        THREE_STATE.scene.remove(aura);
+        dispose3DObject(aura);
+        THREE_STATE._ultAuras.delete(kart);
+        continue;
+      }
+
+      aura.position.set(kart.x, 0, kart.y);
+      const t = time * 0.001;
+
+      // Animate rings
+      aura.children.forEach(child => {
+        if (child._ringIdx !== undefined) {
+          const i = child._ringIdx;
+          child.rotation.z = t * (1 + i * 0.3);
+          child.scale.setScalar(1 + Math.sin(t * 2 + i) * 0.15);
+          if (child._ringMat) child._ringMat.opacity = 0.4 + 0.25 * Math.sin(t * 3 + i * 1.5);
+        }
+
+        // Orbiting objects (Anton typo cubes, Rissal clouds)
+        if (child._orbitIdx !== undefined) {
+          const i = child._orbitIdx;
+          const r = child._orbitRadius;
+          const ang = t * 2.5 + (i / 6) * Math.PI * 2;
+          child.position.set(Math.cos(ang) * r, 15 + Math.sin(t * 4 + i) * 6, Math.sin(ang) * r);
+          child.rotation.y = t * 3;
+          child.rotation.x = t * 2;
+        }
+      });
+
+      // Character-specific animations
+      if (aura._pillarMat) {
+        aura._pillarMat.opacity = 0.2 + 0.2 * Math.sin(t * 5);
+        aura._pillarMat.emissiveIntensity = 1.0 + 0.8 * Math.sin(t * 4);
+      }
+      if (aura._slamSphere) {
+        const pulse = 1 + 0.3 * Math.sin(t * 6);
+        aura._slamSphere.scale.setScalar(pulse);
+        aura._slamSphere.material.opacity = 0.15 + 0.1 * Math.sin(t * 4);
+      }
+      if (aura._gridMat) {
+        aura._gridMat.opacity = 0.3 + 0.2 * Math.sin(t * 3);
+      }
+      if (aura._auraLight) {
+        aura._auraLight.intensity = 0.8 + 0.6 * Math.sin(t * 4);
+      }
+    }
+  }
 }
 
 function syncHazards3D(time) {
