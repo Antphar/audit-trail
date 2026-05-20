@@ -921,10 +921,17 @@ let crtOverlayEnabled = false;
 const TUNING = {
   // Item effect durations (in frames, ~60fps)
   BOOST_DURATION: 75,
+  CITATION_BOOST_DURATION: 24,
+  CITATION_BOOST_EVERY: 5,
+  CITATION_SPEED_PER_STACK: 0.006,
+  CITATION_SPEED_MAX_STACKS: 20,
   SHIELD_DURATION: 360,
   SHIELD_DURATION_RISSAL: 540,
   HANDLING_DURATION: 360,
   HOTFIX_DURATION: 150,
+  FAST_TRACK_DURATION: 180,
+  DOUBLE_BLIND_DURATION: 180,
+  PLACEBO_SLOW_DURATION: 90,
   ITEM_ROLL_TIME: 45,
   SPINOUT_TIME: 45,
   SPINOUT_TIME_SHORT: 22,
@@ -1277,6 +1284,14 @@ function triggerShootEffect(kart, item) {
     if (game.particles) {
       game.particles.burst(kart.x - fx * 20, kart.y - fy * 20, "#ff4d6d", 12, { spdMin: 1, spdMax: 2.5 });
     }
+  } else if (item === "placebo") {
+    Sound.spatialTone(kart.x, kart.y, 520, 0.14, "triangle", 0.13, 220);
+    Sound.spatialNoise(kart.x, kart.y, 0.09, 0.06, 1600);
+    if (game.particles) game.particles.burst(kart.x - fx * 22, kart.y - fy * 22, "#ffcc00", 14, { spdMin: 1.5, spdMax: 3.5 });
+  } else if (item === "doubleblind") {
+    Sound.spatialTone(kart.x, kart.y, 260, 0.28, "sawtooth", 0.12, 520);
+    Sound.spatialNoise(kart.x, kart.y, 0.25, 0.08, 700);
+    if (game.particles) game.particles.burst(kart.x, kart.y, "#bd57ff", 18, { spdMin: 1.5, spdMax: 4 });
   } else if (item === "dossier") {
     Sound.spatialTone(kart.x, kart.y, 350, 0.12, "square", 0.16, 120);
     Sound.spatialNoise(kart.x, kart.y, 0.10, 0.08, 1000);
@@ -1343,6 +1358,16 @@ function triggerShootEffect(kart, item) {
       }
       game.particles.burst(kart.x, kart.y, "#ffcc00", 30, { spdMin: 3, spdMax: 7 });
       game.particles.burst(kart.x, kart.y, "#ff6600", 20, { spdMin: 2, spdMax: 5 });
+    }
+  } else if (item === "fasttrack") {
+    Sound.spatialTone(kart.x, kart.y, 660, 0.42, "sawtooth", 0.18, 2200);
+    Sound.spatialTone(kart.x, kart.y, 330, 0.32, "square", 0.12, 990);
+    if (game.particles) {
+      game.particles.add({
+        type: "ring", x: kart.x, y: kart.y, vx: 0, vy: 0,
+        life: 34, maxLife: 34, size: 72, startSize: 12, color: "#a4ff80"
+      });
+      game.particles.burst(kart.x, kart.y, "#a4ff80", 32, { spdMin: 2.5, spdMax: 7 });
     }
   }
 }
@@ -4509,7 +4534,7 @@ class Track {
     ctx.fillText("REG", -18, 0);
     if (enraged) {
       ctx.fillStyle = "#fff4b0";
-      ctx.font = "bold 9px monospace";
+      ctx.font = "bold 7px monospace";
       ctx.fillText("FINAL NOTICE", -18, 18);
     }
 
@@ -4980,7 +5005,7 @@ class Track {
       ctx.textBaseline = "middle";
       ctx.save();
       ctx.scale(sx, 1);
-      ctx.fillText("Ø", 0, 0);
+      ctx.fillText("PMC", 0, 0);
       ctx.restore();
 
       ctx.restore();
@@ -5138,6 +5163,90 @@ class MergeConflict {
     ctx.textBaseline = "middle";
     ctx.fillText("Err", 0, 0);
 
+    ctx.restore();
+  }
+}
+
+class PlaceboPill {
+  constructor(x, y, owner = null) {
+    this.x = x;
+    this.y = y;
+    this.owner = owner;
+    this.r = 15;
+    this.spin = Math.random() * TAU;
+    this.active = true;
+  }
+
+  update(dt) {
+    this.spin += 0.065 * dt;
+  }
+
+  draw(ctx, time) {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.spin);
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = "#ffcc00";
+    ctx.fillStyle = "rgba(255, 204, 0, 0.25)";
+    ctx.strokeStyle = "#ffcc00";
+    ctx.lineWidth = 2.5;
+    roundRect(ctx, -18, -9, 36, 18, 9);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, -8);
+    ctx.lineTo(0, 8);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 8px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Rx", -8, 0);
+    ctx.restore();
+  }
+}
+
+class DoubleBlindCloud {
+  constructor(x, y, heading, owner) {
+    this.x = x;
+    this.y = y;
+    this.owner = owner;
+    this.vx = Math.cos(heading + Math.PI) * 1.2;
+    this.vy = Math.sin(heading + Math.PI) * 1.2;
+    this.r = 48;
+    this.life = 240;
+    this.active = true;
+    this.phase = Math.random() * TAU;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.phase += 0.06 * dt;
+    this.life -= dt;
+    this.r = Math.min(76, this.r + 0.05 * dt);
+    if (this.life <= 0) this.active = false;
+  }
+
+  draw(ctx, time) {
+    const a = clamp(this.life / 240, 0, 1);
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "#bd57ff";
+    for (let i = 0; i < 5; i++) {
+      const ang = this.phase + i * TAU / 5;
+      ctx.fillStyle = `rgba(189, 87, 255, ${0.12 * a})`;
+      ctx.beginPath();
+      ctx.arc(Math.cos(ang) * 18, Math.sin(ang) * 12, this.r * (0.42 + i * 0.035), 0, TAU);
+      ctx.fill();
+    }
+    ctx.fillStyle = `rgba(255,255,255,${0.8 * a})`;
+    ctx.font = "bold 10px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("BLIND", 0, 0);
     ctx.restore();
   }
 }
@@ -5428,8 +5537,11 @@ class Kart {
     // State
     this.boostTimer = 0;       // active boost duration (frames)
     this.boostStock = 0;       // legacy boost stock compatibility
+    this.citationBoostTimer = 0;
     this.shieldTimer = 0;
     this.handlingTimer = 0;    // temporary handling improvement
+    this.doubleBlindTimer = 0;
+    this.placeboSlowTimer = 0;
     this.driftCharge = 0;      // increases while drifting -> mini-turbo
     this.driftDir = 0;
     this.invuln = 0;
@@ -5513,6 +5625,30 @@ class Kart {
           y: dropY
         });
       }
+    } else if (type === "placebo") {
+      const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
+      const dropX = this.x - fx * 34;
+      const dropY = this.y - fy * 34;
+      game.hazards.push(new PlaceboPill(dropX, dropY, this));
+      if (game.p2pMode && game.p2pRole === "guest") {
+        sendP2pMessage({
+          type: "drop_placebo",
+          kartId: getKartId(this),
+          x: dropX,
+          y: dropY
+        });
+      }
+    } else if (type === "doubleblind") {
+      game.hazards.push(new DoubleBlindCloud(this.x, this.y, this.heading, this));
+      if (game.p2pMode && game.p2pRole === "guest") {
+        sendP2pMessage({
+          type: "double_blind_cloud",
+          kartId: getKartId(this),
+          x: this.x,
+          y: this.y,
+          heading: this.heading
+        });
+      }
     } else if (type === "dossier") {
       const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
       const spawnX = this.x + fx * 32;
@@ -5546,6 +5682,13 @@ class Kart {
       this.invuln = Math.max(this.invuln, TUNING.HOTFIX_DURATION);
       this.ultraBoostActive = true;
       triggerQuote(this, "boost");
+    } else if (type === "fasttrack") {
+      this.boostTimer = Math.max(this.boostTimer, TUNING.FAST_TRACK_DURATION);
+      this.shieldTimer = Math.max(this.shieldTimer, TUNING.FAST_TRACK_DURATION);
+      this.handlingTimer = Math.max(this.handlingTimer, TUNING.FAST_TRACK_DURATION);
+      this.invuln = Math.max(this.invuln, TUNING.FAST_TRACK_DURATION);
+      this.ultraBoostActive = true;
+      triggerQuote(this, "boost");
     }
   }
 
@@ -5563,8 +5706,11 @@ class Kart {
 
       // Decay timers
       if (this.boostTimer > 0) this.boostTimer -= dt;
+      if (this.citationBoostTimer > 0) this.citationBoostTimer -= dt;
       if (this.shieldTimer > 0) this.shieldTimer -= dt;
       if (this.handlingTimer > 0) this.handlingTimer -= dt;
+      if (this.doubleBlindTimer > 0) this.doubleBlindTimer -= dt;
+      if (this.placeboSlowTimer > 0) this.placeboSlowTimer -= dt;
       if (this.invuln > 0) this.invuln -= dt;
       if (this.draftBoostTimer > 0) this.draftBoostTimer -= dt;
 
@@ -5610,7 +5756,11 @@ class Kart {
     }
 
     // Speed cap (boost increases, drafting increases it slightly too)
-    const cap = this.maxSpeed * (this.boostTimer > 0 ? 1.55 : (this.draftBoostTimer > 0 ? 1.25 : 1)) * speedCapMul;
+    const citationStacks = Math.min(this.coinsCollected || 0, TUNING.CITATION_SPEED_MAX_STACKS);
+    const citationMult = 1 + citationStacks * TUNING.CITATION_SPEED_PER_STACK;
+    const powerMult = this.boostTimer > 0 ? 1.55 : (this.draftBoostTimer > 0 ? 1.25 : this.citationBoostTimer > 0 ? 1.12 : 1);
+    const slowMult = this.placeboSlowTimer > 0 ? 0.72 : 1;
+    const cap = this.maxSpeed * citationMult * powerMult * slowMult * speedCapMul;
     if (vF > cap) vF = cap;
     if (vF < -this.reverseMax) vF = -this.reverseMax;
 
@@ -5631,6 +5781,7 @@ class Kart {
       let turn = this.turnSpeed * speedFactor;
       if (drifting) turn *= 1.45;
       if (this.handlingTimer > 0) turn *= 1.25;
+      if (this.doubleBlindTimer > 0) turn *= -0.85;
       // Reverse — steering inverts feel
       const sign = vF < -0.05 ? -1 : 1;
       this.heading += steerInput * turn * sign * dt;
@@ -5825,8 +5976,11 @@ class Kart {
       this.ultraBoostActive = false;
     }
 
+    if (this.citationBoostTimer > 0) this.citationBoostTimer -= dt;
     if (this.shieldTimer > 0) this.shieldTimer -= dt;
     if (this.handlingTimer > 0) this.handlingTimer -= dt;
+    if (this.doubleBlindTimer > 0) this.doubleBlindTimer -= dt;
+    if (this.placeboSlowTimer > 0) this.placeboSlowTimer -= dt;
     if (this.invuln > 0) this.invuln -= dt;
 
     // Slipstream drafting search
@@ -6307,7 +6461,9 @@ class AIKart extends Kart {
         if (playerAhead || Math.random() < 0.005 * dt) {
           shouldUse = true;
         }
-      } else if (this.itemSlot === "boost" || this.itemSlot === "handling") {
+      } else if (this.itemSlot === "placebo" || this.itemSlot === "doubleblind") {
+        shouldUse = rank <= 3 || Math.random() < 0.01 * dt;
+      } else if (this.itemSlot === "boost" || this.itemSlot === "handling" || this.itemSlot === "fasttrack") {
         if (curvature < 0.25) {
           shouldUse = true;
         }
@@ -7172,10 +7328,13 @@ function getWeightedItem(kart) {
     shield:       10 + posRatio * 5,
     handling:     10,
     conflict:     12 - posRatio * 6,
+    placebo:      9 - posRatio * 3,
+    doubleblind:  8 + posRatio * 3,
     dossier:      10 + posRatio * 5,
     deauth:       8 - posRatio * 4,
     mergerequest: 5 + posRatio * 15,
-    hotfix:       posRatio >= 0.7 ? (posRatio * 20) : 0
+    hotfix:       posRatio >= 0.7 ? (posRatio * 18) : 0,
+    fasttrack:    posRatio >= 0.45 ? (posRatio * 10) : 2
   };
 
   const entries = Object.entries(weights);
@@ -7291,15 +7450,22 @@ function checkItems(kart) {
       c.collected = true;
       c.respawn = 700; // many frames before respawn
       kart.coinsCollected++;
+      kart.citationBoostTimer = Math.max(kart.citationBoostTimer || 0, TUNING.CITATION_BOOST_DURATION);
       requestP2pPickup("coin", i, kart);
       if (kart.isPlayer) {
         Sound.coin();
         game.particles.burst(c.x, c.y, "#ffd86b", 10, { type: "spark" });
-        // Floating "+1"
         game.particles.add({
-          type: "text", text: "+1", x: c.x, y: c.y - 10,
+          type: "text", text: "+1 REF", x: c.x, y: c.y - 10,
           vx: 0, vy: -1.2, life: 40, maxLife: 40, size: 14, color: "#ffd86b", drag: 1,
         });
+        if (kart.coinsCollected % TUNING.CITATION_BOOST_EVERY === 0) {
+          kart.boostTimer = Math.max(kart.boostTimer, TUNING.CITATION_BOOST_DURATION * 2);
+          game.particles.add({
+            type: "text", text: "EVIDENCE BOOST!", x: kart.x, y: kart.y - 34,
+            vx: 0, vy: -1.0, life: 58, maxLife: 58, size: 18, color: "#a4ff80", drag: 0.98,
+          });
+        }
       }
     }
   }
@@ -7374,6 +7540,10 @@ function applyP2pPickupRequest(data, sourceConn = null) {
     coin.collected = true;
     coin.respawn = 700;
     kart.coinsCollected++;
+    kart.citationBoostTimer = Math.max(kart.citationBoostTimer || 0, TUNING.CITATION_BOOST_DURATION);
+    if (kart.coinsCollected % TUNING.CITATION_BOOST_EVERY === 0) {
+      kart.boostTimer = Math.max(kart.boostTimer, TUNING.CITATION_BOOST_DURATION * 2);
+    }
     return true;
   }
 
@@ -7405,6 +7575,7 @@ function applyP2pPickupState(data) {
     const kart = getKartById(data.kartId);
     if (kart && data.coinsCollected !== undefined) {
       kart.coinsCollected = Math.max(kart.coinsCollected || 0, data.coinsCollected);
+      kart.citationBoostTimer = Math.max(kart.citationBoostTimer || 0, TUNING.CITATION_BOOST_DURATION);
     }
   } else if (data.pickup === "itemBox") {
     const box = game.track.itemBoxes[index];
@@ -7750,11 +7921,16 @@ function update(dt, time) {
           if (h instanceof DossierProjectile && h.owner === kart && h.ignoreOwnerTimer > 0) {
             continue;
           }
+          if ((h instanceof PlaceboPill || h instanceof DoubleBlindCloud) && h.owner === kart) {
+            continue;
+          }
 
-          if (!kart.eliminated && kart.spinoutTimer <= 0 && dist(kart.x, kart.y, h.x, h.y) < 24) {
+          if (!kart.eliminated && kart.spinoutTimer <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24)) {
             game.hazards.splice(i, 1);
             const isDossier = (h instanceof DossierProjectile);
             const isRegulatory = (h instanceof RegulatoryProjectile);
+            const isPlacebo = (h instanceof PlaceboPill);
+            const isDoubleBlind = (h instanceof DoubleBlindCloud);
             if (isRegulatory) {
               if (absorbFatalHitWithShield(kart, h.x, h.y)) {
                 // Shield consumed the fatal audit projectile.
@@ -7790,6 +7966,22 @@ function update(dt, time) {
                   eliminateKart(kart, "GOT THE HANDS!", h.x, h.y, "#ff1a1a");
                   game.particles.burst(h.x, h.y, "#ff2200", 40, { type: "spark", spdMin: 2, spdMax: 8 });
                 }
+              } else if (isPlacebo) {
+                kart.placeboSlowTimer = Math.max(kart.placeboSlowTimer || 0, TUNING.PLACEBO_SLOW_DURATION);
+                if (kart.itemState === "rolling" || kart.itemState === "active") {
+                  kart.itemState = "empty";
+                  kart.itemSlot = null;
+                }
+                if (kart.isPlayer) Sound.crash();
+                game.particles.burst(h.x, h.y, "#ffcc00", 22, { type: "spark", spdMin: 1.5, spdMax: 5 });
+                game.particles.add({ type: "text", text: "PLACEBO!", x: h.x, y: h.y - 20,
+                  vx: rand(-0.5, 0.5), vy: -1.2, life: 75, maxLife: 75, size: 20, color: "#ffcc00", drag: 0.98 });
+              } else if (isDoubleBlind) {
+                kart.doubleBlindTimer = Math.max(kart.doubleBlindTimer || 0, TUNING.DOUBLE_BLIND_DURATION);
+                if (kart.isPlayer) { Sound.noise(0.18, 0.08, 500); game.shake = Math.max(game.shake, 5); }
+                game.particles.burst(h.x, h.y, "#bd57ff", 24, { type: "spark", spdMin: 1.2, spdMax: 4 });
+                game.particles.add({ type: "text", text: "DOUBLE BLIND!", x: h.x, y: h.y - 28,
+                  vx: rand(-0.5, 0.5), vy: -1.2, life: 85, maxLife: 85, size: 20, color: "#bd57ff", drag: 0.98 });
               } else {
                 kart.spinoutTimer = TUNING.SPINOUT_TIME; kart.spinAngle = 0; kart.vx = 0; kart.vy = 0;
                 if (kart.isPlayer) { Sound.crash(); game.shake = Math.max(game.shake, 8); }
@@ -8569,7 +8761,7 @@ function drawHUD(time) {
     ctx.fillStyle = "#a8acd0";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "top";
-    ctx.fillText("COINS", 18, 14);
+    ctx.fillText("CITATIONS", 18, 14);
 
     // Coin icon
     ctx.fillStyle = "#ffd86b";
@@ -8667,7 +8859,7 @@ function drawItemSlot(ctx, x, y, size, kart, time) {
     ctx.textBaseline = "middle";
     ctx.fillText("?", size / 2, size / 2);
   } else if (kart.itemState === "rolling") {
-    const items = ["boost", "shield", "handling", "conflict", "dossier", "deauth", "mergerequest", "hotfix"];
+    const items = ["boost", "shield", "handling", "conflict", "placebo", "doubleblind", "dossier", "deauth", "mergerequest", "hotfix", "fasttrack"];
     const frameIdx = Math.floor(time * 0.05) % items.length;
     const item = items[frameIdx];
     drawItemIcon(ctx, size / 2, size / 2, size * 0.55, item, time);
@@ -8760,6 +8952,47 @@ function drawItemIcon(ctx, cx, cy, sz, item, time) {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText("Err", 0, 0);
+  } else if (item === "placebo") {
+    ctx.fillStyle = "rgba(255, 204, 0, 0.25)";
+    ctx.strokeStyle = "#ffcc00";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = "#ffcc00";
+    roundRect(ctx, -sz * 0.48, -sz * 0.22, sz * 0.96, sz * 0.44, sz * 0.22);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, -sz * 0.2);
+    ctx.lineTo(0, sz * 0.2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 9px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("Rx", -sz * 0.18, 0);
+  } else if (item === "doubleblind") {
+    ctx.fillStyle = "rgba(189, 87, 255, 0.24)";
+    ctx.strokeStyle = "#bd57ff";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = "#bd57ff";
+    ctx.beginPath();
+    ctx.arc(0, 0, sz * 0.42, 0, TAU);
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-sz * 0.28, 0);
+    ctx.quadraticCurveTo(0, -sz * 0.22, sz * 0.28, 0);
+    ctx.quadraticCurveTo(0, sz * 0.22, -sz * 0.28, 0);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-sz * 0.36, -sz * 0.28);
+    ctx.lineTo(sz * 0.36, sz * 0.28);
+    ctx.stroke();
   } else if (item === "dossier") {
     ctx.fillStyle = "rgba(87, 242, 255, 0.25)";
     ctx.strokeStyle = "#57f2ff";
@@ -8858,6 +9091,28 @@ function drawItemIcon(ctx, cx, cy, sz, item, time) {
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
+  } else if (item === "fasttrack") {
+    ctx.strokeStyle = "#a4ff80";
+    ctx.fillStyle = "rgba(164, 255, 128, 0.22)";
+    ctx.lineWidth = 2.5;
+    ctx.shadowBlur = 12;
+    ctx.shadowColor = "#a4ff80";
+    ctx.beginPath();
+    ctx.moveTo(-sz * 0.42, sz * 0.2);
+    ctx.lineTo(-sz * 0.12, -sz * 0.42);
+    ctx.lineTo(sz * 0.38, -sz * 0.42);
+    ctx.lineTo(sz * 0.1, sz * 0.04);
+    ctx.lineTo(sz * 0.42, sz * 0.04);
+    ctx.lineTo(-sz * 0.1, sz * 0.46);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 8px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("FDA", 0, 0);
   }
 
   ctx.restore();
@@ -8882,7 +9137,7 @@ function drawHUDMultiplayer(time) {
 
     ctx.fillStyle = "#a8acd0";
     ctx.font = "10px sans-serif";
-    ctx.fillText("COINS", 12, 54);
+    ctx.fillText("CITATIONS", 12, 54);
     ctx.fillStyle = "#ffd86b";
     ctx.font = "bold 18px sans-serif";
     ctx.fillText(`${game.player.coinsCollected}`, 12, 66);
@@ -8913,7 +9168,7 @@ function drawHUDMultiplayer(time) {
 
     ctx.fillStyle = "#a8acd0";
     ctx.font = "10px sans-serif";
-    ctx.fillText("COINS", 12, 54);
+    ctx.fillText("CITATIONS", 12, 54);
     ctx.fillStyle = "#ffd86b";
     ctx.font = "bold 18px sans-serif";
     ctx.fillText(`${game.player2.coinsCollected}`, 12, 66);
@@ -9244,7 +9499,7 @@ function showFinishScreen() {
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Survival</span><span class="value">${formatTime(game.player.finishTime || game.raceTime)}</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Distance</span><span class="value">${p1Dist} km</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Laps</span><span class="value">${p1Lap}</span></div>`;
-      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player.coinsCollected}</span></div>`;
       const p1Score = game.player.coinsCollected * 15 + p1Lap * 500 + Math.floor((game.player.finishTime || game.raceTime) * 10);
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
       html += `</div>`;
@@ -9254,7 +9509,7 @@ function showFinishScreen() {
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Survival</span><span class="value">${formatTime(game.player2.finishTime || game.raceTime)}</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Distance</span><span class="value">${p2Dist} km</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Laps</span><span class="value">${p2Lap}</span></div>`;
-      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player2.coinsCollected}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player2.coinsCollected}</span></div>`;
       const p2Score = game.player2.coinsCollected * 15 + p2Lap * 500 + Math.floor((game.player2.finishTime || game.raceTime) * 10);
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
       html += `</div>`;
@@ -9290,7 +9545,7 @@ function showFinishScreen() {
       html += `<div style="font-weight: 900; color: #7b75ff; border-bottom: 1px solid rgba(123,117,255,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 1 (${game.player.name})</div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p1Place, 4)}">${ordinal(p1Place)}</span></span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : "DNF"}</span></div>`;
-      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player.coinsCollected}</span></div>`;
       const p1Score = game.player.coinsCollected * 10 + Math.max(0, (5 - p1Place) * 250);
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
       html += `</div>`;
@@ -9300,7 +9555,7 @@ function showFinishScreen() {
       html += `<div style="font-weight: 900; color: #ff4d6d; border-bottom: 1px solid rgba(255,77,109,0.2); padding-bottom: 4px; margin-bottom: 8px;">PLAYER 2 (${game.player2.name})</div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p2Place, 4)}">${ordinal(p2Place)}</span></span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player2.finished ? formatTime(game.player2.finishTime) : "DNF"}</span></div>`;
-      html += `<div class="row" style="margin: 4px 0;"><span class="label">Coins</span><span class="value">${game.player2.coinsCollected}</span></div>`;
+      html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player2.coinsCollected}</span></div>`;
       const p2Score = game.player2.coinsCollected * 10 + Math.max(0, (5 - p2Place) * 250);
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
       html += `</div>`;
@@ -9331,7 +9586,7 @@ function showFinishScreen() {
       html += `<div class="row"><span class="label">Survival Time</span><span class="value">${formatTime(game.player.finishTime || game.raceTime)}</span></div>`;
       html += `<div class="row"><span class="label">Distance Escaped</span><span class="value">${bestDist} km</span></div>`;
       html += `<div class="row"><span class="label">Laps Survived</span><span class="value">${game.player.lap}</span></div>`;
-      html += `<div class="row"><span class="label">Coins Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      html += `<div class="row"><span class="label">Citations Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
       const dragonScore = Math.floor(game.player.lap * 500 + game.player.coinsCollected * 15 + game.player.finishTime * 10);
       html += `<div class="row"><span class="label">Score</span><span class="value">${dragonScore}</span></div>`;
 
@@ -9350,7 +9605,7 @@ function showFinishScreen() {
       let html = "";
       html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
       html += `<div class="row"><span class="label">Final Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : formatTime(game.raceTime)}</span></div>`;
-      html += `<div class="row"><span class="label">Coins Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
+      html += `<div class="row"><span class="label">Citations Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
       const score = game.player.coinsCollected * 10 + Math.max(0, (5 - playerPlace) * 250) + Math.max(0, Math.floor(60 - game.raceTime) * 5);
       html += `<div class="row"><span class="label">Score</span><span class="value">${score}</span></div>`;
       html += `<div class="row"><span class="label">Laps Completed</span><span class="value">${game.player.lap} / ${TOTAL_LAPS}</span></div>`;
@@ -9712,7 +9967,10 @@ function serializeKartState(kart) {
     vx: kart.vx,
     vy: kart.vy,
     boostTimer: kart.boostTimer,
+    citationBoostTimer: kart.citationBoostTimer || 0,
     shieldTimer: kart.shieldTimer,
+    doubleBlindTimer: kart.doubleBlindTimer || 0,
+    placeboSlowTimer: kart.placeboSlowTimer || 0,
     itemSlot: kart.itemSlot,
     itemState: kart.itemState,
     finished: kart.finished,
@@ -9756,7 +10014,10 @@ function applyKartState(kart, p, opts = {}) {
   kart.vx = p.vx;
   kart.vy = p.vy;
   kart.boostTimer = p.boostTimer;
+  kart.citationBoostTimer = p.citationBoostTimer || 0;
   kart.shieldTimer = p.shieldTimer;
+  kart.doubleBlindTimer = p.doubleBlindTimer || 0;
+  kart.placeboSlowTimer = p.placeboSlowTimer || 0;
   kart.itemSlot = p.itemSlot;
   kart.itemState = p.itemState;
   kart.finished = p.finished;
@@ -9857,6 +10118,8 @@ function sendHostSync() {
     hazards: (game.hazards || []).map(h => ({
       isDossier: h instanceof DossierProjectile,
       isRegulatory: h instanceof RegulatoryProjectile,
+      isPlacebo: h instanceof PlaceboPill,
+      isDoubleBlind: h instanceof DoubleBlindCloud,
       enraged: h.enraged || false,
       isDragonFire: h instanceof DragonFire,
       x: h.x,
@@ -10127,6 +10390,20 @@ function handleP2pData(data, sourceConn = null) {
           df.sizePhase = h.sizePhase || 0;
           df.active = h.active !== false;
           return df;
+        } else if (h.isPlacebo) {
+          const pp = new PlaceboPill(h.x, h.y, getKartById(h.ownerId));
+          pp.spin = h.spin;
+          pp.active = h.active !== false;
+          return pp;
+        } else if (h.isDoubleBlind) {
+          const db = new DoubleBlindCloud(h.x, h.y, h.heading, getKartById(h.ownerId));
+          db.vx = h.vx;
+          db.vy = h.vy;
+          db.life = h.life || 120;
+          db.r = h.r || 48;
+          db.phase = h.pulsePhase || 0;
+          db.active = h.active !== false;
+          return db;
         } else {
           const mc = new MergeConflict(h.x, h.y);
           mc.spin = h.spin;
@@ -10181,6 +10458,18 @@ function handleP2pData(data, sourceConn = null) {
     if (game.p2pMode && game.p2pRole === "host" && game.player2) {
       const h = new MergeConflict(data.x, data.y);
       game.hazards.push(h);
+    }
+  }
+
+  else if (data.type === "drop_placebo") {
+    if (game.p2pMode && game.p2pRole === "host") {
+      game.hazards.push(new PlaceboPill(data.x, data.y, getKartById(data.kartId)));
+    }
+  }
+
+  else if (data.type === "double_blind_cloud") {
+    if (game.p2pMode && game.p2pRole === "host") {
+      game.hazards.push(new DoubleBlindCloud(data.x, data.y, data.heading, getKartById(data.kartId)));
     }
   }
 
