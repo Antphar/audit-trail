@@ -10212,6 +10212,10 @@ const THREE_STATE = {
   camSmooth: { x: 0, y: 0, z: 0, lx: 0, ly: 0, lz: 0 },
 };
 
+const ENABLE_3D_SHADOWS = new URLSearchParams(window.location.search).has("shadows3d");
+const ENABLE_DECORATIVE_3D_LIGHTS = new URLSearchParams(window.location.search).has("lights3d");
+const ENABLE_3D_PROFILE = new URLSearchParams(window.location.search).has("profile3d");
+
 const canvas3d = document.getElementById("game3d");
 const hudCanvas = document.getElementById("hud-overlay");
 const hudCtx = hudCanvas ? hudCanvas.getContext("2d") : null;
@@ -10253,12 +10257,12 @@ function init3DScene() {
   const T = window.THREE;
 
   THREE_STATE.renderer = new T.WebGLRenderer({ canvas: canvas3d, antialias: true, alpha: false });
-  THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
   THREE_STATE.renderer.setSize(VIEW_W, VIEW_H);
   THREE_STATE.renderer.setClearColor(0x060514);
   THREE_STATE.renderer.toneMapping = T.ACESFilmicToneMapping;
   THREE_STATE.renderer.toneMappingExposure = 1.15;
-  THREE_STATE.renderer.shadowMap.enabled = true;
+  THREE_STATE.renderer.shadowMap.enabled = ENABLE_3D_SHADOWS;
   THREE_STATE.renderer.shadowMap.type = T.PCFSoftShadowMap;
 
   THREE_STATE.scene = new T.Scene();
@@ -10273,7 +10277,7 @@ function init3DScene() {
   THREE_STATE.scene.add(ambient);
   const dirLight = new T.DirectionalLight(0x9999ff, 0.9);
   dirLight.position.set(300, 600, -300);
-  dirLight.castShadow = true;
+  dirLight.castShadow = ENABLE_3D_SHADOWS;
   dirLight.shadow.mapSize.width = 1024;
   dirLight.shadow.mapSize.height = 1024;
   dirLight.shadow.camera.near = 10;
@@ -10620,9 +10624,11 @@ function rebuild3DTrack() {
     banner.position.set((e.left.x + e.right.x) / 2, archH - 7, (e.left.y + e.right.y) / 2);
     banner.rotation.y = -Math.atan2(e.left.y - e.right.y, e.left.x - e.right.x);
     archGroup.add(banner);
-    const archLight = new T.PointLight(0xffd86b, 0.6, 150);
-    archLight.position.set((e.left.x + e.right.x) / 2, archH + 5, (e.left.y + e.right.y) / 2);
-    archGroup.add(archLight);
+    if (ENABLE_DECORATIVE_3D_LIGHTS) {
+      const archLight = new T.PointLight(0xffd86b, 0.6, 150);
+      archLight.position.set((e.left.x + e.right.x) / 2, archH + 5, (e.left.y + e.right.y) / 2);
+      archGroup.add(archLight);
+    }
     group.add(archGroup);
   }
 
@@ -10670,14 +10676,16 @@ function rebuild3DTrack() {
       const qCurve = new T.Mesh(new T.CylinderGeometry(1.5, 1.5, 10, 8), qMat);
       qCurve.position.y = 2;
       boxGroup.add(qCurve);
-      const boxLight = new T.PointLight(0xffd86b, 0.9, 140);
-      boxGroup.add(boxLight);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const boxLight = new T.PointLight(0xffd86b, 0.9, 140);
+        boxGroup.add(boxLight);
+      }
       boxGroup.position.set(ib.x, 22, ib.y);
       boxGroup._itemRef = ib;
       boxGroup._innerMat = innerMat;
       boxGroup._outerMat = outerMat;
       boxGroup._midMat = midMat;
-      boxGroup.castShadow = true;
+      boxGroup.castShadow = ENABLE_3D_SHADOWS;
       group.add(boxGroup);
       THREE_STATE.itemMeshes.push(boxGroup);
     });
@@ -10715,9 +10723,11 @@ function rebuild3DTrack() {
         bar.position.y = 1.5;
         padGroup.add(bar);
       }
-      const padLight = new T.PointLight(0xa4ff80, 0.3, 60);
-      padLight.position.y = 5;
-      padGroup.add(padLight);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const padLight = new T.PointLight(0xa4ff80, 0.3, 60);
+        padLight.position.y = 5;
+        padGroup.add(padLight);
+      }
       padGroup.position.set(bp.x, 1.5, bp.y);
       padGroup.rotation.y = -bp.ang + Math.PI / 2;
       padGroup._boostPadRef = bp;
@@ -10740,7 +10750,7 @@ function rebuild3DTrack() {
         roughness: 0.08,
       });
       const disc = new T.Mesh(discGeo, discMat);
-      disc.castShadow = true;
+      disc.castShadow = ENABLE_3D_SHADOWS;
       coinGroup.add(disc);
       const ringGeo = new T.TorusGeometry(4.5, 0.5, 8, 20);
       const ringMat = new T.MeshStandardMaterial({ color: 0xb8871a, metalness: 0.95, roughness: 0.05 });
@@ -10753,8 +10763,10 @@ function rebuild3DTrack() {
       const starGeo = new T.OctahedronGeometry(1.2);
       const starMesh = new T.Mesh(starGeo, new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 1.0 }));
       coinGroup.add(starMesh);
-      const coinLight = new T.PointLight(0xffd86b, 0.2, 30);
-      coinGroup.add(coinLight);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const coinLight = new T.PointLight(0xffd86b, 0.2, 30);
+        coinGroup.add(coinLight);
+      }
       coinGroup.position.set(c.x, 8, c.y);
       coinGroup._coinRef = c;
       coinGroup._discMat = discMat;
@@ -10784,12 +10796,14 @@ function rebuild3DTrack() {
       const bottomBar = new T.Mesh(new T.BoxGeometry(10, 3, 58), barMat);
       bottomBar.position.y = -24;
       gateGroup.add(bottomBar);
-      const wLight = new T.PointLight(col, 0.8, 150);
-      wLight.position.y = 30;
-      gateGroup.add(wLight);
-      const wLight2 = new T.PointLight(col, 0.3, 80);
-      wLight2.position.y = -20;
-      gateGroup.add(wLight2);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const wLight = new T.PointLight(col, 0.8, 150);
+        wLight.position.y = 30;
+        gateGroup.add(wLight);
+        const wLight2 = new T.PointLight(col, 0.3, 80);
+        wLight2.position.y = -20;
+        gateGroup.add(wLight2);
+      }
       gateGroup.position.set(obj.x, 26, obj.y);
       gateGroup.rotation.y = -(obj.ang || 0) + Math.PI / 2;
       gateGroup._movingObjectRef = obj;
@@ -10828,7 +10842,7 @@ function rebuild3DTrack() {
       });
       const pillar = new T.Mesh(pillarGeo, pillarMat);
       pillar.position.set(d.x, h / 2, d.y);
-      pillar.castShadow = true;
+      pillar.castShadow = ENABLE_3D_SHADOWS;
       group.add(pillar);
       for (let ri = 0; ri < 3; ri++) {
         const ringY = h * 0.25 + ri * (h * 0.25);
@@ -10845,9 +10859,11 @@ function rebuild3DTrack() {
       const cap = new T.Mesh(capGeo, capMat);
       cap.position.set(d.x, h + 2, d.y);
       group.add(cap);
-      const pillarLight = new T.PointLight(col, 0.25, 80);
-      pillarLight.position.set(d.x, h + 5, d.y);
-      group.add(pillarLight);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const pillarLight = new T.PointLight(col, 0.25, 80);
+        pillarLight.position.set(d.x, h + 5, d.y);
+        group.add(pillarLight);
+      }
     });
   }
 
@@ -12001,9 +12017,49 @@ function setCameraForKart(kart, time) {
   THREE_STATE.camera.updateProjectionMatrix();
 }
 
+function update3DProfile(renderMs, time) {
+  if (!ENABLE_3D_PROFILE || !THREE_STATE.renderer) return;
+  const info = THREE_STATE.renderer.info;
+  const prev = THREE_STATE._profile || {
+    lastTime: time,
+    fps: 60,
+    renderMs: 0,
+  };
+  const frameMs = Math.max(1, time - prev.lastTime);
+  const fps = 1000 / frameMs;
+  THREE_STATE._profile = {
+    lastTime: time,
+    fps: prev.fps * 0.9 + fps * 0.1,
+    renderMs: prev.renderMs * 0.85 + renderMs * 0.15,
+    calls: info.render.calls,
+    triangles: info.render.triangles,
+    points: info.render.points,
+    lines: info.render.lines,
+  };
+}
+
+function draw3DProfile(ctx) {
+  const p = THREE_STATE._profile;
+  if (!ENABLE_3D_PROFILE || !p) return;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.62)";
+  ctx.fillRect(14, VIEW_H - 92, 180, 76);
+  ctx.fillStyle = p.fps >= 45 ? "#a4ff80" : p.fps >= 25 ? "#ffd86b" : "#ff4d6d";
+  ctx.font = "bold 12px monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`3D ${p.fps.toFixed(0)} FPS`, 24, VIEW_H - 82);
+  ctx.fillStyle = "#ebe4ff";
+  ctx.fillText(`render ${p.renderMs.toFixed(1)}ms`, 24, VIEW_H - 64);
+  ctx.fillText(`calls ${p.calls}`, 24, VIEW_H - 46);
+  ctx.fillText(`tris ${Math.round(p.triangles / 1000)}k`, 24, VIEW_H - 28);
+  ctx.restore();
+}
+
 function draw3D(time) {
   if (!THREE_STATE.renderer || !THREE_STATE.scene || !THREE_STATE.camera) return;
   const renderer = THREE_STATE.renderer;
+  const renderStart = ENABLE_3D_PROFILE ? performance.now() : 0;
 
   sync3DScene(time);
 
@@ -12055,6 +12111,7 @@ function draw3D(time) {
   } else {
     renderer.render(THREE_STATE.scene, THREE_STATE.camera);
   }
+  if (ENABLE_3D_PROFILE) update3DProfile(performance.now() - renderStart, time);
 
   // Draw HUD on overlay canvas
   if (hudCtx) {
@@ -12082,6 +12139,7 @@ function draw3D(time) {
         drawFinishBanner();
       }
     }
+    draw3DProfile(hudCtx);
     ctx = origCtx;
   }
 }
