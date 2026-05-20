@@ -10462,12 +10462,13 @@ function rebuild3DTrack() {
     });
   }
 
-  if (game.track.regulatoryDragon) {
+  // Only create the dragon model relevant to the current map
+  const currentMapId = MAPS[game.selectedMapIdx || 0].id;
+  if (game.track.regulatoryDragon && currentMapId !== "dragon_escape") {
     THREE_STATE.dragonModel = buildDragonModel3D(false);
     sc.add(THREE_STATE.dragonModel);
   }
-
-  if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
+  if (currentMapId === "dragon_escape") {
     THREE_STATE.dragonEscapeModel = buildDragonModel3D(true);
     sc.add(THREE_STATE.dragonEscapeModel);
   }
@@ -10880,42 +10881,15 @@ function sync3DScene(time) {
     }
   }
 
-  // Camera follow
+  // Camera is now handled in setCameraForKart() called from draw3D()
+  // Only set camera for single-player/P2P here (split-screen sets it per viewport in draw3D)
+  const isSplitScreen = game.multiplayer && game.player2 && !game.p2pMode;
+  if (!isSplitScreen) {
+    setCameraForKart(game.player, time);
+  }
+
   const pk = game.player;
   const fx = Math.cos(pk.heading), fy = Math.sin(pk.heading);
-  const sp = pk.speed();
-  const camDist = 140 + sp * 8;
-  const camHeight = 70 + sp * 5;
-  const lookAhead = 60 + sp * 15;
-
-  const targetX = pk.x - fx * camDist;
-  const targetZ = pk.y - fy * camDist;
-  const targetY = camHeight;
-  const lookX = pk.x + fx * lookAhead;
-  const lookZ = pk.y + fy * lookAhead;
-  const lookY = 12;
-
-  const cs = THREE_STATE.camSmooth;
-  const smoothing = 0.06;
-  cs.x += (targetX - cs.x) * smoothing;
-  cs.y += (targetY - cs.y) * smoothing;
-  cs.z += (targetZ - cs.z) * smoothing;
-  cs.lx += (lookX - cs.lx) * smoothing;
-  cs.ly += (lookY - cs.ly) * smoothing;
-  cs.lz += (lookZ - cs.lz) * smoothing;
-
-  // Screen shake
-  const shake = game.shake || 0;
-  const sx = (Math.random() - 0.5) * shake * 1.5;
-  const sy = (Math.random() - 0.5) * shake * 1.5;
-
-  THREE_STATE.camera.position.set(cs.x + sx, cs.y + sy, cs.z);
-  THREE_STATE.camera.lookAt(cs.lx, cs.ly, cs.lz);
-
-  // Speed-based FOV
-  const targetFov = 70 + sp * 4 + (pk.boostTimer > 0 ? 10 : 0);
-  THREE_STATE.camera.fov += (targetFov - THREE_STATE.camera.fov) * 0.05;
-  THREE_STATE.camera.updateProjectionMatrix();
 
   // Move player light
   if (THREE_STATE.playerLight) {
@@ -11053,21 +11027,99 @@ function syncDragons3D(time) {
   }
 }
 
+function setCameraForKart(kart, time) {
+  if (!kart) return;
+  const fx = Math.cos(kart.heading), fy = Math.sin(kart.heading);
+  const sp = kart.speed();
+  const camDist = 140 + sp * 8;
+  const camHeight = 70 + sp * 5;
+  const lookAhead = 60 + sp * 15;
+
+  const targetX = kart.x - fx * camDist;
+  const targetZ = kart.y - fy * camDist;
+  const lookX = kart.x + fx * lookAhead;
+  const lookZ = kart.y + fy * lookAhead;
+
+  const cs = THREE_STATE.camSmooth;
+  const sm = 0.06;
+  cs.x += (targetX - cs.x) * sm;
+  cs.y += (camHeight - cs.y) * sm;
+  cs.z += (targetZ - cs.z) * sm;
+  cs.lx += (lookX - cs.lx) * sm;
+  cs.ly += (12 - cs.ly) * sm;
+  cs.lz += (lookZ - cs.lz) * sm;
+
+  const shake = game.shake || 0;
+  THREE_STATE.camera.position.set(cs.x + (Math.random() - 0.5) * shake * 1.5, cs.y + (Math.random() - 0.5) * shake * 1.5, cs.z);
+  THREE_STATE.camera.lookAt(cs.lx, cs.ly, cs.lz);
+
+  const targetFov = 70 + sp * 4 + (kart.boostTimer > 0 ? 10 : 0);
+  THREE_STATE.camera.fov += (targetFov - THREE_STATE.camera.fov) * 0.05;
+  THREE_STATE.camera.updateProjectionMatrix();
+}
+
 function draw3D(time) {
   if (!THREE_STATE.renderer || !THREE_STATE.scene || !THREE_STATE.camera) return;
+  const renderer = THREE_STATE.renderer;
 
   sync3DScene(time);
-  THREE_STATE.renderer.render(THREE_STATE.scene, THREE_STATE.camera);
+
+  const isSplitScreen = game.multiplayer && game.player2 && !game.p2pMode;
+
+  if (isSplitScreen) {
+    const dpr = renderer.getPixelRatio();
+    const fullW = Math.floor(VIEW_W * dpr);
+    const fullH = Math.floor(VIEW_H * dpr);
+    const halfW = Math.floor(fullW / 2);
+
+    renderer.setScissorTest(true);
+
+    // Left viewport - Player 1
+    renderer.setViewport(0, 0, halfW, fullH);
+    renderer.setScissor(0, 0, halfW, fullH);
+    THREE_STATE.camera.aspect = (VIEW_W / 2) / VIEW_H;
+    setCameraForKart(game.player, time);
+    renderer.render(THREE_STATE.scene, THREE_STATE.camera);
+
+    // Right viewport - Player 2
+    // Save/restore cam smooth for P2
+    const p1Cam = { ...THREE_STATE.camSmooth };
+    if (!THREE_STATE._camSmoothP2) {
+      THREE_STATE._camSmoothP2 = { x: game.player2.x, y: 70, z: game.player2.y, lx: game.player2.x, ly: 12, lz: game.player2.y };
+    }
+    THREE_STATE.camSmooth = THREE_STATE._camSmoothP2;
+
+    renderer.setViewport(halfW + 2, 0, halfW - 2, fullH);
+    renderer.setScissor(halfW + 2, 0, halfW - 2, fullH);
+    setCameraForKart(game.player2, time);
+    renderer.render(THREE_STATE.scene, THREE_STATE.camera);
+
+    THREE_STATE._camSmoothP2 = THREE_STATE.camSmooth;
+    THREE_STATE.camSmooth = p1Cam;
+
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, fullW, fullH);
+    THREE_STATE.camera.aspect = VIEW_W / VIEW_H;
+  } else {
+    renderer.render(THREE_STATE.scene, THREE_STATE.camera);
+  }
 
   // Draw HUD on overlay canvas
   if (hudCtx) {
     hudCtx.clearRect(0, 0, VIEW_W, VIEW_H);
     const origCtx = ctx;
-    const origCanvas = canvas;
-    // Temporarily swap ctx to hudCtx for HUD drawing
     ctx = hudCtx;
-    if (game.multiplayer && game.player2 && !game.p2pMode) {
+    if (isSplitScreen) {
       drawHUDMultiplayer(time);
+      // Draw split-screen divider
+      hudCtx.fillStyle = "rgba(8, 6, 26, 0.75)";
+      hudCtx.fillRect(VIEW_W / 2 - 3, 0, 6, VIEW_H);
+      const grad = hudCtx.createLinearGradient(0, 0, 0, VIEW_H);
+      grad.addColorStop(0, "#7b75ff");
+      grad.addColorStop(0.5, "#ff4d6d");
+      grad.addColorStop(1, "#fd9927");
+      hudCtx.fillStyle = grad;
+      hudCtx.fillRect(VIEW_W / 2 - 1, 0, 2, VIEW_H);
     } else {
       drawHUD(time);
     }
