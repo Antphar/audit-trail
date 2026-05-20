@@ -784,7 +784,7 @@
       <div><span class="key">W</span> / <span class="key">A</span> / <span class="key">S</span> / <span class="key">D</span> - Drive</div><div><span class="key">↑</span> / <span class="key">←</span> / <span class="key">↓</span> / <span class="key">→</span> - Drive</div>
       <div><span class="key">Space</span> - Drift</div><div><span class="key">Right Shift</span> - Drift</div>
       <div><span class="key">Left Shift</span> - Use Item</div><div><span class="key">.</span> or <span class="key">/</span> - Use Item</div>
-      <div><span class="key">Q</span> - Ultimate</div><div><span class="key">L</span> - Ultimate</div>
+      <div><span class="key">Q</span> - Ultimate &nbsp; <span class="key">E</span> - Honk</div><div><span class="key">L</span> - Ultimate &nbsp; <span class="key">K</span> - Honk</div>
       <div style="grid-column: span 2; border-top: 1px solid rgba(123, 117, 255, 0.1); margin-top: 5px; padding-top: 8px; text-align: center;">
         <span class="key">P</span> - Pause &nbsp;·&nbsp; <span class="key">R</span> - Restart &nbsp;·&nbsp; <span class="key">M</span> - Mute
       </div>
@@ -1449,8 +1449,27 @@ function applyDeauthShockwave(sourceKart) {
   }
 
   if (affected > 0) {
-    game.shake = Math.max(game.shake, 7);
-    game.flash = Math.max(game.flash, 6);
+    game.shake = Math.max(game.shake, 7 + affected * 2);
+    game.flash = Math.max(game.flash, 6 + affected);
+    showComboHit(sourceKart, affected);
+  }
+}
+
+function showComboHit(kart, count) {
+  if (!kart || count < 2) return;
+  const labels = { 2: "DOUBLE HIT!", 3: "TRIPLE HIT!", 4: "QUAD HIT!" };
+  const colors = { 2: "#ffd86b", 3: "#ff4d6d", 4: "#ff00ff" };
+  const label = labels[Math.min(count, 4)] || `${count}x COMBO!`;
+  const col = colors[Math.min(count, 4)] || "#ff00ff";
+  game.particles.add({
+    type: "text", text: label,
+    x: kart.x, y: kart.y - 42,
+    vx: 0, vy: -1.3,
+    life: 80, maxLife: 80, size: 22 + count * 2, color: col, drag: 0.98
+  });
+  if (kart.isPlayer) {
+    triggerHitFlash(label, col, 90, kart);
+    Sound.tone(880 + count * 220, 0.15, "square", 0.2, 440);
   }
 }
 
@@ -1787,6 +1806,7 @@ function activateUltimate(kart) {
     const radius = [120, 180, 260][tier - 1];
     const force = [4, 6.5, 10][tier - 1];
     const stunTime = [20, 35, 55][tier - 1];
+    let slamHits = 0;
     for (const k of getActiveKarts()) {
       if (k === kart || k.finished || k.eliminated) continue;
       const d = dist(kart.x, kart.y, k.x, k.y);
@@ -1800,7 +1820,9 @@ function activateUltimate(kart) {
       k.spinAngle = 0;
       triggerQuote(k, "crash");
       if (k.isPlayer) triggerHitFlash("THINKPAD SLAM!", "#9d4dff", 85, k);
+      slamHits++;
     }
+    if (slamHits >= 2) showComboHit(kart, slamHits);
     for (let i = 0; i < (tier >= 3 ? 3 : tier >= 2 ? 2 : 1); i++) {
       game.particles.add({
         type: "ring", x: kart.x, y: kart.y, vx: 0, vy: 0,
@@ -2440,6 +2462,36 @@ const Sound = {
     osc.start(t); osc.stop(t + 0.3);
     osc2.start(t); osc2.stop(t + 0.3);
   },
+  honk(charId) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    if (charId === "anton") {
+      // Quick double beep
+      this.tone(520, 0.08, "square", 0.16);
+      setTimeout(() => this.tone(620, 0.1, "square", 0.14), 90);
+    } else if (charId === "artur") {
+      // Truck air horn (low descending)
+      this.tone(220, 0.25, "sawtooth", 0.2, 160);
+      this.tone(165, 0.3, "sawtooth", 0.12, 120);
+    } else if (charId === "rissal") {
+      // Nervous high-pitched squeak
+      this.tone(880, 0.06, "sine", 0.14, 1200);
+      setTimeout(() => this.tone(1100, 0.05, "sine", 0.12, 800), 70);
+      setTimeout(() => this.tone(660, 0.07, "sine", 0.1), 130);
+    } else if (charId === "pia") {
+      // Deep intimidating bass honk
+      this.tone(110, 0.3, "sawtooth", 0.22, 80);
+      this.noise(0.15, 0.06, 200);
+    } else if (charId === "florian") {
+      // Executive chime (ascending triad)
+      this.tone(523, 0.1, "triangle", 0.14);
+      setTimeout(() => this.tone(659, 0.1, "triangle", 0.12), 80);
+      setTimeout(() => this.tone(784, 0.15, "triangle", 0.10), 160);
+    } else {
+      this.tone(440, 0.12, "square", 0.15);
+    }
+  },
+
   bump() {
     if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
@@ -4278,8 +4330,8 @@ const Sound = {
 /* ============================================================
    INPUT
    ============================================================ */
-const keysP1 = { up: false, down: false, left: false, right: false, drift: false, driftPressed: false, item: false, itemPressed: false, ult: false, ultPressed: false, leftPressed: false, rightPressed: false };
-const keysP2 = { up: false, down: false, left: false, right: false, drift: false, driftPressed: false, item: false, itemPressed: false, ult: false, ultPressed: false, leftPressed: false, rightPressed: false };
+const keysP1 = { up: false, down: false, left: false, right: false, drift: false, driftPressed: false, item: false, itemPressed: false, ult: false, ultPressed: false, honk: false, honkPressed: false, leftPressed: false, rightPressed: false };
+const keysP2 = { up: false, down: false, left: false, right: false, drift: false, driftPressed: false, item: false, itemPressed: false, ult: false, ultPressed: false, honk: false, honkPressed: false, leftPressed: false, rightPressed: false };
 const keysGlobal = { pause: false, pausePressed: false, restart: false, restartPressed: false, mute: false, mutePressed: false, enter: false, enterPressed: false, back: false, backPressed: false };
 
 window.addEventListener("keydown", (e) => {
@@ -4343,6 +4395,10 @@ window.addEventListener("keydown", (e) => {
     if (!keysP1.ult) keysP1.ultPressed = true;
     keysP1.ult = true;
   }
+  if (code === "KeyE") {
+    if (!keysP1.honk) keysP1.honkPressed = true;
+    keysP1.honk = true;
+  }
 
   // Player 2 mappings (Arrow keys + RightShift + . or /)
   if (code === "ArrowUp") {
@@ -4404,6 +4460,15 @@ window.addEventListener("keydown", (e) => {
       keysP1.ult = true;
     }
   }
+  if (code === "KeyK") {
+    if (game.multiplayer) {
+      if (!keysP2.honk) keysP2.honkPressed = true;
+      keysP2.honk = true;
+    } else {
+      if (!keysP1.honk) keysP1.honkPressed = true;
+      keysP1.honk = true;
+    }
+  }
 
   Sound.ensure(); Sound.resume();
 }, { passive: false });
@@ -4423,7 +4488,9 @@ window.addEventListener("keyup", (e) => {
   if (code === "Space") keysP1.drift = false;
   if (code === "ShiftLeft") keysP1.item = false;
   if (code === "KeyQ") keysP1.ult = false;
+  if (code === "KeyE") keysP1.honk = false;
   if (code === "KeyL") { keysP2.ult = false; keysP1.ult = false; }
+  if (code === "KeyK") { keysP2.honk = false; keysP1.honk = false; }
 
   // Player 2 keyups
   if (code === "ArrowUp") {
@@ -4765,6 +4832,7 @@ class Track {
 
     // Decorations: trees scattered off-road
     this.decorations = this._generateDecor();
+    this.spectators = this._generateSpectators();
 
     // Coins, boost pads, item boxes
     this.coins = this._placeCoins();
@@ -4860,6 +4928,78 @@ class Track {
       }
     }
     return decor;
+  }
+
+  _generateSpectators() {
+    const specs = [];
+    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    if (mapId === "dragon_escape") return specs;
+    const colors = ["#ff4d6d", "#7b75ff", "#fd9927", "#a4ff80", "#57f2ff", "#b983ff", "#ff6b35", "#ffd86b"];
+    // Place small clusters of spectators along track edges
+    for (let i = 0; i < this.segments.length; i += 4) {
+      if (Math.random() > 0.45) continue;
+      const s = this.segments[i];
+      if (!s) continue;
+      const t = rand(0.2, 0.8);
+      const cx = s.a.x + s.dx * t;
+      const cy = s.a.y + s.dy * t;
+      const side = Math.random() < 0.5 ? 1 : -1;
+      const offDist = s.halfW + rand(18, 35);
+      const clusterSize = Math.floor(rand(2, 5));
+      for (let c = 0; c < clusterSize; c++) {
+        specs.push({
+          x: cx + s.nx * offDist * side + rand(-12, 12),
+          y: cy + s.ny * offDist * side + rand(-8, 8),
+          color: pick(colors),
+          phase: Math.random() * TAU,
+          height: rand(6, 9),
+          cheerThreshold: rand(80, 160),
+        });
+      }
+    }
+    return specs;
+  }
+
+  drawSpectators(ctx, time) {
+    for (const sp of this.spectators) {
+      // Check if any kart is close enough to trigger cheering
+      let cheering = false;
+      for (const k of getActiveKarts()) {
+        if (dist(sp.x, sp.y, k.x, k.y) < sp.cheerThreshold) { cheering = true; break; }
+      }
+      const bounce = cheering ? Math.abs(Math.sin(time * 0.012 + sp.phase)) * 4 : 0;
+      const wave = cheering ? Math.sin(time * 0.02 + sp.phase) * 2 : 0;
+
+      ctx.save();
+      ctx.translate(sp.x + wave, sp.y);
+
+      // Body (tiny pixel-art person)
+      ctx.fillStyle = sp.color;
+      ctx.fillRect(-2, -sp.height - bounce, 4, sp.height * 0.55);
+      // Head
+      ctx.beginPath();
+      ctx.arc(0, -sp.height - bounce - 2, 2.5, 0, TAU);
+      ctx.fill();
+      // Legs
+      ctx.fillStyle = "#1a1a2e";
+      ctx.fillRect(-2, -sp.height * 0.45 - bounce, 2, sp.height * 0.45);
+      ctx.fillRect(0, -sp.height * 0.45 - bounce, 2, sp.height * 0.45);
+
+      // Arms waving when cheering
+      if (cheering) {
+        const armAng = Math.sin(time * 0.018 + sp.phase) * 0.6;
+        ctx.strokeStyle = sp.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(-2, -sp.height * 0.7 - bounce);
+        ctx.lineTo(-5 + wave, -sp.height - bounce - 3 + armAng * 3);
+        ctx.moveTo(2, -sp.height * 0.7 - bounce);
+        ctx.lineTo(5 + wave, -sp.height - bounce - 3 - armAng * 3);
+        ctx.stroke();
+      }
+
+      ctx.restore();
+    }
   }
 
   _placeCoins() {
@@ -7012,6 +7152,20 @@ class PlayerKart extends Kart {
     if (ultPressed && this.ultReady) {
       activateUltimate(this);
     }
+
+    // Honk
+    const honkPressed = this.playerIndex === 2 ? consumePressedP2("honk") : consumePressedP1("honk");
+    if (honkPressed && (!this.honkCooldown || this.honkCooldown <= 0)) {
+      Sound.honk(this.charId);
+      this.honkCooldown = 30;
+      this.honkFlash = 20;
+      game.particles.add({
+        type: "text", text: "HONK!",
+        x: this.x, y: this.y - 28,
+        vx: 0, vy: -0.6, life: 25, maxLife: 25, size: 12, color: this.color, drag: 0.97
+      });
+    }
+    if (this.honkCooldown > 0) this.honkCooldown -= dt;
 
     if (this.ultActiveTimer > 0) this.ultActiveTimer -= dt;
 
@@ -9483,6 +9637,11 @@ function drawWorld(pKart, left, top, width, height, time, isP2) {
     ctx.beginPath();
     ctx.arc(s.x, s.y, s.size, 0, TAU);
     ctx.fill();
+  }
+
+  // Spectators
+  if (game.track.spectators && game.track.spectators.length) {
+    game.track.drawSpectators(ctx, time);
   }
 
   // Items
