@@ -763,6 +763,8 @@
 </head>
 <body>
   <canvas id="game"></canvas>
+  <canvas id="game3d" style="position:absolute;inset:0;width:100%;height:100%;display:none;z-index:1;"></canvas>
+  <canvas id="hud-overlay" style="position:absolute;inset:0;width:100%;height:100%;display:none;z-index:2;pointer-events:none;"></canvas>
   <div id="crt-overlay" aria-hidden="true"></div>
 
   <!-- Audio Notification Toast -->
@@ -804,6 +806,11 @@
     <div class="title-text" style="font-size: clamp(32px, 5.5vw, 64px); margin-bottom: 4px;">Settings</div>
     <div class="subtitle" style="margin-bottom: 12px; color: #57f2ff;">Choose Your Soundtrack</div>
     <div class="settings-panel">
+      <div class="settings-label">View Mode</div>
+      <div style="display:flex;gap:10px;margin-bottom:14px;">
+        <button class="btn crt-toggle" id="view-2d-btn" type="button" style="flex:1;">Top-Down 2D</button>
+        <button class="btn crt-toggle" id="view-3d-btn" type="button" style="flex:1;">3D Chase Cam</button>
+      </div>
       <div class="settings-label">Music Track</div>
       <div class="music-grid" id="music-settings-container"></div>
       <div class="settings-actions">
@@ -904,7 +911,7 @@
 
 // ---- DOM ----
 const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
+let ctx = canvas.getContext("2d");
 const titleScreen = document.getElementById("title-screen");
 const settingsScreen = document.getElementById("settings-screen");
 const selectScreen = document.getElementById("select-screen");
@@ -7631,6 +7638,7 @@ const game = {
   countdownText: "",
   rocketStartP1: { holdStart: 0, holding: false, result: null },
   rocketStartP2: { holdStart: 0, holding: false, result: null },
+  viewMode: "2d",
   shake: 0,
   flash: 0,
   cam: { x: 0, y: 0, scale: 1 },
@@ -8506,6 +8514,13 @@ function buildRace() {
   game.cam.x = game.player.x;
   game.cam.y = game.player.y;
   game.cam.scale = 1;
+
+  // Rebuild 3D scene if in 3D mode
+  if (game.viewMode === "3d" && THREE_STATE.loaded) {
+    if (!THREE_STATE.renderer) init3DScene();
+    rebuild3DTrack();
+    THREE_STATE.camSmooth = { x: game.player.x, y: 70, z: game.player.y, lx: game.player.x, ly: 12, lz: game.player.y };
+  }
 }
 
 function startCountdown() {
@@ -10042,10 +10057,523 @@ function drawSpeedLinesViewport(ctx, left, top, width, height, time) {
   ctx.restore();
 }
 
+/* ============================================================
+   THREE.JS 3D RENDERER
+   ============================================================ */
+const THREE_STATE = {
+  loaded: false,
+  loading: false,
+  renderer: null,
+  scene: null,
+  camera: null,
+  trackMesh: null,
+  groundMesh: null,
+  kartModels: new Map(),
+  itemMeshes: [],
+  coinMeshes: [],
+  particles3d: [],
+  camSmooth: { x: 0, y: 0, z: 0, lx: 0, ly: 0, lz: 0 },
+};
+
+const canvas3d = document.getElementById("game3d");
+const hudCanvas = document.getElementById("hud-overlay");
+const hudCtx = hudCanvas ? hudCanvas.getContext("2d") : null;
+const view2dBtn = document.getElementById("view-2d-btn");
+const view3dBtn = document.getElementById("view-3d-btn");
+
+function loadThreeJS(callback) {
+  if (window.THREE) { callback(); return; }
+  if (THREE_STATE.loading) return;
+  THREE_STATE.loading = true;
+  const script = document.createElement("script");
+  script.src = "https://unpkg.com/three@0.170.0/build/three.min.js";
+  script.onload = () => { THREE_STATE.loaded = true; callback(); };
+  script.onerror = () => { alert("Could not load Three.js"); THREE_STATE.loading = false; };
+  document.head.appendChild(script);
+}
+
+function setViewMode(mode) {
+  game.viewMode = mode;
+  const is3d = mode === "3d";
+  canvas.style.display = is3d ? "none" : "block";
+  canvas3d.style.display = is3d ? "block" : "none";
+  if (hudCanvas) hudCanvas.style.display = is3d ? "block" : "none";
+  if (view2dBtn) view2dBtn.classList.toggle("active", !is3d);
+  if (view3dBtn) view3dBtn.classList.toggle("active", is3d);
+  if (is3d) {
+    loadThreeJS(() => {
+      if (!THREE_STATE.renderer) init3DScene();
+      rebuild3DTrack();
+    });
+  }
+}
+
+if (view2dBtn) view2dBtn.addEventListener("click", () => setViewMode("2d"));
+if (view3dBtn) view3dBtn.addEventListener("click", () => { loadThreeJS(() => setViewMode("3d")); });
+
+function init3DScene() {
+  if (!window.THREE || THREE_STATE.renderer) return;
+  const T = window.THREE;
+
+  THREE_STATE.renderer = new T.WebGLRenderer({ canvas: canvas3d, antialias: true, alpha: false });
+  THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  THREE_STATE.renderer.setSize(VIEW_W, VIEW_H);
+  THREE_STATE.renderer.setClearColor(0x060514);
+
+  THREE_STATE.scene = new T.Scene();
+  THREE_STATE.scene.fog = new T.FogExp2(0x060514, 0.0008);
+
+  THREE_STATE.camera = new T.PerspectiveCamera(70, VIEW_W / VIEW_H, 1, 8000);
+  THREE_STATE.camera.position.set(0, 120, -200);
+
+  // Lighting
+  const ambient = new T.AmbientLight(0x1a1040, 0.8);
+  THREE_STATE.scene.add(ambient);
+  const dirLight = new T.DirectionalLight(0x6666ff, 0.6);
+  dirLight.position.set(200, 400, -100);
+  THREE_STATE.scene.add(dirLight);
+  const pointLight = new T.PointLight(0x57f2ff, 0.5, 2000);
+  pointLight.position.set(0, 200, 0);
+  THREE_STATE.scene.add(pointLight);
+  THREE_STATE.playerLight = pointLight;
+
+  // Ground plane
+  const groundGeo = new T.PlaneGeometry(12000, 12000);
+  const groundMat = new T.MeshStandardMaterial({
+    color: 0x0a1f0d,
+    roughness: 0.9,
+    metalness: 0.1,
+  });
+  const ground = new T.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -1;
+  THREE_STATE.scene.add(ground);
+  THREE_STATE.groundMesh = ground;
+
+  // Grid helper for cyberpunk feel
+  const gridSize = 10000;
+  const gridDiv = 100;
+  const grid = new T.GridHelper(gridSize, gridDiv, 0x7b75ff, 0x1a1040);
+  grid.position.y = -0.5;
+  grid.material.opacity = 0.15;
+  grid.material.transparent = true;
+  THREE_STATE.scene.add(grid);
+
+  // Sky dome
+  const skyGeo = new T.SphereGeometry(5000, 16, 8);
+  const skyMat = new T.MeshBasicMaterial({
+    color: 0x0a0820,
+    side: T.BackSide,
+  });
+  THREE_STATE.scene.add(new T.Mesh(skyGeo, skyMat));
+
+  // HUD overlay canvas
+  if (hudCanvas) {
+    hudCanvas.width = Math.floor(VIEW_W * DPR);
+    hudCanvas.height = Math.floor(VIEW_H * DPR);
+    hudCanvas.style.width = VIEW_W + "px";
+    hudCanvas.style.height = VIEW_H + "px";
+    if (hudCtx) hudCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  window.addEventListener("resize", () => {
+    if (THREE_STATE.renderer) {
+      THREE_STATE.renderer.setSize(VIEW_W, VIEW_H);
+      THREE_STATE.camera.aspect = VIEW_W / VIEW_H;
+      THREE_STATE.camera.updateProjectionMatrix();
+      if (hudCanvas) {
+        hudCanvas.width = Math.floor(VIEW_W * DPR);
+        hudCanvas.height = Math.floor(VIEW_H * DPR);
+        hudCanvas.style.width = VIEW_W + "px";
+        hudCanvas.style.height = VIEW_H + "px";
+        if (hudCtx) hudCtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+    }
+  });
+}
+
+function rebuild3DTrack() {
+  if (!window.THREE || !THREE_STATE.scene || !game.track) return;
+  const T = window.THREE;
+  const sc = THREE_STATE.scene;
+
+  // Remove old track mesh
+  if (THREE_STATE.trackMesh) { sc.remove(THREE_STATE.trackMesh); THREE_STATE.trackMesh = null; }
+  // Remove old kart models
+  THREE_STATE.kartModels.forEach(m => sc.remove(m));
+  THREE_STATE.kartModels.clear();
+  // Remove old items
+  THREE_STATE.itemMeshes.forEach(m => sc.remove(m));
+  THREE_STATE.itemMeshes = [];
+  THREE_STATE.coinMeshes.forEach(m => sc.remove(m));
+  THREE_STATE.coinMeshes = [];
+
+  // Build track ribbon from waypoints
+  const wp = game.track.waypoints;
+  const hw = game.track.halfWidth;
+  const verts = [];
+  const colors = [];
+
+  for (let i = 0; i < wp.length - 1; i++) {
+    const a = wp[i], b = wp[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.1) continue;
+    const nx = -dy / len, ny = dx / len;
+    const seg = game.track.segments[i];
+    const w = seg ? seg.halfW : hw;
+
+    // Two triangles per segment
+    const ax1 = a.x + nx * w, az1 = a.y + ny * w;
+    const ax2 = a.x - nx * w, az2 = a.y - ny * w;
+    const bx1 = b.x + nx * w, bz1 = b.y + ny * w;
+    const bx2 = b.x - nx * w, bz2 = b.y - ny * w;
+
+    verts.push(ax1, 0, az1, ax2, 0, az2, bx1, 0, bz1);
+    verts.push(ax2, 0, az2, bx2, 0, bz2, bx1, 0, bz1);
+
+    // Edge glow coloring
+    for (let v = 0; v < 6; v++) {
+      colors.push(0.05, 0.04, 0.13);
+    }
+  }
+
+  const geo = new T.BufferGeometry();
+  geo.setAttribute("position", new T.Float32BufferAttribute(verts, 3));
+  geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+
+  const roadMat = new T.MeshStandardMaterial({
+    color: 0x0d0b21,
+    roughness: 0.6,
+    metalness: 0.4,
+    vertexColors: false,
+  });
+  THREE_STATE.trackMesh = new T.Mesh(geo, roadMat);
+  THREE_STATE.trackMesh.position.y = 0.5;
+  sc.add(THREE_STATE.trackMesh);
+
+  // Glowing edge lines
+  for (let side = -1; side <= 1; side += 2) {
+    const lineVerts = [];
+    for (let i = 0; i < wp.length; i++) {
+      if (i >= game.track.segments.length) break;
+      const p = wp[i];
+      const seg = game.track.segments[i];
+      if (!seg) continue;
+      const w = seg.halfW;
+      lineVerts.push(p.x + seg.nx * w * side, 1.5, p.y + seg.ny * w * side);
+    }
+    if (lineVerts.length > 3) {
+      const lineGeo = new T.BufferGeometry();
+      lineGeo.setAttribute("position", new T.Float32BufferAttribute(lineVerts, 3));
+      const lineMat = new T.LineBasicMaterial({ color: side === 1 ? 0x7b75ff : 0x57f2ff, linewidth: 2 });
+      sc.add(new T.Line(lineGeo, lineMat));
+    }
+  }
+
+  // Center dashed line
+  const centerVerts = [];
+  for (let i = 0; i < wp.length; i++) {
+    centerVerts.push(wp[i].x, 1, wp[i].y);
+  }
+  if (centerVerts.length > 3) {
+    const centerGeo = new T.BufferGeometry();
+    centerGeo.setAttribute("position", new T.Float32BufferAttribute(centerVerts, 3));
+    const centerMat = new T.LineDashedMaterial({ color: 0x7b75ff, dashSize: 24, gapSize: 32, linewidth: 1 });
+    const centerLine = new T.Line(centerGeo, centerMat);
+    centerLine.computeLineDistances();
+    sc.add(centerLine);
+  }
+
+  // Build kart models for all active karts
+  buildAllKartModels();
+
+  // Item boxes
+  if (game.track.itemBoxes) {
+    game.track.itemBoxes.forEach(ib => {
+      if (ib.collected) return;
+      const boxGeo = new T.BoxGeometry(14, 14, 14);
+      const boxMat = new T.MeshStandardMaterial({
+        color: 0xffd86b,
+        emissive: 0xffd86b,
+        emissiveIntensity: 0.5,
+        transparent: true,
+        opacity: 0.7,
+      });
+      const box = new T.Mesh(boxGeo, boxMat);
+      box.position.set(ib.x, 12, ib.y);
+      box._itemRef = ib;
+      sc.add(box);
+      THREE_STATE.itemMeshes.push(box);
+    });
+  }
+
+  // Coins
+  if (game.track.coins) {
+    game.track.coins.forEach(c => {
+      if (c.collected) return;
+      const coinGeo = new T.CylinderGeometry(5, 5, 2, 8);
+      const coinMat = new T.MeshStandardMaterial({
+        color: 0xffd86b,
+        emissive: 0xffd86b,
+        emissiveIntensity: 0.3,
+        metalness: 0.8,
+      });
+      const coin = new T.Mesh(coinGeo, coinMat);
+      coin.position.set(c.x, 8, c.y);
+      coin._coinRef = c;
+      sc.add(coin);
+      THREE_STATE.coinMeshes.push(coin);
+    });
+  }
+
+  // Reposition ground
+  if (THREE_STATE.groundMesh) {
+    THREE_STATE.groundMesh.position.set(WORLD_W / 2, -1, WORLD_H / 2);
+    const gs = Math.max(WORLD_W, WORLD_H) * 3;
+    THREE_STATE.groundMesh.scale.set(gs / 12000, 1, gs / 12000);
+  }
+}
+
+function buildKartModel3D(charId, color) {
+  if (!window.THREE) return null;
+  const T = window.THREE;
+  const group = new T.Group();
+
+  const parseCol = (hex) => new T.Color(hex);
+  const c = parseCol(color);
+  const cDark = c.clone().multiplyScalar(0.5);
+
+  // Body
+  const bodyGeo = new T.BoxGeometry(20, 8, 28);
+  const bodyMat = new T.MeshStandardMaterial({ color: c, roughness: 0.4, metalness: 0.5 });
+  const body = new T.Mesh(bodyGeo, bodyMat);
+  body.position.y = 6;
+  group.add(body);
+
+  // Cockpit
+  const cockpitGeo = new T.BoxGeometry(12, 5, 10);
+  const cockpitMat = new T.MeshStandardMaterial({ color: 0x1a1d28, roughness: 0.3, metalness: 0.6 });
+  const cockpit = new T.Mesh(cockpitGeo, cockpitMat);
+  cockpit.position.set(0, 11, -2);
+  group.add(cockpit);
+
+  // Helmet
+  const helmetGeo = new T.SphereGeometry(3.5, 8, 6);
+  const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3 });
+  const helmet = new T.Mesh(helmetGeo, helmetMat);
+  helmet.position.set(0, 14, -2);
+  group.add(helmet);
+
+  // Wheels
+  const wheelGeo = new T.CylinderGeometry(3.5, 3.5, 4, 8);
+  const wheelMat = new T.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+  [[-8, 3, 10], [8, 3, 10], [-8, 3, -10], [8, 3, -10]].forEach(([wx, wy, wz]) => {
+    const wheel = new T.Mesh(wheelGeo, wheelMat);
+    wheel.position.set(wx, wy, wz);
+    wheel.rotation.z = Math.PI / 2;
+    group.add(wheel);
+  });
+
+  // Spoiler
+  const spoilerGeo = new T.BoxGeometry(22, 2, 3);
+  const spoilerMat = new T.MeshStandardMaterial({ color: cDark });
+  const spoiler = new T.Mesh(spoilerGeo, spoilerMat);
+  spoiler.position.set(0, 12, -14);
+  group.add(spoiler);
+
+  // Headlights
+  const lightGeo = new T.BoxGeometry(3, 3, 2);
+  const lightMat = new T.MeshStandardMaterial({ color: 0xfff5b0, emissive: 0xfff5b0, emissiveIntensity: 1.0 });
+  [[-6, 6, 15], [6, 6, 15]].forEach(([lx, ly, lz]) => {
+    const light = new T.Mesh(lightGeo, lightMat);
+    light.position.set(lx, ly, lz);
+    group.add(light);
+  });
+
+  // Character decorations
+  if (charId === "anton") {
+    const antennaGeo = new T.CylinderGeometry(0.3, 0.3, 12, 4);
+    const antennaMat = new T.MeshStandardMaterial({ color: 0xaaaaaa });
+    const antenna = new T.Mesh(antennaGeo, antennaMat);
+    antenna.position.set(0, 18, -8);
+    group.add(antenna);
+    const tipGeo = new T.SphereGeometry(1.5, 6, 4);
+    const tipMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.8 });
+    const tip = new T.Mesh(tipGeo, tipMat);
+    tip.position.set(0, 24, -8);
+    group.add(tip);
+  } else if (charId === "pia") {
+    const bumperGeo = new T.BoxGeometry(24, 3, 3);
+    const bumperMat = new T.MeshStandardMaterial({ color: cDark });
+    const fb = new T.Mesh(bumperGeo, bumperMat);
+    fb.position.set(0, 3, 15);
+    group.add(fb);
+    const rb = new T.Mesh(bumperGeo, bumperMat);
+    rb.position.set(0, 3, -15);
+    group.add(rb);
+  } else if (charId === "rissal") {
+    const stripGeo = new T.BoxGeometry(22, 0.5, 30);
+    const stripMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.6, transparent: true, opacity: 0.4 });
+    const strip = new T.Mesh(stripGeo, stripMat);
+    strip.position.set(0, 1, 0);
+    group.add(strip);
+  } else if (charId === "florian") {
+    const stripeGeo = new T.BoxGeometry(2, 1, 28);
+    const stripeMat = new T.MeshStandardMaterial({ color: 0xa4ff80, emissive: 0xa4ff80, emissiveIntensity: 0.3 });
+    const stripe = new T.Mesh(stripeGeo, stripeMat);
+    stripe.position.set(0, 10.5, 0);
+    group.add(stripe);
+  }
+
+  // Shield sphere (hidden by default)
+  const shieldGeo = new T.SphereGeometry(22, 16, 12);
+  const shieldMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.3, transparent: true, opacity: 0, side: T.DoubleSide });
+  const shield = new T.Mesh(shieldGeo, shieldMat);
+  shield.position.y = 8;
+  group.add(shield);
+  group._shield = shield;
+  group._shieldMat = shieldMat;
+
+  return group;
+}
+
+function buildAllKartModels() {
+  if (!window.THREE || !THREE_STATE.scene) return;
+  THREE_STATE.kartModels.forEach(m => THREE_STATE.scene.remove(m));
+  THREE_STATE.kartModels.clear();
+  for (const kart of getActiveKarts()) {
+    const model = buildKartModel3D(kart.charId, kart.color);
+    if (model) {
+      THREE_STATE.scene.add(model);
+      THREE_STATE.kartModels.set(kart, model);
+    }
+  }
+}
+
+function sync3DScene(time) {
+  if (!THREE_STATE.scene || !game.player) return;
+  const T = window.THREE;
+
+  // Sync kart positions
+  for (const [kart, model] of THREE_STATE.kartModels) {
+    model.position.set(kart.x, 0, kart.y);
+    model.rotation.y = -kart.heading + Math.PI / 2;
+
+    // Spinout rotation
+    if (kart.spinoutTimer > 0) {
+      model.rotation.y += kart.spinAngle;
+    }
+
+    // Shield visibility
+    if (model._shieldMat) {
+      model._shieldMat.opacity = kart.shieldTimer > 0 ? 0.25 + 0.1 * Math.sin(time * 0.005) : 0;
+    }
+
+    // Boost glow
+    if (kart.boostTimer > 0) {
+      model.children[0].material.emissive = model.children[0].material.color;
+      model.children[0].material.emissiveIntensity = 0.4 + 0.3 * Math.sin(time * 0.01);
+    } else {
+      model.children[0].material.emissiveIntensity = 0;
+    }
+  }
+
+  // Camera follow
+  const pk = game.player;
+  const fx = Math.cos(pk.heading), fy = Math.sin(pk.heading);
+  const sp = pk.speed();
+  const camDist = 140 + sp * 8;
+  const camHeight = 70 + sp * 5;
+  const lookAhead = 60 + sp * 15;
+
+  const targetX = pk.x - fy * camDist;
+  const targetZ = pk.y + fx * camDist;
+  const targetY = camHeight;
+  const lookX = pk.x + fy * lookAhead;
+  const lookZ = pk.y - fx * lookAhead;
+  const lookY = 12;
+
+  const cs = THREE_STATE.camSmooth;
+  const smoothing = 0.06;
+  cs.x += (targetX - cs.x) * smoothing;
+  cs.y += (targetY - cs.y) * smoothing;
+  cs.z += (targetZ - cs.z) * smoothing;
+  cs.lx += (lookX - cs.lx) * smoothing;
+  cs.ly += (lookY - cs.ly) * smoothing;
+  cs.lz += (lookZ - cs.lz) * smoothing;
+
+  // Screen shake
+  const shake = game.shake || 0;
+  const sx = (Math.random() - 0.5) * shake * 1.5;
+  const sy = (Math.random() - 0.5) * shake * 1.5;
+
+  THREE_STATE.camera.position.set(cs.x + sx, cs.y + sy, cs.z);
+  THREE_STATE.camera.lookAt(cs.lx, cs.ly, cs.lz);
+
+  // Speed-based FOV
+  const targetFov = 70 + sp * 4 + (pk.boostTimer > 0 ? 10 : 0);
+  THREE_STATE.camera.fov += (targetFov - THREE_STATE.camera.fov) * 0.05;
+  THREE_STATE.camera.updateProjectionMatrix();
+
+  // Move player light
+  if (THREE_STATE.playerLight) {
+    THREE_STATE.playerLight.position.set(pk.x, 150, pk.y);
+  }
+
+  // Rotate item boxes
+  THREE_STATE.itemMeshes.forEach(m => {
+    if (m._itemRef && m._itemRef.collected) { m.visible = false; return; }
+    m.rotation.y = time * 0.002;
+    m.position.y = 12 + Math.sin(time * 0.003 + m.position.x) * 3;
+  });
+
+  // Rotate coins
+  THREE_STATE.coinMeshes.forEach(m => {
+    if (m._coinRef && m._coinRef.collected) { m.visible = false; return; }
+    m.rotation.y = time * 0.004;
+  });
+}
+
+function draw3D(time) {
+  if (!THREE_STATE.renderer || !THREE_STATE.scene || !THREE_STATE.camera) return;
+
+  sync3DScene(time);
+  THREE_STATE.renderer.render(THREE_STATE.scene, THREE_STATE.camera);
+
+  // Draw HUD on overlay canvas
+  if (hudCtx) {
+    hudCtx.clearRect(0, 0, VIEW_W, VIEW_H);
+    const origCtx = ctx;
+    const origCanvas = canvas;
+    // Temporarily swap ctx to hudCtx for HUD drawing
+    ctx = hudCtx;
+    if (game.multiplayer && game.player2 && !game.p2pMode) {
+      drawHUDMultiplayer(time);
+    } else {
+      drawHUD(time);
+    }
+    if (game.state === STATE.COUNTDOWN) {
+      drawCountdown();
+    } else if ((game.player && game.player.finished) || (game.player2 && game.player2.finished)) {
+      if (game.state === STATE.RACING) {
+        drawFinishBanner();
+      }
+    }
+    ctx = origCtx;
+  }
+}
+
 function draw(time) {
   if (!game.track) {
     ctx.fillStyle = "#07091a";
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    return;
+  }
+
+  if (game.viewMode === "3d" && THREE_STATE.renderer) {
+    draw3D(time);
     return;
   }
 
@@ -11325,6 +11853,8 @@ function setMusicTrack(idx) {
 function showSettingsScreen() {
   hideAll();
   renderMusicSettings();
+  if (view2dBtn) view2dBtn.classList.toggle("active", game.viewMode !== "3d");
+  if (view3dBtn) view3dBtn.classList.toggle("active", game.viewMode === "3d");
   settingsScreen.classList.remove("hidden");
 }
 
