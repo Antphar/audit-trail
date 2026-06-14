@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no" />
-<title>Turbo Kart Dash</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
+<title>Audit Trail</title>
 <style>
   /* ---- Regulaido brand tokens ---- */
   :root {
@@ -908,17 +909,8 @@
   <!-- Title screen -->
   <div id="title-screen" class="overlay">
     <div class="brand-lockup">
-      <svg class="brand-mark" viewBox="0 0 124.03865 123.75285" xmlns="http://www.w3.org/2000/svg" aria-label="Regulaido">
-        <polygon fill="#fd9927" points="66.30638 51.4446 66.30638 0 102.3176 14.86177 66.30638 51.4446"/>
-        <polygon fill="#fda33d" points="57.73228 51.4446 57.73228 0 21.72105 14.86177 57.73228 51.4446"/>
-        <polygon fill="#fdad52" points="51.4446 57.73228 0 57.73228 15.14758 21.72105 51.4446 57.73228"/>
-        <polygon fill="#fdb768" points="51.4446 66.30638 0 66.30638 15.14758 102.3176 51.4446 66.30638"/>
-        <polygon fill="#fec27d" points="57.73228 72.59405 57.73228 123.75285 21.72105 108.89107 57.73228 72.59405"/>
-        <polygon fill="#fecc93" points="66.30638 72.59405 66.30638 123.75285 102.3176 108.89107 66.30638 72.59405"/>
-        <polygon fill="#fee0be" points="108.89107 21.72105 124.03865 57.73228 72.59405 57.73228 108.89107 21.72105"/>
-        <polygon fill="#fed6a8" points="108.89107 102.3176 124.03865 66.30638 72.59405 66.30638 108.89107 102.3176"/>
-      </svg>
-      <div class="title-text">Turbo Kart <span class="accent">Dash</span></div>
+      <img class="brand-mark" src="favicon.svg" alt="Audit Trail" width="84" height="84" />
+      <div class="title-text">Audit <span class="accent">Trail</span></div>
     </div>
     <div class="subtitle">Regulaido Speedways &middot; Got Hands Edition</div>
     <div class="controls-grid">
@@ -1070,7 +1062,7 @@
 "use strict";
 
 /* ============================================================
-   TURBO KART DASH — single-file arcade kart racer
+   AUDIT TRAIL — single-file arcade kart racer
    - Top-down kart racing with curved track and AI opponents
    - Custom physics (accel, friction, drift, lateral grip, boost)
    - Items: coins, boost pads, mystery item boxes
@@ -17359,13 +17351,13 @@ function runHeadlessSac(weights, observation, kart = null) {
 }
 
 function validateModelPayload(payload) {
-  if (!payload || !payload.type) throw new Error("Not a TurboKart model");
+  if (!payload || !payload.type) throw new Error("Not an Audit Trail model");
   if (payload.type === "sac") return validateSacModelPayload(payload);
   return validateDqnModelPayload(payload);
 }
 
 function validateSacModelPayload(payload) {
-  if (payload.type !== "sac") throw new Error("Expected a TurboKart SAC model");
+  if (payload.type !== "sac") throw new Error("Expected an Audit Trail SAC model");
   if (!Array.isArray(payload.trunk) || !payload.mean_head) throw new Error("SAC model missing trunk or mean_head");
   if (!Array.isArray(payload.observationKeys)) throw new Error("Model has no observation key schema");
   for (const key of payload.observationKeys) {
@@ -17378,7 +17370,7 @@ function validateSacModelPayload(payload) {
 }
 
 function validateDqnModelPayload(payload) {
-  if (!payload || payload.type !== "dqn") throw new Error("Expected a TurboKart DQN model");
+  if (!payload || payload.type !== "dqn") throw new Error("Expected an Audit Trail DQN model");
   const isDueling = payload.architecture === "dueling" && Array.isArray(payload.trunk);
   if (!isDueling && (!Array.isArray(payload.layers) || payload.layers.length === 0)) throw new Error("Model has no layers");
   if (isDueling && (!payload.value_head || !payload.advantage_head)) throw new Error("Dueling model missing value/advantage heads");
