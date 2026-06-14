@@ -16,5 +16,10 @@ node_modules/
 package-lock.json
 npm-debug.log
 
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Local DQN training artifacts
 models/checkpoints/
