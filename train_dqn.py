@@ -86,6 +86,7 @@ class DQN(torch.nn.Module):
         l2_norm: bool = False,
         orthogonal_init: bool = False,
         weight_norm: bool = False,
+        mean_expansion_k: float = 0.0,
     ):
         super().__init__()
         activation = activation.lower()
@@ -94,6 +95,7 @@ class DQN(torch.nn.Module):
         self.activation_name = activation
         self.layer_norm_enabled = layer_norm
         self.l2_norm_enabled = l2_norm
+        self.mean_expansion_k = float(mean_expansion_k)
         layers: list[torch.nn.Module] = []
         in_dim = obs_dim
         for _ in range(2):
@@ -138,7 +140,11 @@ class DQN(torch.nn.Module):
         h = self.trunk(x)
         v = self.value_head(h)
         a = self.advantage_head(h)
-        return v + a - a.mean(dim=-1, keepdim=True)
+        q = v + a - a.mean(dim=-1, keepdim=True)
+        if self.mean_expansion_k <= 0:
+            return q
+        mean = q.mean(dim=-1, keepdim=True)
+        return q - mean + (self.mean_expansion_k + 1.0) * mean
 
 
 class TurboKartEnv:
@@ -488,6 +494,7 @@ def export_dqn_json(
         "trunk": trunk_layers,
         "value_head": {**_serialize_linear(model.value_head), "activation": "linear"},
         "advantage_head": {**_serialize_linear(model.advantage_head), "activation": "linear"},
+        "meanExpansionK": model.mean_expansion_k,
         "meta": meta,
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -821,6 +828,7 @@ def train(args: argparse.Namespace) -> None:
             l2_norm=args.l2_norm,
             orthogonal_init=args.orthogonal_init,
             weight_norm=args.weight_norm,
+            mean_expansion_k=args.mean_expansion_k,
         )
         target_q = DQN(
             obs_dim,
@@ -831,6 +839,7 @@ def train(args: argparse.Namespace) -> None:
             l2_norm=args.l2_norm,
             orthogonal_init=args.orthogonal_init,
             weight_norm=args.weight_norm,
+            mean_expansion_k=args.mean_expansion_k,
         )
         target_q.load_state_dict(q.state_dict())
         optimizer = torch.optim.Adam(q.parameters(), lr=args.lr)
@@ -867,6 +876,7 @@ def train(args: argparse.Namespace) -> None:
             "no_hazards": args.no_hazards,
             "frame_stack": args.frame_stack,
             "frame_skip": args.frame_skip,
+            "mean_expansion_k": args.mean_expansion_k,
         }
         if args.json_logs:
             emit_json(start_payload)
@@ -895,6 +905,7 @@ def train(args: argparse.Namespace) -> None:
                             f"[bold]L2 Norm[/bold]: {args.l2_norm}",
                             f"[bold]Orthogonal init[/bold]: {args.orthogonal_init}",
                             f"[bold]Weight norm[/bold]: {args.weight_norm}",
+                            f"[bold]Mean expansion k[/bold]: {args.mean_expansion_k}",
                             f"[bold]PER[/bold]: {args.prioritized_replay}"
                             + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
                             f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)",
@@ -1085,6 +1096,7 @@ def train(args: argparse.Namespace) -> None:
                         "activation": args.activation,
                         "layerNorm": args.layer_norm,
                         "orthogonalInit": args.orthogonal_init,
+                        "meanExpansionK": args.mean_expansion_k,
                         "metrics": metrics,
                         "eval": eval_report,
                         "reference": reference_metrics,
@@ -1120,6 +1132,7 @@ def train(args: argparse.Namespace) -> None:
                 "activation": args.activation,
                 "layerNorm": args.layer_norm,
                 "orthogonalInit": args.orthogonal_init,
+                "meanExpansionK": args.mean_expansion_k,
                 "metrics": final_metrics,
                 "eval": final_eval_report,
                 "reference": reference_metrics,
@@ -1184,6 +1197,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-norm", action="store_true")
     parser.add_argument("--orthogonal-init", dest="orthogonal_init", action="store_true")
     parser.add_argument("--no-orthogonal-init", dest="orthogonal_init", action="store_false")
+    parser.add_argument(
+        "--mean-expansion-k",
+        type=float,
+        default=0.0,
+        help="Mean-expansion output scale k; 0 disables implicit-baseline DQN.",
+    )
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--prioritized-replay", action="store_true")
     parser.add_argument("--per-alpha", type=float, default=0.6)

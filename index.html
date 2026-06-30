@@ -17271,6 +17271,7 @@ function headlessMlpForward(weights, inputValues) {
     meanA /= a.length || 1;
     const q = new Array(a.length);
     for (let i = 0; i < a.length; i++) q[i] = v[0] + a[i] - meanA;
+    applyMeanExpansion(q, weights.meanExpansionK ?? weights.meta?.meanExpansionK ?? 0);
     return q;
   }
   if (!Array.isArray(weights.layers)) return null;
@@ -17281,6 +17282,16 @@ function headlessMlpForward(weights, inputValues) {
     x = _mlpLayerForward(x, patched);
   }
   return x;
+}
+
+function applyMeanExpansion(values, k) {
+  k = Number(k || 0);
+  if (!Number.isFinite(k) || k <= 0 || !values.length) return values;
+  let mean = 0;
+  for (let i = 0; i < values.length; i++) mean += values[i];
+  mean /= values.length;
+  for (let i = 0; i < values.length; i++) values[i] = values[i] - mean + (k + 1) * mean;
+  return values;
 }
 
 function runHeadlessMlp(weights, observation) {
