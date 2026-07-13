@@ -62,6 +62,7 @@ def evaluate_model(page: Any, base_url: str, model_path: str, map_id: str, args:
         base_url
         + "?headless=1"
         + "&agent=dqn"
+        + f"&mode={args.mode}"
         + f"&model={model_path}"
         + f"&map={map_id}"
         + f"&char={args.character}"
@@ -75,6 +76,12 @@ def evaluate_model(page: Any, base_url: str, model_path: str, map_id: str, args:
         + f"&traceEvery={args.trace_every}"
     )
     page.goto(url, wait_until="load")
+    # The episode runs asynchronously (rAF loop) after load, so wait for it to publish
+    # a result (or a model-load error) before reading — otherwise we race and get None.
+    page.wait_for_function(
+        "() => window.__HEADLESS_RESULT__ !== undefined || window.__HEADLESS_MODEL_ERROR__",
+        timeout=180000,
+    )
     error = page.evaluate("window.__HEADLESS_MODEL_ERROR__ || null")
     if error:
         raise RuntimeError(f"Model failed to load in browser: {error}")
@@ -244,6 +251,13 @@ svg {{ width: 100%; height: auto; display: block; }}
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default="index.html")
+    parser.add_argument(
+        "--mode",
+        choices=["race", "battle"],
+        default="race",
+        help="'race' (checkpoints/laps) or 'battle' (arena free-for-all).",
+    )
+    parser.add_argument("--arena-map", default="battle_arena", help="Map id used when --mode battle.")
     parser.add_argument("--manifest", default="models/manifest.json")
     parser.add_argument("--models", default="all", help="'all' or comma-separated ids/names")
     parser.add_argument("--maps", default="core_mainframe,audit_super_ring,compliance_chicane")
@@ -263,19 +277,29 @@ def main() -> None:
     parser.set_defaults(auto_install_browser=True)
     args = parser.parse_args()
 
+    is_battle = args.mode == "battle"
+    if is_battle:
+        args.maps = args.arena_map
     root = Path(".").resolve()
     manifest_path = Path(args.manifest)
     models = select_models(load_manifest(manifest_path), args.models)
     maps = parse_csv(args.maps)
     console = Console()
 
-    table = Table(title="TurboKart Model Evaluation")
+    table = Table(title="TurboKart Model Evaluation" + (" (Arena)" if is_battle else ""))
     table.add_column("Model", style="cyan")
-    table.add_column("Map", style="magenta")
-    table.add_column("Finish", justify="right")
-    table.add_column("Reward", justify="right")
-    table.add_column("Laps", justify="right")
-    table.add_column("Progress", justify="right")
+    table.add_column("Arena" if is_battle else "Map", style="magenta")
+    if is_battle:
+        table.add_column("Win", justify="right", style="bold green")
+        table.add_column("Reward", justify="right")
+        table.add_column("Survival s", justify="right")
+        table.add_column("Approvals", justify="right", style="yellow")
+        table.add_column("Pops", justify="right", style="bold red")
+    else:
+        table.add_column("Finish", justify="right")
+        table.add_column("Reward", justify="right")
+        table.add_column("Laps", justify="right")
+        table.add_column("Progress", justify="right")
     report_results = []
     map_lookup = {m["id"]: m for m in load_maps_from_index(Path(args.index))}
 
@@ -296,14 +320,32 @@ def main() -> None:
                     }
                 )
                 agg = result.get("aggregate", {})
-                table.add_row(
-                    model.get("name") or model.get("id") or model_path,
-                    map_id,
-                    f"{agg.get('finishCount', 0) / max(1, args.episodes):.2f}",
-                    f"{agg.get('avgReward', 0):.1f}",
-                    f"{agg.get('totalPlayerLaps', 0) / max(1, args.episodes):.2f}",
-                    f"{agg.get('avgPlayerProgress', 0):.1f}",
-                )
+                label = model.get("name") or model.get("id") or model_path
+                if is_battle:
+                    eps = result.get("episodes", [])
+                    n = max(1, len(eps))
+                    win_rate = sum(1 for e in eps if e.get("playerPlace") == 1) / n
+                    survival = sum(float(e.get("raceTime", 0)) for e in eps) / n
+                    approvals = sum(float(e.get("playerApprovals", 0)) for e in eps) / n
+                    pops = sum(float(e.get("playerSteals", 0)) for e in eps) / n
+                    table.add_row(
+                        label,
+                        map_id,
+                        f"{win_rate:.2f}",
+                        f"{agg.get('avgReward', 0):.1f}",
+                        f"{survival:.1f}",
+                        f"{approvals:.2f}",
+                        f"{pops:.1f}",
+                    )
+                else:
+                    table.add_row(
+                        label,
+                        map_id,
+                        f"{agg.get('finishCount', 0) / max(1, args.episodes):.2f}",
+                        f"{agg.get('avgReward', 0):.1f}",
+                        f"{agg.get('totalPlayerLaps', 0) / max(1, args.episodes):.2f}",
+                        f"{agg.get('avgPlayerProgress', 0):.1f}",
+                    )
         browser.close()
 
     console.print(table)

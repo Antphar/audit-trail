@@ -131,11 +131,14 @@ class TurboKartEnv:
         frame_skip: int = 4,
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int = 0,
+        mode: str = "race",
     ):
         self.page = page
+        self.mode = "battle" if str(mode).lower() in ("battle", "arena") else "race"
         flags = [
             "headless=1",
             "external=1",
+            f"mode={self.mode}",
             f"map={map_id}",
             f"char={character}",
             f"frames={frames}",
@@ -235,6 +238,7 @@ class TurboKartEnv:
         result = self.page.evaluate(
             """(cfg) => window.rlReset(cfg)""",
             {
+                "mode": self.mode,
                 "map": self.map_id,
                 "character": self.character,
                 "frames": self.frames,
@@ -421,6 +425,36 @@ def print_eval_report(
     console.print(table)
 
 
+def print_battle_report(console: Console, title: str, report: dict[str, Any]) -> None:
+    """Arena/Battle evaluation table: win rates, survival time, steals, and lives left."""
+    table = Table(title=title)
+    table.add_column("Arena", style="cyan")
+    table.add_column("Win", justify="right", style="bold green")
+    table.add_column("Survive", justify="right", style="green")
+    table.add_column("Reward", justify="right")
+    table.add_column("Survival s", justify="right")
+    table.add_column("Approvals", justify="right", style="yellow")
+    table.add_column("Pops", justify="right", style="bold red")
+    table.add_column("Items", justify="right")
+    table.add_column("Ults", justify="right")
+    table.add_column("Winner", justify="right")
+    for track, metrics in report.get("tracks", {}).items():
+        b = metrics.get("battle", {})
+        table.add_row(
+            track,
+            format_float(b.get("player_win_rate"), 2),
+            format_float(b.get("battle_win_rate"), 2),
+            format_float(b.get("avg_reward"), 1),
+            format_float(b.get("avg_survival_time"), 1),
+            format_float(b.get("avg_approvals_left"), 2),
+            format_float(b.get("avg_steals"), 1),
+            format_float(b.get("avg_item_uses"), 1),
+            format_float(b.get("avg_ult_uses"), 1),
+            ", ".join(f"{k}:{v}" for k, v in (b.get("winner_chars") or {}).items()) or "-",
+        )
+    console.print(table)
+
+
 def launch_chromium(playwright: Any, auto_install: bool) -> Any:
     try:
         return playwright.chromium.launch(headless=True)
@@ -463,6 +497,7 @@ def update_model_manifest(manifest_path: Path, model_path: Path, payload: dict[s
         "id": model_id,
         "name": payload["meta"].get("name") or model_id,
         "path": rel_path,
+        "mode": payload["meta"].get("mode", "race"),
         "map": payload["meta"].get("map"),
         "character": payload["meta"].get("character"),
         "format": payload.get("format"),
@@ -484,7 +519,9 @@ def parse_csv(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def load_league_models(manifest_path: Path, limit: int | None = None) -> list[dict[str, Any]]:
+def load_league_models(
+    manifest_path: Path, limit: int | None = None, mode: str | None = None
+) -> list[dict[str, Any]]:
     if not manifest_path.exists():
         return []
     try:
@@ -507,6 +544,12 @@ def load_league_models(manifest_path: Path, limit: int | None = None) -> list[di
             continue
         if payload.get("type") not in ("dqn", "sac"):
             continue
+        # Only self-play against same-mode opponents (arena vs race have different obs spaces
+        # and objectives). Models predating the mode field are treated as race.
+        if mode is not None:
+            payload_mode = payload.get("meta", {}).get("mode") or entry.get("mode") or "race"
+            if payload_mode != mode:
+                continue
         loaded.append({"entry": entry, "payload": payload, "rank": idx})
         if limit is not None and len(loaded) >= limit:
             break

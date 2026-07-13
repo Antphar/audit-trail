@@ -43,6 +43,7 @@ from rl_common import (
     load_league_models,
     parse_csv,
     print_attribution_table,
+    print_battle_report,
     print_eval_report,
     sample_character,
     sample_league_opponents,
@@ -144,6 +145,9 @@ def evaluate_sac(
     laps: list[float] = []
     race_times: list[float] = []
     progresses: list[float] = []
+    approvals_left: list[float] = []
+    steals: list[float] = []
+    battle_wins = 0
     winner_chars: dict[str, int] = {}
     player_wins = 0
     try:
@@ -176,6 +180,9 @@ def evaluate_sac(
             laps.append(float(last_info.get("lap", 0)))
             race_times.append(float(last_info.get("raceTime", 0)))
             progresses.append(float(last_info.get("progress", 0)))
+            approvals_left.append(float(last_info.get("approvals", 0)))
+            steals.append(float(last_info.get("steals", 0)))
+            battle_wins += int(bool(last_info.get("battleWin")))
     finally:
         env.solo = old_solo
         env.opponent_models = old_opponents
@@ -187,6 +194,10 @@ def evaluate_sac(
         "avg_laps": float(np.mean(laps)) if laps else 0.0,
         "avg_race_time": float(np.mean(race_times)) if race_times else 0.0,
         "avg_progress": float(np.mean(progresses)) if progresses else 0.0,
+        "avg_approvals_left": float(np.mean(approvals_left)) if approvals_left else 0.0,
+        "avg_steals": float(np.mean(steals)) if steals else 0.0,
+        "avg_survival_time": float(np.mean(race_times)) if race_times else 0.0,
+        "battle_win_rate": battle_wins / max(1, episodes),
         "winner_chars": winner_chars,
         "player_win_rate": player_wins / max(1, episodes),
     }
@@ -195,23 +206,34 @@ def evaluate_sac(
 def evaluate_tracks_sac(env: TurboKartEnv, actor: GaussianActor, args: argparse.Namespace) -> dict[str, Any]:
     per_track: dict[str, Any] = {}
     eval_maps = parse_csv(args.eval_maps)
+    is_battle = getattr(args, "mode", "race") == "battle"
     for map_id in eval_maps:
         char = args.character
         eval_chars = parse_csv(args.characters) if args.random_character else None
-        per_track[map_id] = {
-            "solo": evaluate_sac(
-                env, actor, args.episodes_eval,
-                map_id=map_id, character=char, characters=eval_chars,
-                solo=True, opponent_models=[],
-            ),
-            "classic": evaluate_sac(
-                env, actor, args.episodes_eval,
-                map_id=map_id, character=char, characters=eval_chars,
-                solo=False, opponent_models=[],
-            ),
-        }
-    avg_reward = float(np.mean([m["classic"]["avg_reward"] for m in per_track.values()])) if per_track else 0.0
-    avg_finish = float(np.mean([m["classic"]["finish_rate"] for m in per_track.values()])) if per_track else 0.0
+        if is_battle:
+            per_track[map_id] = {
+                "battle": evaluate_sac(
+                    env, actor, args.episodes_eval,
+                    map_id=map_id, character=char, characters=eval_chars,
+                    solo=False, opponent_models=[],
+                ),
+            }
+        else:
+            per_track[map_id] = {
+                "solo": evaluate_sac(
+                    env, actor, args.episodes_eval,
+                    map_id=map_id, character=char, characters=eval_chars,
+                    solo=True, opponent_models=[],
+                ),
+                "classic": evaluate_sac(
+                    env, actor, args.episodes_eval,
+                    map_id=map_id, character=char, characters=eval_chars,
+                    solo=False, opponent_models=[],
+                ),
+            }
+    primary = "battle" if is_battle else "classic"
+    avg_reward = float(np.mean([m[primary]["avg_reward"] for m in per_track.values()])) if per_track else 0.0
+    avg_finish = float(np.mean([m[primary]["finish_rate"] for m in per_track.values()])) if per_track else 0.0
     return {"avg_reward": avg_reward, "avg_finish_rate": avg_finish, "tracks": per_track}
 
 
@@ -275,6 +297,23 @@ def train(args: argparse.Namespace) -> None:
     torch.manual_seed(args.seed)
 
     action_dim = 6
+    is_battle = args.mode == "battle"
+    if is_battle:
+        # Arena is a single-map free-for-all: opponents + items ON, hazards OFF, no lap navigation.
+        args.map = args.arena_map
+        args.maps = args.arena_map
+        args.eval_maps = args.arena_map
+        args.random_map = False
+        args.solo = False
+        args.no_items = False
+        args.no_hazards = True
+        if args.model_id == "sac-latest":
+            args.model_id = "sac-arena"
+        if args.model_name == "SAC Latest":
+            args.model_name = "SAC Arena"
+        if args.out == "models/sac-latest.json":
+            args.out = "models/sac-arena.json"
+    primary_key = "battle" if is_battle else "classic"
     index_path = Path(args.index).resolve()
     if not index_path.exists():
         raise FileNotFoundError(index_path)
@@ -293,9 +332,10 @@ def train(args: argparse.Namespace) -> None:
             no_hazards=args.no_hazards,
             frame_stack=args.frame_stack,
             frame_skip=args.frame_skip,
+            mode=args.mode,
         )
         env.load()
-        league = load_league_models(Path(args.league_manifest), args.league_limit) if args.self_play else []
+        league = load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode) if args.self_play else []
         obs = env.reset_with(
             map_id=sample_map(args),
             character=sample_character(args),
@@ -314,6 +354,7 @@ def train(args: argparse.Namespace) -> None:
             no_hazards=args.no_hazards,
             frame_stack=args.frame_stack,
             frame_skip=args.frame_skip,
+            mode=args.mode,
         )
         eval_env.load()
 
@@ -348,11 +389,16 @@ def train(args: argparse.Namespace) -> None:
         recent_maps: deque[str] = deque(maxlen=20)
         recent_chars: deque[str] = deque(maxlen=20)
         recent_alpha: deque[float] = deque(maxlen=1000)
-        reference_metrics = waypoint_references(browser, index_path, args) if args.reference_episodes > 0 else {}
+        reference_metrics = (
+            waypoint_references(browser, index_path, args)
+            if args.reference_episodes > 0 and not is_battle
+            else {}
+        )
 
         start_payload = {
             "event": "start",
             "algorithm": "sac",
+            "mode": args.mode,
             "obs_dim": obs_dim,
             "action_dim": action_dim,
             "steps": args.steps,
@@ -459,7 +505,7 @@ def train(args: argparse.Namespace) -> None:
                 recent_maps.append(env.map_id)
                 recent_chars.append(env.character)
                 if args.self_play:
-                    league = load_league_models(Path(args.league_manifest), args.league_limit)
+                    league = load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
                 obs = env.reset_with(
                     map_id=sample_map(args),
                     character=sample_character(args),
@@ -544,7 +590,7 @@ def train(args: argparse.Namespace) -> None:
             if step % args.eval_every == 0:
                 eval_report = evaluate_tracks_sac(eval_env, actor, args)
                 track_report = eval_report["tracks"].get(args.map) or next(iter(eval_report["tracks"].values()))
-                metrics = track_report["classic"]
+                metrics = track_report[primary_key]
                 attribution = smoothgrad_attribution(
                     actor, buffer, env.obs_keys,
                     output_fn=lambda out: out[0].sum(),
@@ -553,6 +599,10 @@ def train(args: argparse.Namespace) -> None:
                     eval_report["attribution"] = attribution
                 if args.json_logs:
                     emit_json({"event": "eval", "eval_step": step, **eval_report, "reference": reference_metrics})
+                elif is_battle:
+                    print_battle_report(console, f"Arena Evaluation @ step {step}", eval_report)
+                    if attribution:
+                        print_attribution_table(console, f"SmoothGrad Attribution @ step {step}", attribution)
                 else:
                     print_eval_report(console, f"Evaluation @ step {step}", eval_report, reference_metrics)
                     if attribution:
@@ -564,6 +614,7 @@ def train(args: argparse.Namespace) -> None:
                         "id": f"{args.model_id}-step-{step}",
                         "name": f"{args.model_name} step {step}",
                         "step": step,
+                        "mode": args.mode,
                         "map": args.map,
                         "character": args.character,
                         "frameStack": args.frame_stack,
@@ -582,7 +633,7 @@ def train(args: argparse.Namespace) -> None:
         final_track_report = final_eval_report["tracks"].get(args.map) or next(
             iter(final_eval_report["tracks"].values())
         )
-        final_metrics = final_track_report["classic"]
+        final_metrics = final_track_report[primary_key]
         final_attribution = smoothgrad_attribution(
             actor, buffer, env.obs_keys,
             output_fn=lambda out: out[0].sum(),
@@ -595,6 +646,7 @@ def train(args: argparse.Namespace) -> None:
                 "id": args.model_id,
                 "name": args.model_name,
                 "step": args.steps,
+                "mode": args.mode,
                 "map": args.map,
                 "character": args.character,
                 "frameStack": args.frame_stack,
@@ -620,7 +672,10 @@ def train(args: argparse.Namespace) -> None:
                     "[yellow]No training episode completed before the step budget ended. "
                     "Increase --steps or reduce --frames for more episode-level feedback.[/yellow]"
                 )
-            print_eval_report(console, "Final Evaluation", final_eval_report, reference_metrics)
+            if is_battle:
+                print_battle_report(console, "Final Arena Evaluation", final_eval_report)
+            else:
+                print_eval_report(console, "Final Evaluation", final_eval_report, reference_metrics)
             if final_attribution:
                 print_attribution_table(console, "Final SmoothGrad Attribution", final_attribution)
             console.print(f"[green]Exported model:[/green] {args.out}")
@@ -631,6 +686,13 @@ def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default="index.html")
+    parser.add_argument(
+        "--mode",
+        choices=["race", "battle"],
+        default="race",
+        help="Training environment: 'race' (checkpoints/laps) or 'battle' (arena free-for-all).",
+    )
+    parser.add_argument("--arena-map", default="battle_arena", help="Map id used when --mode battle.")
     parser.add_argument("--out", default="models/sac-latest.json")
     parser.add_argument("--manifest", default="models/manifest.json")
     parser.add_argument("--model-id", default="sac-latest")

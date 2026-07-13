@@ -87,6 +87,7 @@ class DQN(torch.nn.Module):
         orthogonal_init: bool = False,
         weight_norm: bool = False,
         mean_expansion_k: float = 0.0,
+        advantage_centering: bool = True,
     ):
         super().__init__()
         activation = activation.lower()
@@ -96,6 +97,7 @@ class DQN(torch.nn.Module):
         self.layer_norm_enabled = layer_norm
         self.l2_norm_enabled = l2_norm
         self.mean_expansion_k = float(mean_expansion_k)
+        self.advantage_centering = advantage_centering
         layers: list[torch.nn.Module] = []
         in_dim = obs_dim
         for _ in range(2):
@@ -136,15 +138,20 @@ class DQN(torch.nn.Module):
                 if norm > 0:
                     m.weight.data.div_(norm)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward_components(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         h = self.trunk(x)
         v = self.value_head(h)
         a = self.advantage_head(h)
-        q = v + a - a.mean(dim=-1, keepdim=True)
+        residual = a - a.mean(dim=-1, keepdim=True) if self.advantage_centering else a
+        q = v + residual
         if self.mean_expansion_k <= 0:
-            return q
-        mean = q.mean(dim=-1, keepdim=True)
-        return q - mean + (self.mean_expansion_k + 1.0) * mean
+            return q, v, a
+        q_mean = q.mean(dim=-1, keepdim=True)
+        return q - q_mean + (self.mean_expansion_k + 1.0) * q_mean, v, a
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        q, _, _ = self.forward_components(x)
+        return q
 
 
 class TurboKartEnv:
@@ -494,6 +501,7 @@ def export_dqn_json(
         "trunk": trunk_layers,
         "value_head": {**_serialize_linear(model.value_head), "activation": "linear"},
         "advantage_head": {**_serialize_linear(model.advantage_head), "activation": "linear"},
+        "advantageCentering": model.advantage_centering,
         "meanExpansionK": model.mean_expansion_k,
         "meta": meta,
     }
@@ -627,6 +635,9 @@ def evaluate(
     item_uses = []
     ult_uses = []
     drift_boosts = []
+    approvals_left = []
+    steals = []
+    battle_wins = 0
     winner_chars: dict[str, int] = {}
     player_wins = 0
     try:
@@ -663,6 +674,9 @@ def evaluate(
             item_uses.append(float(last_info.get("itemUses", 0)))
             ult_uses.append(float(last_info.get("ultUses", 0)))
             drift_boosts.append(float(last_info.get("driftBoosts", 0)))
+            approvals_left.append(float(last_info.get("approvals", 0)))
+            steals.append(float(last_info.get("steals", 0)))
+            battle_wins += int(bool(last_info.get("battleWin")))
     finally:
         env.solo = old_solo
         env.opponent_models = old_opponents
@@ -678,6 +692,10 @@ def evaluate(
         "avg_item_uses": float(np.mean(item_uses)) if item_uses else 0.0,
         "avg_ult_uses": float(np.mean(ult_uses)) if ult_uses else 0.0,
         "avg_drift_boosts": float(np.mean(drift_boosts)) if drift_boosts else 0.0,
+        "avg_approvals_left": float(np.mean(approvals_left)) if approvals_left else 0.0,
+        "avg_steals": float(np.mean(steals)) if steals else 0.0,
+        "avg_survival_time": float(np.mean(race_times)) if race_times else 0.0,
+        "battle_win_rate": battle_wins / max(1, episodes),
         "winner_chars": winner_chars,
         "player_win_rate": player_wins / max(1, episodes),
     }
@@ -686,33 +704,50 @@ def evaluate(
 def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace) -> dict[str, Any]:
     per_track: dict[str, Any] = {}
     eval_maps = parse_csv(args.eval_maps)
+    is_battle = getattr(args, "mode", "race") == "battle"
     for map_id in eval_maps:
         char = args.character
         eval_chars = parse_csv(args.characters) if args.random_character else None
-        per_track[map_id] = {
-            "solo": evaluate(
-                env,
-                model,
-                args.episodes_eval,
-                map_id=map_id,
-                character=char,
-                characters=eval_chars,
-                solo=True,
-                opponent_models=[],
-            ),
-            "classic": evaluate(
-                env,
-                model,
-                args.episodes_eval,
-                map_id=map_id,
-                character=char,
-                characters=eval_chars,
-                solo=False,
-                opponent_models=[],
-            ),
-        }
-    avg_reward = float(np.mean([m["classic"]["avg_reward"] for m in per_track.values()])) if per_track else 0.0
-    avg_finish = float(np.mean([m["classic"]["finish_rate"] for m in per_track.values()])) if per_track else 0.0
+        if is_battle:
+            # Arena is always a free-for-all; there is no meaningful "solo" battle.
+            per_track[map_id] = {
+                "battle": evaluate(
+                    env,
+                    model,
+                    args.episodes_eval,
+                    map_id=map_id,
+                    character=char,
+                    characters=eval_chars,
+                    solo=False,
+                    opponent_models=[],
+                ),
+            }
+        else:
+            per_track[map_id] = {
+                "solo": evaluate(
+                    env,
+                    model,
+                    args.episodes_eval,
+                    map_id=map_id,
+                    character=char,
+                    characters=eval_chars,
+                    solo=True,
+                    opponent_models=[],
+                ),
+                "classic": evaluate(
+                    env,
+                    model,
+                    args.episodes_eval,
+                    map_id=map_id,
+                    character=char,
+                    characters=eval_chars,
+                    solo=False,
+                    opponent_models=[],
+                ),
+            }
+    primary = "battle" if is_battle else "classic"
+    avg_reward = float(np.mean([m[primary]["avg_reward"] for m in per_track.values()])) if per_track else 0.0
+    avg_finish = float(np.mean([m[primary]["finish_rate"] for m in per_track.values()])) if per_track else 0.0
     return {"avg_reward": avg_reward, "avg_finish_rate": avg_finish, "tracks": per_track}
 
 
@@ -776,6 +811,24 @@ def train(args: argparse.Namespace) -> None:
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
+    is_battle = args.mode == "battle"
+    if is_battle:
+        # Arena is a single-map free-for-all: opponents + items ON, hazards OFF, no lap navigation.
+        args.map = args.arena_map
+        args.maps = args.arena_map
+        args.eval_maps = args.arena_map
+        args.random_map = False
+        args.solo = False
+        args.no_items = False
+        args.no_hazards = True
+        # Avoid clobbering the race model when only defaults are used.
+        if args.model_id == "dqn-latest":
+            args.model_id = "dqn-arena"
+        if args.model_name == "DQN Latest":
+            args.model_name = "DQN Arena"
+        if args.out == "models/dqn-latest.json":
+            args.out = "models/dqn-arena.json"
+
     index_path = Path(args.index).resolve()
     if not index_path.exists():
         raise FileNotFoundError(index_path)
@@ -794,9 +847,10 @@ def train(args: argparse.Namespace) -> None:
             no_hazards=args.no_hazards,
             frame_stack=args.frame_stack,
             frame_skip=args.frame_skip,
+            mode=args.mode,
         )
         env.load()
-        league = common.load_league_models(Path(args.league_manifest), args.league_limit) if args.self_play else []
+        league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode) if args.self_play else []
         obs = env.reset_with(
             map_id=common.sample_map(args),
             character=common.sample_character(args),
@@ -814,6 +868,7 @@ def train(args: argparse.Namespace) -> None:
             no_hazards=args.no_hazards,
             frame_stack=args.frame_stack,
             frame_skip=args.frame_skip,
+            mode=args.mode,
         )
         eval_env.load()
         obs_dim = int(obs.shape[0])
@@ -829,6 +884,7 @@ def train(args: argparse.Namespace) -> None:
             orthogonal_init=args.orthogonal_init,
             weight_norm=args.weight_norm,
             mean_expansion_k=args.mean_expansion_k,
+            advantage_centering=not args.rdq,
         )
         target_q = DQN(
             obs_dim,
@@ -840,6 +896,7 @@ def train(args: argparse.Namespace) -> None:
             orthogonal_init=args.orthogonal_init,
             weight_norm=args.weight_norm,
             mean_expansion_k=args.mean_expansion_k,
+            advantage_centering=not args.rdq,
         )
         target_q.load_state_dict(q.state_dict())
         optimizer = torch.optim.Adam(q.parameters(), lr=args.lr)
@@ -862,10 +919,19 @@ def train(args: argparse.Namespace) -> None:
         recent_action_counts = np.zeros(action_dim, dtype=np.int64)
         recent_q_max: deque[float] = deque(maxlen=1000)
         recent_q_mean: deque[float] = deque(maxlen=1000)
-        reference_metrics = common.waypoint_references(browser, index_path, args) if args.reference_episodes > 0 else {}
+        primary_key = "battle" if is_battle else "classic"
+        # The waypoint reference baseline is a race concept (laps/progress); skip it for arena.
+        reference_metrics = (
+            common.waypoint_references(browser, index_path, args)
+            if args.reference_episodes > 0 and not is_battle
+            else {}
+        )
 
         start_payload = {
             "event": "start",
+            "mode": args.mode,
+            "self_play": args.self_play,
+            "league_models": len(league),
             "obs_dim": obs_dim,
             "action_dim": action_dim,
             "steps": args.steps,
@@ -877,6 +943,8 @@ def train(args: argparse.Namespace) -> None:
             "frame_stack": args.frame_stack,
             "frame_skip": args.frame_skip,
             "mean_expansion_k": args.mean_expansion_k,
+            "rdq": args.rdq,
+            "rdq_beta": args.rdq_beta if args.rdq else 0.0,
         }
         if args.json_logs:
             emit_json(start_payload)
@@ -906,6 +974,7 @@ def train(args: argparse.Namespace) -> None:
                             f"[bold]Orthogonal init[/bold]: {args.orthogonal_init}",
                             f"[bold]Weight norm[/bold]: {args.weight_norm}",
                             f"[bold]Mean expansion k[/bold]: {args.mean_expansion_k}",
+                            f"[bold]RDQ[/bold]: {args.rdq} (β={args.rdq_beta if args.rdq else 0.0})",
                             f"[bold]PER[/bold]: {args.prioritized_replay}"
                             + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
                             f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)",
@@ -982,7 +1051,7 @@ def train(args: argparse.Namespace) -> None:
                 recent_maps.append(env.map_id)
                 recent_chars.append(env.character)
                 if args.self_play:
-                    league = common.load_league_models(Path(args.league_manifest), args.league_limit)
+                    league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
                 obs = env.reset_with(
                     map_id=common.sample_map(args),
                     character=common.sample_character(args),
@@ -1006,13 +1075,19 @@ def train(args: argparse.Namespace) -> None:
                     best_actions = q(b_next_obs).argmax(dim=1, keepdim=True)
                     next_q = target_q(b_next_obs).gather(1, best_actions).squeeze(1)
                     target = b_rewards + args.gamma * (1.0 - b_dones) * next_q
-                pred = q(b_obs).gather(1, b_actions).squeeze(1)
+                q_values, baselines, residuals = q.forward_components(b_obs)
+                pred = q_values.gather(1, b_actions).squeeze(1)
                 td_errors = pred - target
                 if is_weights is not None:
                     loss = (is_weights * torch.nn.functional.smooth_l1_loss(pred, target, reduction="none")).mean()
                     buffer.update_priorities(batch_indices, td_errors.detach().cpu().numpy())
                 else:
                     loss = torch.nn.functional.smooth_l1_loss(pred, target)
+                if args.rdq and args.rdq_beta > 0:
+                    rdq_penalty = 0.5 * (
+                        baselines.square().mean() + residuals.square().sum(dim=1).mean()
+                    )
+                    loss = loss + args.rdq_beta * rdq_penalty
                 last_loss = float(loss.detach().cpu().item())
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -1063,12 +1138,22 @@ def train(args: argparse.Namespace) -> None:
             if step % args.eval_every == 0:
                 eval_report = evaluate_tracks(eval_env, q, args)
                 track_report = eval_report["tracks"].get(args.map) or next(iter(eval_report["tracks"].values()))
-                metrics = track_report["classic"]
+                metrics = track_report[primary_key]
                 attribution = common.smoothgrad_attribution(q, buffer, env.obs_keys) if len(buffer) >= 200 else {}
                 if attribution:
                     eval_report["attribution"] = attribution
                 if args.json_logs:
                     emit_json({"event": "eval", "eval_step": step, **eval_report, "reference": reference_metrics})
+                elif is_battle:
+                    common.print_battle_report(console, f"Arena Evaluation @ step {step}", eval_report)
+                    if attribution:
+                        common.print_attribution_table(console, f"SmoothGrad Attribution @ step {step}", attribution)
+                    common.print_action_distribution(
+                        console,
+                        f"Action Distribution @ step {step}",
+                        action_counts,
+                        [a["name"] for a in env.actions],
+                    )
                 else:
                     common.print_eval_report(console, f"Evaluation @ step {step}", eval_report, reference_metrics)
                     if attribution:
@@ -1089,6 +1174,7 @@ def train(args: argparse.Namespace) -> None:
                         "id": f"{args.model_id}-step-{step}",
                         "name": f"{args.model_name} step {step}",
                         "step": step,
+                        "mode": args.mode,
                         "map": args.map,
                         "character": args.character,
                         "frameStack": args.frame_stack,
@@ -1097,6 +1183,9 @@ def train(args: argparse.Namespace) -> None:
                         "layerNorm": args.layer_norm,
                         "orthogonalInit": args.orthogonal_init,
                         "meanExpansionK": args.mean_expansion_k,
+                        "rdq": args.rdq,
+                        "rdqBeta": args.rdq_beta if args.rdq else 0.0,
+                        "advantageCentering": not args.rdq,
                         "metrics": metrics,
                         "eval": eval_report,
                         "reference": reference_metrics,
@@ -1112,7 +1201,7 @@ def train(args: argparse.Namespace) -> None:
         final_track_report = final_eval_report["tracks"].get(args.map) or next(
             iter(final_eval_report["tracks"].values())
         )
-        final_metrics = final_track_report["classic"]
+        final_metrics = final_track_report[primary_key]
         final_attribution = common.smoothgrad_attribution(q, buffer, env.obs_keys) if len(buffer) >= 200 else {}
         if final_attribution:
             final_eval_report["attribution"] = final_attribution
@@ -1125,6 +1214,7 @@ def train(args: argparse.Namespace) -> None:
                 "id": args.model_id,
                 "name": args.model_name,
                 "step": args.steps,
+                "mode": args.mode,
                 "map": args.map,
                 "character": args.character,
                 "frameStack": args.frame_stack,
@@ -1133,6 +1223,9 @@ def train(args: argparse.Namespace) -> None:
                 "layerNorm": args.layer_norm,
                 "orthogonalInit": args.orthogonal_init,
                 "meanExpansionK": args.mean_expansion_k,
+                "rdq": args.rdq,
+                "rdqBeta": args.rdq_beta if args.rdq else 0.0,
+                "advantageCentering": not args.rdq,
                 "metrics": final_metrics,
                 "eval": final_eval_report,
                 "reference": reference_metrics,
@@ -1154,7 +1247,10 @@ def train(args: argparse.Namespace) -> None:
                     "[yellow]No training episode completed before the step budget ended. "
                     "Increase --steps or reduce --frames for more episode-level feedback.[/yellow]"
                 )
-            common.print_eval_report(console, "Final Evaluation", final_eval_report, reference_metrics)
+            if is_battle:
+                common.print_battle_report(console, "Final Arena Evaluation", final_eval_report)
+            else:
+                common.print_eval_report(console, "Final Evaluation", final_eval_report, reference_metrics)
             if final_attribution:
                 common.print_attribution_table(console, "Final SmoothGrad Attribution", final_attribution)
             common.print_action_distribution(
@@ -1168,6 +1264,13 @@ def train(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default="index.html")
+    parser.add_argument(
+        "--mode",
+        choices=["race", "battle"],
+        default="race",
+        help="Training environment: 'race' (checkpoints/laps) or 'battle' (arena free-for-all).",
+    )
+    parser.add_argument("--arena-map", default="battle_arena", help="Map id used when --mode battle.")
     parser.add_argument("--out", default="models/dqn-latest.json")
     parser.add_argument("--manifest", default="models/manifest.json")
     parser.add_argument("--model-id", default="dqn-latest")
@@ -1202,6 +1305,17 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Mean-expansion output scale k; 0 disables implicit-baseline DQN.",
+    )
+    parser.add_argument(
+        "--rdq",
+        action="store_true",
+        help="Use Regularized Dueling Q-learning: Q=B+Z without advantage centering.",
+    )
+    parser.add_argument(
+        "--rdq-beta",
+        type=float,
+        default=0.001,
+        help="RDQ L2 penalty coefficient for baseline and residual outputs.",
     )
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--prioritized-replay", action="store_true")

@@ -185,6 +185,57 @@
     font-size: 16px;
     letter-spacing: 2px;
   }
+  .promptly-corner {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    justify-content: center;
+  }
+  .promptly-corner img {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .promptly-bubble {
+    position: relative;
+    background: var(--reg-surface);
+    border: 1px solid var(--reg-border);
+    border-radius: 12px;
+    padding: 10px 14px;
+    max-width: 260px;
+    font-size: 13px;
+    color: var(--reg-text);
+    line-height: 1.45;
+    text-align: left;
+  }
+  .promptly-bubble::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 6px solid transparent;
+    border-right-color: var(--reg-border);
+  }
+  .promptly-bubble::after {
+    content: "";
+    position: absolute;
+    left: -6px;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 5px solid transparent;
+    border-right-color: rgba(8, 6, 26, 0.65);
+  }
+  @keyframes promptly-wiggle {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-8deg); }
+    75% { transform: rotate(8deg); }
+  }
+  .promptly-wiggle { animation: promptly-wiggle 0.6s ease-in-out; }
+
   .place-1 { background: linear-gradient(135deg, #ffd700, #ffaa00); color: #2a1500; }
   .place-2 { background: linear-gradient(135deg, #d8d8e0, #9ea0b0); color: #20212a; }
   .place-3 { background: linear-gradient(135deg, #cd7f32, #8a4f1d); color: #fff; }
@@ -913,6 +964,10 @@
       <div class="title-text">Audit <span class="accent">Trail</span></div>
     </div>
     <div class="subtitle">Regulaido Speedways &middot; Got Hands Edition</div>
+    <div class="promptly-corner" id="promptly-title">
+      <img src="promptly.webp" alt="Promptly" id="promptly-title-img" />
+      <div class="promptly-bubble" id="promptly-title-bubble"></div>
+    </div>
     <div class="controls-grid">
       <div style="font-weight:700; color:#7b75ff;">P1 Controls (WASD)</div><div style="font-weight:700; color:#ff4d6d;">P2 Controls (Arrows)</div>
       <div><span class="key">W</span> / <span class="key">A</span> / <span class="key">S</span> / <span class="key">D</span> - Drive</div><div><span class="key">↑</span> / <span class="key">←</span> / <span class="key">↓</span> / <span class="key">→</span> - Drive</div>
@@ -926,6 +981,7 @@
     <div style="display:flex; flex-direction:column; gap:10px;">
       <button class="btn" id="start-1p-btn">1 Player Race</button>
       <button class="btn btn-alt" id="start-2p-btn">2 Players Split-Screen</button>
+      <button class="btn btn-alt" id="start-battle-btn">Battle Arena</button>
       <button class="btn btn-alt" id="start-p2p-btn">Online PvP</button>
       <button class="btn btn-alt" id="settings-btn" type="button">Settings</button>
     </div>
@@ -954,6 +1010,35 @@
           <input id="sfx-volume-input" class="volume-slider" type="range" min="0" max="100" step="1">
           <span class="volume-value" id="sfx-volume-value">100%</span>
         </label>
+      </div>
+      <div class="settings-label" style="margin-top:14px;">Race Setup</div>
+      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">Laps</div>
+      <div id="laps-group" style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn toggle-btn" data-laps="1" type="button" style="flex:1;">1</button>
+        <button class="btn toggle-btn" data-laps="3" type="button" style="flex:1;">3</button>
+        <button class="btn toggle-btn" data-laps="5" type="button" style="flex:1;">5</button>
+        <button class="btn toggle-btn" data-laps="7" type="button" style="flex:1;">7</button>
+      </div>
+      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">Race Series</div>
+      <div class="settings-group" id="series-group" style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn toggle-btn" data-series="1" type="button" style="flex:1;">Single</button>
+        <button class="btn toggle-btn" data-series="3" type="button" style="flex:1;">3 Races</button>
+        <button class="btn toggle-btn" data-series="5" type="button" style="flex:1;">5 Races</button>
+        <button class="btn toggle-btn" data-series="7" type="button" style="flex:1;">7 Races</button>
+      </div>
+      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">AI Opponents</div>
+      <div id="aicount-group" style="display:flex;gap:8px;margin-bottom:12px;">
+        <button class="btn toggle-btn" data-aicount="0" type="button" style="flex:1;">0</button>
+        <button class="btn toggle-btn" data-aicount="1" type="button" style="flex:1;">1</button>
+        <button class="btn toggle-btn" data-aicount="2" type="button" style="flex:1;">2</button>
+        <button class="btn toggle-btn" data-aicount="3" type="button" style="flex:1;">3</button>
+        <button class="btn toggle-btn" data-aicount="4" type="button" style="flex:1;">4</button>
+      </div>
+      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">AI Difficulty</div>
+      <div id="aidiff-group" style="display:flex;gap:8px;margin-bottom:4px;">
+        <button class="btn toggle-btn" data-aidiff="easy" type="button" style="flex:1;">Easy</button>
+        <button class="btn toggle-btn" data-aidiff="normal" type="button" style="flex:1;">Normal</button>
+        <button class="btn toggle-btn" data-aidiff="hard" type="button" style="flex:1;">Hard</button>
       </div>
       <div class="settings-actions">
         <button class="btn btn-alt" id="settings-back-btn" type="button">Back to Menu</button>
@@ -1013,9 +1098,20 @@
     </div>
 
     <!-- Map Selection Section -->
-    <div class="map-select-section">
-      <div class="map-select-title">Select Circuit Track</div>
+    <div class="map-select-section" id="map-select-section">
+      <div class="map-select-title" id="map-select-title">Select Circuit Track</div>
       <div class="map-select-container" id="maps-container"></div>
+    </div>
+
+    <!-- Battle Setup Section -->
+    <div class="ai-select-section" id="battle-select-section" style="display:none;">
+      <div class="map-select-title">Starting Approvals</div>
+      <div id="approvals-group" style="display:flex;gap:8px;justify-content:center;">
+        <button class="btn toggle-btn" data-approvals="3" type="button">3</button>
+        <button class="btn toggle-btn" data-approvals="4" type="button">4</button>
+        <button class="btn toggle-btn" data-approvals="5" type="button">5</button>
+      </div>
+      <div class="ai-helper-text" style="text-align:center;margin-top:6px;">Get rivals' submissions REVOKED. Lose all your Approvals and you're REJECTED. Opponent count &amp; difficulty are in Settings.</div>
     </div>
 
     <div class="ai-select-section" id="ai-select-section">
@@ -1054,8 +1150,13 @@
   <div id="finish-screen" class="overlay hidden">
     <div class="title-text" id="finish-title">Finish!</div>
     <div class="results" id="finish-results"></div>
-    <button class="btn" id="restart-btn">Race Again</button>
-    <div class="hint">or press R to restart · Esc for main menu</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top: 4px;">
+      <button class="btn" id="restart-btn">Rematch</button>
+      <button class="btn btn-alt" id="next-track-btn" type="button">Next Track</button>
+      <button class="btn btn-alt" id="finish-menu-btn" type="button">Main Menu</button>
+    </div>
+    <div class="hint" id="finish-tournament-wait" style="display:none;">Waiting for host…</div>
+    <div class="hint">Rematch · R to change setup · Esc for main menu</div>
   </div>
 
 <script>
@@ -1081,9 +1182,12 @@ const finishResults = document.getElementById("finish-results");
 const finishTitle = document.getElementById("finish-title");
 const start1pBtn = document.getElementById("start-1p-btn");
 const start2pBtn = document.getElementById("start-2p-btn");
+const startBattleBtn = document.getElementById("start-battle-btn");
 const driveBtn = document.getElementById("drive-btn");
 const selectBackBtn = document.getElementById("select-back-btn");
 const restartBtn = document.getElementById("restart-btn");
+const nextTrackBtn = document.getElementById("next-track-btn");
+const finishMenuBtn = document.getElementById("finish-menu-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const settingsBackBtn = document.getElementById("settings-back-btn");
 const musicVolumeInput = document.getElementById("music-volume-input");
@@ -1144,6 +1248,10 @@ function saveGameSettings(patch = {}) {
       muted: !!Sound?.muted,
       musicVolume: Sound?.musicVolume ?? savedSettings.musicVolume ?? 0.8,
       sfxVolume: Sound?.sfxVolume ?? savedSettings.sfxVolume ?? 1.0,
+      totalLaps: typeof TOTAL_LAPS === "number" ? TOTAL_LAPS : (savedSettings.totalLaps ?? 3),
+      seriesRaces: typeof seriesRaces === "number" ? seriesRaces : (savedSettings.seriesRaces ?? 1),
+      aiCount: typeof aiCount === "number" ? aiCount : (savedSettings.aiCount ?? 4),
+      aiDifficulty: typeof aiDifficulty === "string" ? aiDifficulty : (savedSettings.aiDifficulty ?? "normal"),
       ...patch,
     };
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
@@ -1156,6 +1264,48 @@ function normalizeVolume(value, fallback = 1) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(0, Math.min(1, n));
+}
+
+// ---- Personal best records (per map) ----
+const RECORDS_STORAGE_KEY = "turboKartDash.records.v1";
+
+function loadRecords() {
+  try {
+    const raw = localStorage.getItem(RECORDS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function getMapRecord(mapId) {
+  const all = loadRecords();
+  return all[mapId] || null;
+}
+
+// Update stored bests for a map. Returns which records were beaten this run.
+function updateMapRecord(mapId, { total, lap } = {}) {
+  const beaten = { total: false, lap: false };
+  if (!mapId) return beaten;
+  try {
+    const all = loadRecords();
+    const cur = all[mapId] || {};
+    if (Number.isFinite(total) && total > 0 && (!Number.isFinite(cur.bestTotal) || total < cur.bestTotal)) {
+      cur.bestTotal = total;
+      beaten.total = true;
+    }
+    if (Number.isFinite(lap) && lap > 0 && (!Number.isFinite(cur.bestLap) || lap < cur.bestLap)) {
+      cur.bestLap = lap;
+      beaten.lap = true;
+    }
+    all[mapId] = cur;
+    localStorage.setItem(RECORDS_STORAGE_KEY, JSON.stringify(all));
+  } catch (e) {
+    // Storage unavailable (private mode / sandbox) — records just won't persist.
+  }
+  return beaten;
 }
 
 // ---- Game Tuning Constants ----
@@ -1209,6 +1359,10 @@ const TUNING = {
 
   // Music
   FINAL_LAP_TEMPO_BOOST: 18,
+
+  // Catch-up boost for trailing human karts
+  PLAYER_CATCHUP_MAX: 0.12,
+  PLAYER_CATCHUP_RANGE: 900,
 
   // P2P sync
   P2P_MAX_BUFFERED_BYTES: 64 * 1024,
@@ -1715,6 +1869,9 @@ function applyDeauthShockwave(sourceKart) {
     game.shake = Math.max(game.shake, 7 + affected * 2);
     game.flash = Math.max(game.flash, 6 + affected);
     showComboHit(sourceKart, affected);
+    if (sourceKart.isPlayer || (game.player && dist(sourceKart.x, sourceKart.y, game.player.x, game.player.y) < 600)) {
+      Sound.duckMusic(0.5, 340);
+    }
   }
 
   // Spawn 3D shockwave rings
@@ -2213,8 +2370,10 @@ function scheduleFinishRace(delay = 900) {
   }, delay);
 }
 
-function eliminateKart(kart, label = "ELIMINATED!", x = null, y = null, color = "#ff3366") {
+function eliminateKart(kart, label = "ELIMINATED!", x = null, y = null, color = "#ff3366", killer = null) {
   if (!kart || kart.eliminated) return;
+  // Remember who knocked us out (for the follow-your-killer spectator chain / end screen)
+  kart.killedBy = killer || kart.lastAttacker || null;
   const hitX = x !== null ? x : kart.x;
   const hitY = y !== null ? y : kart.y;
   kart.eliminated = true;
@@ -2246,9 +2405,145 @@ function eliminateKart(kart, label = "ELIMINATED!", x = null, y = null, color = 
       drag: 0.98
     });
   }
-  if (areAllHumansDone()) {
+  // In Battle we keep the match running after the human dies (they spectate); checkBattleEnd()
+  // ends it on last-standing / time-up. Other modes finish once all humans are done.
+  if (areAllHumansDone() && !isBattleMode()) {
     scheduleFinishRace(900);
   }
+}
+
+// Battle mode: revoke one Approval from a kart that just got hit. Eliminates at zero.
+function popApproval(kart) {
+  if (!kart || kart.eliminated) return;
+  if ((kart.approvals || 0) <= 0) return;
+  kart.approvals--;
+  if (kart.isPlayer) {
+    game.rlLosses = (game.rlLosses || 0) + 1; // headless RL: own life lost this frame
+    Sound.approvalPop();
+    game.shake = Math.max(game.shake, 6);
+  } else {
+    Sound.spatialTone(kart.x, kart.y, 200, 0.14, "sawtooth", 0.12, 90);
+  }
+  if (game.particles) {
+    game.particles.burst(kart.x, kart.y - 26, "#ff3366", 14, { type: "spark", spdMin: 1.5, spdMax: 4 });
+    game.particles.add({
+      type: "text", text: "REVOKED!", x: kart.x, y: kart.y - 34,
+      vx: 0, vy: -1.1, life: 50, maxLife: 50, size: 15, color: "#ff3366", drag: 0.98,
+    });
+  }
+  // Reward whoever caused this hit (esp. the human) with a clear "you stole a life" cue.
+  const attacker = kart.lastAttacker;
+  if (attacker && attacker !== kart && !attacker.eliminated && (game.raceTime - (kart.lastAttackerAt || 0)) < 2) {
+    attacker.battleSteals = (attacker.battleSteals || 0) + 1; // pops scoreboard (all karts)
+    if (attacker.isPlayer) {
+      game.rlSteals = (game.rlSteals || 0) + 1; // headless RL: player stole a life this frame
+      if (Sound.approvalPop) Sound.approvalPop();
+      game.shake = Math.max(game.shake, 7);
+      game.flash = Math.max(game.flash, 4);
+    }
+    if (game.particles) {
+      game.particles.add({
+        type: "text", text: attacker.isPlayer ? "+1 STEAL!" : "STOLEN!", x: kart.x, y: kart.y - 50,
+        vx: 0, vy: -1.2, life: 60, maxLife: 60, size: 17, color: "#a4ff80", drag: 0.98,
+      });
+    }
+  }
+  if (kart.approvals <= 0) {
+    eliminateKart(kart, "REJECTED!", kart.x, kart.y, "#ff3366", kart.lastAttacker);
+  }
+}
+
+// Give every active kart its starting Approvals and clean combat state. Must run AFTER
+// all kart objects are final: headless mode replaces game.player (enableHeadlessAgent)
+// and, in self-play, game.ais (configureHeadlessEpisode) with fresh karts whose
+// `approvals` is undefined — popApproval() no-ops on those, making them unkillable.
+function initBattleKartState() {
+  const n = clampApprovals(game.battleApprovals);
+  game.battleTimeLeft = game.battleDuration;
+  game.spectateTarget = null;
+  for (const k of getActiveKarts()) {
+    if (!k) continue;
+    k.approvals = n;
+    k.battleSteals = 0;
+    k.eliminated = false;
+    k._battleSpinSeen = false;
+    k.killedBy = null;
+    k.lastAttacker = null;
+    k.lastAttackerAt = 0;
+    k.recoverGraceTimer = 0;
+  }
+}
+
+// Headless RL shaping: record that `attacker` landed an offensive hit on a rival this frame.
+// Consumed (and reset) by computeHeadlessBattleReward(); harmless during interactive play.
+function registerBattleHit(attacker) {
+  if (attacker && attacker.isPlayer && isBattleMode()) game.rlHits = (game.rlHits || 0) + 1;
+}
+
+// Detects new spin-out events (rising edge) and revokes an approval per hit.
+function updateBattleApprovals() {
+  if (!isBattleMode()) return;
+  const grace = game.raceTime < 1.5; // ignore rocket-start burnout at the line
+  for (const k of getActiveKarts()) {
+    if (!k) continue;
+    const spinning = k.spinoutTimer > 0;
+    if (spinning && !k._battleSpinSeen) {
+      k._battleSpinSeen = true;
+      if (!grace && !k.eliminated) popApproval(k);
+    } else if (!spinning) {
+      k._battleSpinSeen = false;
+    }
+  }
+}
+
+// Ends the battle when time runs out or only one kart is left standing.
+function checkBattleEnd() {
+  if (!isBattleMode() || game.state !== STATE.RACING) return;
+  const active = getActiveKarts();
+  const alive = active.filter((k) => k && !k.eliminated);
+  const timeUp = game.battleTimeLeft <= 0;
+  // Last-one-standing only counts as a win when there were rivals to begin with.
+  const lastStanding = active.length > 1 && alive.length <= 1;
+  if (timeUp || lastStanding) {
+    // Mark any survivors' finish time so ranking orders them ahead of the eliminated.
+    for (const k of alive) {
+      if (!k.finished) k.finishTime = game.raceTime;
+    }
+    finishRace();
+  }
+}
+
+// The living kart with the most Approvals — used as a spectator fallback if the kill chain breaks.
+function battleLeader() {
+  const alive = getActiveKarts().filter((k) => k && !k.eliminated);
+  if (!alive.length) return null;
+  return alive.reduce((best, k) => ((k.approvals || 0) > (best.approvals || 0) ? k : best), alive[0]);
+}
+
+// Who to watch after `victim` is out: follow their killer if still alive, else the current leader.
+function pickSpectateTarget(victim) {
+  const killer = victim && victim.killedBy;
+  if (killer && !killer.eliminated) return killer;
+  return battleLeader();
+}
+
+// Battle spectator chain: once you're rejected you follow your killer; when they get rejected you
+// follow whoever got them, and so on, until one kart is left standing.
+function updateSpectate() {
+  if (!isBattleMode()) { game.spectateTarget = null; return; }
+  const p = game.player;
+  if (!p || !p.eliminated) { game.spectateTarget = null; return; }
+  if (!game.spectateTarget) {
+    game.spectateTarget = pickSpectateTarget(p);        // follow your killer
+  } else if (game.spectateTarget.eliminated) {
+    game.spectateTarget = pickSpectateTarget(game.spectateTarget); // hop to their killer
+  }
+}
+
+// Kart the camera should follow: the spectated kart while dead in Battle, otherwise the player.
+function getViewKart() {
+  if (isBattleMode() && game.spectateTarget && !game.spectateTarget.eliminated) return game.spectateTarget;
+  return game.player;
 }
 
 function absorbFatalHitWithShield(kart, x, y) {
@@ -2294,6 +2589,60 @@ function drawKartNameTag(ctx, kart, time) {
   ctx.globalAlpha = alpha;
   ctx.fillText(kart.name, nx, ny + 1);
   ctx.restore();
+}
+
+// Draws N Approval seals centered horizontally at (x, y) in whatever space `c` is in.
+function drawApprovalSeals(c, x, y, n, time = 0, r = 8) {
+  if (n <= 0) return;
+  c.save();
+  const spacing = r * 2.4;
+  const startX = x - ((n - 1) * spacing) / 2;
+  for (let i = 0; i < n; i++) {
+    const cx = startX + i * spacing;
+    const bob = Math.sin(time * 0.006 + i * 0.9) * 1.5;
+    const cy = y + bob;
+    // Drop shadow
+    c.fillStyle = "rgba(0,0,0,0.45)";
+    c.beginPath(); c.arc(cx, cy + 1.5, r, 0, TAU); c.fill();
+    // Glowing green seal
+    c.shadowBlur = 8; c.shadowColor = "#4dffaa";
+    c.fillStyle = "#4dffaa";
+    c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.fill();
+    c.shadowBlur = 0;
+    c.strokeStyle = "#0a1f14";
+    c.lineWidth = 1.5;
+    c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.stroke();
+    // Check mark
+    c.fillStyle = "#06231a";
+    c.font = `bold ${Math.round(r * 1.5)}px sans-serif`;
+    c.textAlign = "center"; c.textBaseline = "middle";
+    c.fillText("✓", cx, cy + 0.5);
+  }
+  c.restore();
+}
+
+// Floating Approval seals above a kart in Battle mode (2D world-space).
+function drawApprovals(ctx, kart, time) {
+  if (!isBattleMode() || !kart || kart.eliminated) return;
+  drawApprovalSeals(ctx, kart.x, kart.y - 40, kart.approvals || 0, time, 8);
+}
+
+// Screen-space Approval overlay for the 3D chase cam (projects kart world pos).
+function drawApprovals3DOverlay(c, time) {
+  if (!isBattleMode() || !window.THREE || !THREE_STATE.camera) return;
+  const cam = THREE_STATE.camera;
+  const v = new THREE.Vector3();
+  for (const k of getActiveKarts()) {
+    if (!k || k.eliminated) continue;
+    const n = k.approvals || 0;
+    if (n <= 0) continue;
+    v.set(k.x, 52, k.y);
+    v.project(cam);
+    if (v.z > 1) continue; // behind the camera
+    const sx = (v.x * 0.5 + 0.5) * VIEW_W;
+    const sy = (-v.y * 0.5 + 0.5) * VIEW_H;
+    drawApprovalSeals(c, sx, sy, n, time, 7);
+  }
 }
 
 function drawSpeechBubble(ctx, kart) {
@@ -2418,6 +2767,7 @@ const Sound = {
   musicVolume: normalizeVolume(savedSettings.musicVolume, 0.8),
   sfxVolume: normalizeVolume(savedSettings.sfxVolume, 1.0),
   musicBaseGain: 0.08,
+  musicDuckGain: null,
 
   // Player 1 oscillators & gains
   engineOscP1: null,
@@ -2461,6 +2811,12 @@ const Sound = {
       this.reverb.buffer = this._buildReverbImpulse(1.35, 2.6);
       this.reverbReturn = this.ctx.createGain();
       this.reverbReturn.gain.value = 0.32;
+
+      // Dedicated music duck bus: sits between musicGain and master so SFX can
+      // momentarily dip the music without touching the user's music-volume setting.
+      this.musicDuckGain = this.ctx.createGain();
+      this.musicDuckGain.gain.value = 1.0;
+      this.musicDuckGain.connect(this.master);
 
       this.sfxGain.connect(this.master);
       this.master.connect(this.compressor);
@@ -2632,6 +2988,7 @@ const Sound = {
   },
   boost() {
     if (!this.ctx || this.muted) return;
+    this.duckMusic(0.35, 280);
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const osc2 = this.ctx.createOscillator();
@@ -2659,6 +3016,7 @@ const Sound = {
   },
   crash() {
     if (!this.ctx || this.muted) return;
+    this.duckMusic(0.45, 240);
     const t = this.ctx.currentTime;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
@@ -2679,6 +3037,7 @@ const Sound = {
   },
   lap() {
     if (!this.ctx || this.muted) return;
+    this.duckMusic(0.3, 280);
     const freqs = [523, 659, 784, 988];
     freqs.forEach((f, i) => {
       setTimeout(() => {
@@ -2737,6 +3096,7 @@ const Sound = {
   },
   finish() {
     if (!this.ctx || this.muted) return;
+    this.duckMusic(0.55, 700);
     const notes = [523, 659, 784, 1047, 1319, 1568];
     notes.forEach((f, i) => {
       setTimeout(() => {
@@ -2761,6 +3121,7 @@ const Sound = {
   },
   itembox() {
     if (!this.ctx || this.muted) return;
+    this.duckMusic(0.22, 200);
     const freqs = [660, 990, 1320];
     freqs.forEach((f, i) => {
       setTimeout(() => {
@@ -2801,6 +3162,105 @@ const Sound = {
     filter.connect(g); g.connect(this.sfxGain);
     osc.start(t); osc.stop(t + 0.3);
     osc2.start(t); osc2.stop(t + 0.3);
+  },
+  // Briefly dip the music so a punchy SFX cuts through, then recover.
+  // amount: 0..1 portion of music to remove at the dip; ms: recovery time.
+  duckMusic(amount = 0.4, ms = 220) {
+    if (!this.ctx || this.muted || !this.musicDuckGain) return;
+    const g = this.musicDuckGain.gain;
+    const now = this.ctx.currentTime;
+    const floor = Math.max(0.12, 1 - amount);
+    const recover = Math.max(0.12, ms / 1000);
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(floor, now + 0.03);
+    g.linearRampToValueAtTime(1.0, now + recover);
+  },
+  // Sparkly ascending chime for rare/powerful item rolls.
+  rareItem() {
+    if (!this.ctx || this.muted) return;
+    this.duckMusic(0.5, 320);
+    const notes = [784, 1047, 1319, 1760];
+    notes.forEach((f, i) => {
+      setTimeout(() => {
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = f * 1.5;
+        filter.Q.value = 1.5;
+        osc.type = "triangle"; osc.frequency.value = f;
+        osc2.type = "sine"; osc2.frequency.value = f * 2;
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.linearRampToValueAtTime(0.15, t + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+        osc.connect(filter); osc2.connect(filter);
+        filter.connect(g); g.connect(this.sfxGain);
+        osc.start(t); osc.stop(t + 0.24);
+        osc2.start(t); osc2.stop(t + 0.24);
+      }, i * 60);
+    });
+  },
+  // Tense rising stinger when the player crosses into the final lap.
+  finalLap() {
+    if (!this.ctx || this.muted) return;
+    this.duckMusic(0.55, 520);
+    const t0 = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const osc2 = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(700, t0);
+    filter.frequency.exponentialRampToValueAtTime(4200, t0 + 0.45);
+    osc.type = "sawtooth"; osc.frequency.setValueAtTime(220, t0);
+    osc.frequency.exponentialRampToValueAtTime(660, t0 + 0.5);
+    osc2.type = "square"; osc2.frequency.setValueAtTime(110, t0);
+    osc2.frequency.exponentialRampToValueAtTime(330, t0 + 0.5);
+    g.gain.setValueAtTime(0.001, t0);
+    g.gain.linearRampToValueAtTime(0.18, t0 + 0.04);
+    g.gain.setValueAtTime(0.14, t0 + 0.35);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.6);
+    osc.connect(filter); osc2.connect(filter);
+    filter.connect(g); g.connect(this.sfxGain);
+    osc.start(t0); osc.stop(t0 + 0.62);
+    osc2.start(t0); osc2.stop(t0 + 0.62);
+    setTimeout(() => {
+      const t = this.ctx.currentTime;
+      [880, 1175].forEach((f, i) => {
+        const o = this.ctx.createOscillator();
+        const gg = this.ctx.createGain();
+        o.type = "triangle"; o.frequency.value = f;
+        gg.gain.setValueAtTime(0.001, t + i * 0.02);
+        gg.gain.linearRampToValueAtTime(0.12, t + 0.02 + i * 0.02);
+        gg.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        o.connect(gg); gg.connect(this.sfxGain);
+        o.start(t); o.stop(t + 0.32);
+      });
+    }, 360);
+  },
+  // Harsh "rejection stamp" buzz when an approval is revoked in Battle mode.
+  approvalPop() {
+    if (!this.ctx || this.muted) return;
+    this.duckMusic(0.4, 260);
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(1400, t);
+    filter.frequency.exponentialRampToValueAtTime(300, t + 0.18);
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(320, t);
+    osc.frequency.exponentialRampToValueAtTime(90, t + 0.2);
+    g.gain.setValueAtTime(0.001, t);
+    g.gain.linearRampToValueAtTime(0.2, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    osc.connect(filter); filter.connect(g); g.connect(this.sfxGain);
+    osc.start(t); osc.stop(t + 0.26);
+    this.noise(0.12, 0.08, 800);
   },
   honk(charId) {
     if (!this.ctx || this.muted) return;
@@ -3184,7 +3644,7 @@ const Sound = {
     this.musicGain = this.ctx.createGain();
     this.musicBaseGain = this.trackIdx === 5 ? 0.09 : this.trackIdx === 3 ? 0.10 : this.trackIdx === 4 ? 0.11 : 0.08;
     this.musicGain.gain.value = this.musicBaseGain * this.musicVolume;
-    this.musicGain.connect(this.master);
+    this.musicGain.connect(this.musicDuckGain || this.master);
 
     this.nextNoteTime = this.ctx.currentTime + 0.1;
     this.stepIndex = 0;
@@ -5746,10 +6206,75 @@ const MAPS = [
     boostPadSegs: [],
     itemBoxSegs: [],
     desc: "INFINITE SURVIVAL: True open-ended trail. Drive right forever. Dragon hunts from your left. Speed ramps forever. One hit = dead. How far can you escape?"
+  },
+  {
+    name: "Compliance Colosseum",
+    id: "battle_arena",
+    arena: true,
+    musicTrack: 3,
+    worldW: 2600,
+    worldH: 2600,
+    // Wide 12-gon ring: an open arena where laps don't matter — karts roam and brawl.
+    waypoints: [
+      { x: 2250, y: 1300 },
+      { x: 2123, y: 1775 },
+      { x: 1775, y: 2123 },
+      { x: 1300, y: 2250 },
+      { x:  825, y: 2123 },
+      { x:  477, y: 1775 },
+      { x:  350, y: 1300 },
+      { x:  477, y:  825 },
+      { x:  825, y:  477 },
+      { x: 1300, y:  350 },
+      { x: 1775, y:  477 },
+      { x: 2123, y:  825 },
+    ],
+    roadHalfBase: 300,
+    segWidth: {},
+    boostPadSegs: [],
+    itemBoxSegs: [0, 2, 4, 6, 8, 10],
+    desc: "FREE-FOR-ALL BATTLE: Defend your regulatory Approvals. Hit rivals to get their submissions REVOKED. Last coder standing wins."
   }
 ];
 
-const TOTAL_LAPS = 3;
+function clampLaps(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 3;
+  return Math.max(1, Math.min(7, n));
+}
+function clampSeries(v) {
+  const n = Math.round(Number(v));
+  if (n === 3 || n === 5 || n === 7) return n;
+  return 1;
+}
+function clampAiCount(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 4;
+  return Math.max(0, Math.min(4, n));
+}
+const AI_DIFFICULTIES = { easy: 0.86, normal: 1.0, hard: 1.12 };
+function normalizeAiDifficulty(v) {
+  return Object.prototype.hasOwnProperty.call(AI_DIFFICULTIES, v) ? v : "normal";
+}
+
+const BATTLE_ARENA_ID = "battle_arena";
+function getArenaMapIdx() {
+  const idx = MAPS.findIndex((m) => m.id === BATTLE_ARENA_ID);
+  return idx >= 0 ? idx : 0;
+}
+function isBattleMode() {
+  return game.mode === "battle";
+}
+function clampApprovals(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 3;
+  return Math.max(3, Math.min(5, n));
+}
+
+let TOTAL_LAPS = clampLaps(savedSettings.totalLaps ?? 3);
+let seriesRaces = clampSeries(savedSettings.seriesRaces ?? 1);
+let aiCount = clampAiCount(savedSettings.aiCount ?? 4);
+let aiDifficulty = normalizeAiDifficulty(savedSettings.aiDifficulty);
 const CHECKPOINT_RADIUS = 80;
 
 class Track {
@@ -6445,8 +6970,8 @@ class Track {
     this.drawPath(ctx); ctx.stroke();
     ctx.setLineDash([]);
 
-    // Start/finish line (checkered)
-    if (!this.isOpen) this._drawStartLine(ctx);
+    // Start/finish line (checkered) — hidden in Battle (no laps/goal in the arena)
+    if (!this.isOpen && !isBattleMode()) this._drawStartLine(ctx);
 
     // Trees / decorations (Holographic pillars)
     this._drawDecor(ctx);
@@ -7459,6 +7984,12 @@ class Kart {
     this.gripRecovery = 1.0;
     this.eliminated = false;
 
+    // Battle mode: attacker attribution + post-recovery grace so you can't be chain-revoked
+    this.killedBy = null;
+    this.lastAttacker = null;
+    this.lastAttackerAt = 0;
+    this.recoverGraceTimer = 0;
+
     // Race progress
     this.nextCheckpoint = 1;
     this.lap = 0;
@@ -7467,6 +7998,8 @@ class Kart {
     this.progressPrevY = y;
     this.finished = false;
     this.finishTime = 0;
+    this.lapTimes = [];
+    this.lastLapAt = 0;
 
     // Visuals / SFX
     this.skidEmitTimer = 0;
@@ -7609,6 +8142,11 @@ class Kart {
     if (this.spinoutTimer > 0) {
       this.spinoutTimer -= dt;
       this.spinAngle += 0.3 * dt;
+
+      // Battle: brief invulnerability the instant you recover, so a hit can't be chained to zero
+      if (this.spinoutTimer <= 0 && isBattleMode()) {
+        this.recoverGraceTimer = Math.max(this.recoverGraceTimer || 0, 48);
+      }
 
       this.vx *= Math.pow(0.92, dt);
       this.vy *= Math.pow(0.92, dt);
@@ -7917,6 +8455,7 @@ class Kart {
     if (this.throttleLockTimer > 0) this.throttleLockTimer -= dt;
     if (this.amendmentTimer > 0) this.amendmentTimer -= dt;
     if (this.invuln > 0) this.invuln -= dt;
+    if (this.recoverGraceTimer > 0) this.recoverGraceTimer -= dt;
     if (this.mergePullVictimTimer > 0) this.mergePullVictimTimer -= dt;
 
     // Slipstream drafting search
@@ -7994,10 +8533,25 @@ class Kart {
       this.itemRollTimer -= dt;
       if (this.itemRollTimer <= 0) {
         this.itemState = "active";
-        this.itemSlot = getWeightedItem(this);
+        let rolled = getWeightedItem(this);
+        // Anti-frustration: don't hand the player the exact same item twice in a row.
+        if (this.isPlayer && rolled === this.lastItemSlot) {
+          const reroll = getWeightedItem(this);
+          if (reroll !== this.lastItemSlot) rolled = reroll;
+        }
+        this.itemSlot = rolled;
+        this.lastItemSlot = rolled;
+        const RARE_ITEMS = { hotfix: 1, mergerequest: 1, deauth: 1 };
+        const isRare = !!RARE_ITEMS[rolled];
         if (this.isPlayer && this.itemSlot) {
           const itemColor = { boost: "#fd9927", shield: "#57f2ff", handling: "#a4ff80", conflict: "#ff4d6d", placebo: "#ffcc00", doubleblind: "#bd57ff", dossier: "#57f2ff", deauth: "#ff3366", mergerequest: "#39ff14", hotfix: "#ffcc00", fasttrack: "#a4ff80" };
-          this.itemNamePopup = { name: ITEM_NAMES[this.itemSlot] || this.itemSlot.toUpperCase(), color: itemColor[this.itemSlot] || "#fff", timer: 75, maxTimer: 75 };
+          const col = itemColor[this.itemSlot] || "#fff";
+          this.itemNamePopup = { name: ITEM_NAMES[this.itemSlot] || this.itemSlot.toUpperCase(), color: col, timer: isRare ? 110 : 75, maxTimer: isRare ? 110 : 75 };
+          if (isRare) {
+            Sound.rareItem();
+            game.flash = Math.max(game.flash, 5);
+            if (game.particles) game.particles.burst(this.x, this.y, col, 16, { spdMin: 1.5, spdMax: 4.5 });
+          }
         }
         if (!this.isPlayer) {
           this.aiItemUseTimer = rand(60, 180);
@@ -8294,7 +8848,28 @@ class PlayerKart extends Kart {
     if (this.ultActiveTimer > 0) this.ultActiveTimer -= dt;
 
     const onRoad = track.isOnRoad(this.x, this.y);
-    const r = this.applyPhysics(input, track, dt, onRoad);
+    let r;
+    if (!isBattleMode()) {
+      const allKarts = getActiveKarts();
+      let leaderProgress = 0;
+      for (const k of allKarts) {
+        leaderProgress = Math.max(leaderProgress, progressValue(k));
+      }
+      const deficit = leaderProgress - progressValue(this);
+      let catchupMult = 1.0;
+      if (deficit > 0) {
+        catchupMult = 1 + Math.min(TUNING.PLAYER_CATCHUP_MAX, (deficit / TUNING.PLAYER_CATCHUP_RANGE) * TUNING.PLAYER_CATCHUP_MAX);
+      }
+      const origMaxSpeed = this.maxSpeed;
+      const origAcceleration = this.acceleration;
+      this.maxSpeed *= catchupMult;
+      this.acceleration *= catchupMult;
+      r = this.applyPhysics(input, track, dt, onRoad);
+      this.maxSpeed = origMaxSpeed;
+      this.acceleration = origAcceleration;
+    } else {
+      r = this.applyPhysics(input, track, dt, onRoad);
+    }
 
     // Off-road effects (digital green dust particles + spatialized static noise)
     if (!onRoad && this.speed() > 1.0) {
@@ -8424,6 +8999,27 @@ class AIKart extends Kart {
     let aimX = lerp(target.x, next.x, lookAheadBlend) + seg.nx * (this.lateralOffset * (segHalfW * 0.45));
     let aimY = lerp(target.y, next.y, lookAheadBlend) + seg.ny * (this.lateralOffset * (segHalfW * 0.45));
 
+    // ---- Simple scripted Battle AI: hunt the nearest surviving rival ----
+    // (Placeholder behaviour until the RL agent is trained; battle-mode only.)
+    this._battleTarget = null;
+    this._battleTargetDist = Infinity;
+    if (isBattleMode()) {
+      let bd = Infinity, bt = null;
+      for (const k of getActiveKarts()) {
+        if (k === this || k.eliminated || k.finished) continue;
+        const d = dist(this.x, this.y, k.x, k.y);
+        if (d < bd) { bd = d; bt = k; }
+      }
+      if (bt) {
+        this._battleTarget = bt;
+        this._battleTargetDist = bd;
+        // Steer toward the rival, but keep some pull to the ring waypoint so the
+        // AI doesn't dive into the arena's empty centre or off the outer edge.
+        aimX = lerp(aimX, bt.x, 0.62);
+        aimY = lerp(aimY, bt.y, 0.62);
+      }
+    }
+
     // Curvature lookahead corners
     const currentWP = track.waypoints[(this.aiTargetIdx - 1 + track.n) % track.n];
     const farWP = track.waypoints[(this.aiTargetIdx + 1) % track.n];
@@ -8472,7 +9068,8 @@ class AIKart extends Kart {
       ...(game.hazards || []).map(h => ({ x: h.x, y: h.y, r: h.r || 15, isHazard: true })),
       ...(game.track.movingObjects || []).map(o => ({ x: o.x, y: o.y, r: o.r || 24, isHazard: true })),
       ...(game.track.regulatoryDragon ? [{ x: game.track.regulatoryDragon.x, y: game.track.regulatoryDragon.y, r: game.track.regulatoryDragon.r || 70, isHazard: true }] : []),
-      ...getActiveKarts().filter(k => k !== this).map(k => ({ x: k.x, y: k.y, r: 18, isHazard: false }))
+      // In Battle mode the AI should ram rivals, not avoid them.
+      ...(isBattleMode() ? [] : getActiveKarts().filter(k => k !== this).map(k => ({ x: k.x, y: k.y, r: 18, isHazard: false })))
     ];
 
     for (const obs of obstacles) {
@@ -8523,7 +9120,20 @@ class AIKart extends Kart {
       let shouldUse = false;
       const rank = rankAll().indexOf(this) + 1;
 
-      if (this.itemSlot === "conflict") {
+      if (isBattleMode()) {
+        // Aggressive scripted use: attack when a rival is close, boost to chase when far.
+        const td = this._battleTargetDist;
+        const OFFENSIVE = { dossier: 1, deauth: 1, conflict: 1, mergerequest: 1, hotfix: 1 };
+        if (OFFENSIVE[this.itemSlot]) {
+          shouldUse = td < 260;
+        } else if (this.itemSlot === "boost" || this.itemSlot === "fasttrack") {
+          shouldUse = td > 200 || td === Infinity;
+        } else if (this.itemSlot === "shield" || this.itemSlot === "handling") {
+          shouldUse = td < 170;
+        } else {
+          shouldUse = Math.random() < 0.01 * dt;
+        }
+      } else if (this.itemSlot === "conflict") {
         const rearLookDist = 180;
         let playerBehind = false;
         for (const k of getActiveKarts()) {
@@ -8748,12 +9358,20 @@ const game = {
   dragonWarnTimer: 0,
   dragonEscape: null,
   bestLap: 0,
+  newRecord: null,
+  mapRecordCache: null,
+  mode: "race",
+  battleApprovals: 3,
+  battleDuration: 120,
+  battleTimeLeft: 0,
+  spectateTarget: null,
   p2pLastPickupSyncAt: 0,
   p2pLastHostSyncAt: 0,
   p2pLastGuestSyncAt: 0,
   p2pLastHazardSyncAt: 0,
   p2pPing: 0,
   p2pLastPingAt: 0,
+  tournament: null,
 };
 
 function triggerHitFlash(text, color, duration = 90, kart = null) {
@@ -8874,6 +9492,34 @@ function drawStatusEffects(ctx, x, y, kart, time) {
   ctx.restore();
 }
 
+// "You were rejected — now spectating X" banner + the current kill-chain target.
+function drawSpectateBanner(c, cx, y, time) {
+  const t = game.spectateTarget;
+  const killerName = (game.player && game.player.killedBy && game.player.killedBy.name) || null;
+  c.save();
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+
+  // Headline
+  c.shadowBlur = 10; c.shadowColor = "#ff3366";
+  c.fillStyle = "#ff3366";
+  c.font = "bold 20px sans-serif";
+  c.fillText("SUBMISSION REJECTED", cx, y);
+  c.shadowBlur = 0;
+
+  // Subline: who we're watching now
+  if (t) {
+    c.fillStyle = "#a8acd0";
+    c.font = "12px sans-serif";
+    const followingKiller = killerName && t.name === killerName;
+    c.fillText(followingKiller ? "Following your rival" : "Following the leader", cx, y + 20);
+    c.fillStyle = t.color || "#fff";
+    c.font = "bold 16px sans-serif";
+    c.fillText(`\u25B6 ${t.name}  (${Math.max(0, t.approvals || 0)} \u2713)`, cx, y + 40);
+  }
+  c.restore();
+}
+
 function drawWrongWay(ctx, kart, left, top, width, height, time) {
   if (!kart || !kart.wrongWayTimer || kart.wrongWayTimer < 15) return;
   const alpha = clamp((kart.wrongWayTimer - 15) / 20, 0, 1);
@@ -8909,6 +9555,7 @@ function drawWrongWay(ctx, kart, left, top, width, height, time) {
 }
 
 function drawPositionChange(ctx, x, y, kart) {
+  if (isBattleMode()) return; // no race positions in Battle
   if (!kart || !kart.posChangeFlash || kart.posChangeFlash.timer <= 0) return;
   const pf = kart.posChangeFlash;
   const alpha = clamp(pf.timer / 20, 0, 1) * clamp((pf.maxTimer - pf.timer) / 6, 0, 1);
@@ -9200,7 +9847,12 @@ function updateP2pStartButton() {
 }
 
 function startP2pRaceFromSelection() {
-  if (!game.p2pMode || game.p2pRole !== "host" || !areAllP2pPlayersReady()) return;
+  if (!game.p2pMode || game.p2pRole !== "host") return;
+  const fromFinish = game.state === STATE.FINISHED;
+  if (!fromFinish && !areAllP2pPlayersReady()) return;
+  if (!game.tournament && isTournamentEligible()) {
+    game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
+  }
   // Regenerate dragon trail with current seed so host has fresh deterministic trail
   if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
     _dragonTrailSeed = Math.floor(Math.random() * 2147483647);
@@ -9216,7 +9868,8 @@ function startP2pRaceFromSelection() {
     players: game.p2pPlayers,
     mapIdx: game.selectedMapIdx,
     trackIdx: Sound.trackIdx,
-    dragonSeed: _dragonTrailSeed
+    dragonSeed: _dragonTrailSeed,
+    tournament: game.tournament
   });
 }
 
@@ -9406,11 +10059,32 @@ function showSelectScreen() {
     driveBtn.style.display = "block";
   }
 
+  const battleSection = document.getElementById("battle-select-section");
+  const mapSection = document.getElementById("map-select-section");
+  if (isBattleMode()) {
+    if (mapSection) mapSection.style.display = "none";
+    if (aiSelectSection) aiSelectSection.style.display = "flex"; // let players pick battle-trained AIs (CSS default is none)
+    if (battleSection) battleSection.style.display = "flex";
+    document.getElementById("lobby-subtitle").innerText = "Battle Arena: Choose Your Coder";
+    document.getElementById("lobby-hint").innerText = "Press Space or Enter to Battle!";
+    driveBtn.textContent = "Battle!";
+    renderApprovalsSelect();
+  } else {
+    if (mapSection) mapSection.style.display = "";
+    if (battleSection) battleSection.style.display = "none";
+  }
+
   renderSelectScreen();
   updateSelectionHighlight();
   renderMapSelect();
   if (!game.multiplayer) refreshAiModelSelector();
   updateP2pStartButton();
+}
+
+function renderApprovalsSelect() {
+  document.querySelectorAll("#approvals-group [data-approvals]").forEach((b) => {
+    b.classList.toggle("active", Number(b.dataset.approvals) === game.battleApprovals);
+  });
 }
 
 function renderMapSelect() {
@@ -9421,6 +10095,8 @@ function renderMapSelect() {
   const isP2pGuest = (game.p2pMode && game.p2pRole === "guest");
 
   MAPS.forEach((map, idx) => {
+    // Arena maps only appear in Battle mode; regular tracks only outside it.
+    if (!!map.arena !== isBattleMode()) return;
     const card = document.createElement("div");
     card.className = "map-card" + (idx === (game.selectedMapIdx || 0) ? " selected" : "");
     if (isP2pGuest) {
@@ -9571,7 +10247,7 @@ function addP2pGuest(conn) {
   const taken = new Set(game.p2pPlayers.map(p => p.id));
   let slot = 1;
   while (taken.has("guest_" + slot)) slot++;
-  if (slot > 3) {
+  if (slot > 7) {
     try { conn.send({ type: "lobby_full" }); } catch(e) {}
     try { conn.close(); } catch(e) {}
     return null;
@@ -9652,6 +10328,10 @@ function broadcastP2pLobby() {
   renderP2pLobby();
 }
 
+function gridSlot(i) {
+  return { f: -5 - 40 * i, l: (i % 2 === 0 ? -28 : 28) };
+}
+
 function buildRace() {
   game.track = new Track();
   game.particles = new ParticleSystem();
@@ -9706,15 +10386,9 @@ function buildRace() {
   const playerChar = CHARACTERS[game.selectedCharIdx || 0];
 
   if (game.p2pMode && game.p2pPlayers && game.p2pPlayers.length) {
-    const grid = [
-      { f: -5, l: -28 },
-      { f: -45, l: 28 },
-      { f: -85, l: -28 },
-      { f: -125, l: 28 }
-    ];
-    const racePlayers = game.p2pPlayers.slice(0, 4);
+    const racePlayers = game.p2pPlayers.slice(0, 8);
     racePlayers.forEach((p, idx) => {
-      const pos = grid[idx];
+      const pos = gridSlot(idx);
       const x = sx + fx * pos.f + lx * pos.l;
       const y = sy + fy * pos.f + ly * pos.l;
       const char = CHARACTERS[p.charIdx || 0];
@@ -9730,68 +10404,68 @@ function buildRace() {
       }
     });
 
-    const usedChars = new Set(racePlayers.map(p => p.charIdx || 0));
-    const aiChars = CHARACTERS.filter((_, idx) => !usedChars.has(idx));
-    const aiSkills = [0.95, 0.97, 0.99];
-    for (let i = racePlayers.length; i < 4; i++) {
-      const pos = grid[i];
-      const x = sx + fx * pos.f + lx * pos.l;
-      const y = sy + fy * pos.f + ly * pos.l;
-      game.ais.push(new AIKart(x, y, ang, aiChars[i - racePlayers.length] || CHARACTERS[(i + 1) % CHARACTERS.length], aiSkills[i - racePlayers.length] || 0.96));
+    if (racePlayers.length < 4) {
+      const usedChars = new Set(racePlayers.map(p => p.charIdx || 0));
+      const aiChars = CHARACTERS.filter((_, idx) => !usedChars.has(idx));
+      const aiSkills = [0.95, 0.97, 0.99];
+      for (let i = racePlayers.length; i < 4; i++) {
+        const pos = gridSlot(i);
+        const x = sx + fx * pos.f + lx * pos.l;
+        const y = sy + fy * pos.f + ly * pos.l;
+        game.ais.push(new AIKart(x, y, ang, aiChars[i - racePlayers.length] || CHARACTERS[(i + 1) % CHARACTERS.length], aiSkills[i - racePlayers.length] || 0.96));
+      }
     }
 
     game.totalRacers = racePlayers.length + game.ais.length;
   } else if (game.multiplayer) {
     const player2Char = CHARACTERS[game.selectedCharIdx2 !== undefined ? game.selectedCharIdx2 : 1];
 
-    // Position 0 (Player 1)
-    const p1x = sx + fx * -5 + lx * -28;
-    const p1y = sy + fy * -5 + ly * -28;
+    const p1pos = gridSlot(0);
+    const p1x = sx + fx * p1pos.f + lx * p1pos.l;
+    const p1y = sy + fy * p1pos.f + ly * p1pos.l;
     game.player = new PlayerKart(p1x, p1y, ang, playerChar, 1);
 
-    // Position 1 (Player 2)
-    const p2x = sx + fx * -45 + lx * 28;
-    const p2y = sy + fy * -45 + ly * 28;
+    const p2pos = gridSlot(1);
+    const p2x = sx + fx * p2pos.f + lx * p2pos.l;
+    const p2y = sy + fy * p2pos.f + ly * p2pos.l;
     game.player2 = new PlayerKart(p2x, p2y, ang, player2Char, 2);
 
     let aiChars = CHARACTERS.filter((_, idx) => idx !== (game.selectedCharIdx || 0) && idx !== (game.selectedCharIdx2 || 0));
     if (aiChars.length < 2) {
       aiChars = CHARACTERS.filter((_, idx) => idx !== (game.selectedCharIdx || 0));
     }
-    const aiSkills = [0.96, 0.98];
+    const diffMult2p = AI_DIFFICULTIES[aiDifficulty] || 1.0;
+    const aiSkills = [0.96 * diffMult2p, 0.98 * diffMult2p];
 
-    // Position 2 (AI 0)
-    const ai0_x = sx + fx * -85 + lx * -28;
-    const ai0_y = sy + fy * -85 + ly * -28;
+    const ai0pos = gridSlot(2);
+    const ai0_x = sx + fx * ai0pos.f + lx * ai0pos.l;
+    const ai0_y = sy + fy * ai0pos.f + ly * ai0pos.l;
     game.ais.push(new AIKart(ai0_x, ai0_y, ang, aiChars[0] || CHARACTERS[2], aiSkills[0]));
 
-    // Position 3 (AI 1)
-    const ai1_x = sx + fx * -125 + lx * 28;
-    const ai1_y = sy + fy * -125 + ly * 28;
+    const ai1pos = gridSlot(3);
+    const ai1_x = sx + fx * ai1pos.f + lx * ai1pos.l;
+    const ai1_y = sy + fy * ai1pos.f + ly * ai1pos.l;
     game.ais.push(new AIKart(ai1_x, ai1_y, ang, aiChars[1] || CHARACTERS[3], aiSkills[1]));
 
     game.totalRacers = 2 + game.ais.length;
   } else {
     game.player2 = null;
 
-    // Staggered 2-wide grid: row 0 front, row 3 back
-    const px = sx + fx * -5 + lx * -28;
-    const py = sy + fy * -5 + ly * -28;
+    const p0pos = gridSlot(0);
+    const px = sx + fx * p0pos.f + lx * p0pos.l;
+    const py = sy + fy * p0pos.f + ly * p0pos.l;
     game.player = new PlayerKart(px, py, ang, playerChar, 1);
 
     const aiChars = CHARACTERS.filter((_, idx) => idx !== (game.selectedCharIdx || 0));
-    const aiSkills = [0.95, 0.97, 0.99, 1.01];
-    const aiGrid = [
-      { f: -45, l: 28 },
-      { f: -85, l: -28 },
-      { f: -125, l: 28 },
-      { f: -165, l: -28 },
-    ];
-    aiGrid.forEach((pos, idx) => {
+    const baseSkills = [0.95, 0.97, 0.99, 1.01];
+    const diffMult = AI_DIFFICULTIES[aiDifficulty] || 1.0;
+    const n = clampAiCount(aiCount);
+    for (let idx = 0; idx < n; idx++) {
+      const pos = gridSlot(idx + 1);
       const x = sx + fx * pos.f + lx * pos.l;
       const y = sy + fy * pos.f + ly * pos.l;
-      game.ais.push(new AIKart(x, y, ang, aiChars[idx], aiSkills[idx]));
-    });
+      game.ais.push(new AIKart(x, y, ang, aiChars[idx % aiChars.length], baseSkills[idx] * diffMult));
+    }
 
     applySelectedAiModelToOpponents();
     game.totalRacers = 1 + game.ais.length;
@@ -9799,6 +10473,10 @@ function buildRace() {
 
   if (mapId === "dragon_escape") {
     game.dragonEscape = createDragonEscapeEntity();
+  }
+
+  if (isBattleMode()) {
+    initBattleKartState();
   }
 
   // Camera centered on player
@@ -9880,7 +10558,98 @@ function applyRocketStart() {
 function startRace() {
   game.state = STATE.RACING;
   game.startTime = performance.now();
+  for (const k of getActiveKarts()) {
+    if (!k) continue;
+    k.lapTimes = [];
+    k.lastLapAt = game.startTime;
+  }
+  game.newRecord = null;
+  game.mapRecordCache = (!game.multiplayer && !isDragonEscape() && !isBattleMode())
+    ? getMapRecord(MAPS[game.selectedMapIdx || 0].id)
+    : null;
   Sound.countdown(true);
+}
+
+const GP_POINTS = [15, 12, 10, 8, 6, 4, 2, 1];
+
+function tournamentKey(kart) {
+  return kart.p2pId || (kart.isPlayer ? "p" + (kart.playerIndex || 1) : "ai_" + kart.charId);
+}
+
+function isTournamentEligible() {
+  const m = MAPS[game.selectedMapIdx || 0];
+  return !isBattleMode() && !m.arena && m.id !== "dragon_escape" && seriesRaces > 1;
+}
+
+function getNextCircuitMapIdx(fromIdx) {
+  let idx = fromIdx;
+  for (let i = 0; i < MAPS.length; i++) {
+    idx = (idx + 1) % MAPS.length;
+    const m = MAPS[idx];
+    if (!m.arena && m.id !== "dragon_escape") return idx;
+  }
+  return fromIdx;
+}
+
+function applyTournamentPoints(ranking) {
+  if (!game.tournament) return;
+  ranking.forEach((kart, i) => {
+    const key = tournamentKey(kart);
+    let entry = game.tournament.standings.find((s) => s.key === key);
+    if (!entry) {
+      entry = { key, name: kart.name, charId: kart.charId, isLocalHuman: kart === game.player, points: 0 };
+      game.tournament.standings.push(entry);
+    } else {
+      entry.name = kart.name;
+      entry.charId = kart.charId;
+    }
+    entry.points += GP_POINTS[i] || 0;
+  });
+  game.tournament.standings.sort((a, b) => b.points - a.points);
+}
+
+function getPromptlyStandingsComment(standings, isFinal) {
+  if (!standings || !standings.length) return "Let's get this audit on the road!";
+  const leader = standings[0];
+  if (isFinal) {
+    return `${leader.name} is the Champion of Compliance! Fully audited, zero findings.`;
+  }
+  if (standings.length < 2) {
+    return `${leader.name} is setting the pace — keep that compliance streak alive!`;
+  }
+  const gap = leader.points - standings[1].points;
+  if (gap >= 10) {
+    return `${leader.name} is running away with it — someone file an objection!`;
+  }
+  return `Only ${gap} points in it — this audit is far from over.`;
+}
+
+function buildTournamentStandingsHtml() {
+  const t = game.tournament;
+  if (!t || t.totalRaces <= 1) return "";
+  const isFinal = t.raceIndex + 1 >= t.totalRaces;
+  const standings = t.standings || [];
+  const comment = getPromptlyStandingsComment(standings, isFinal);
+
+  let html = `<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.1);">`;
+  html += `<div class="row" style="margin-bottom:8px;font-weight:900;color:#fff;"><span class="label">Race ${t.raceIndex + 1} of ${t.totalRaces} — Tournament Standings</span><span></span></div>`;
+  html += `<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;">`;
+  html += `<img src="promptly.webp" alt="Promptly" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;" />`;
+  html += `<div style="font-size:13px;color:var(--reg-text-dim);line-height:1.4;padding-top:4px;">${comment}</div>`;
+  html += `</div>`;
+
+  standings.forEach((s, i) => {
+    const place = i + 1;
+    const isChamp = isFinal && place === 1;
+    const rowStyle = isChamp ? "font-size:17px;color:#ffd86b;font-weight:900;" : "";
+    const nameLabel = s.name + (s.isLocalHuman ? " (You)" : "");
+    html += `<div class="row" style="${isChamp ? "background:rgba(255,216,107,0.08);border-radius:8px;padding:10px 6px;margin:2px 0;" : ""}">`;
+    html += `<span class="label" style="${rowStyle}"><span class="place-badge place-${Math.min(place, 4)}">${ordinal(place)}</span> ${nameLabel}</span>`;
+    html += `<span class="value" style="${rowStyle}">${s.points} pts</span>`;
+    html += `</div>`;
+  });
+  html += `</div>`;
+  return html;
 }
 
 function finishRace() {
@@ -9898,7 +10667,16 @@ function finishRace() {
   const finished = game.finishOrder.filter(k => k && !k.eliminated); // already in finish order
   const eliminated = all.filter(k => k.eliminated && !finished.includes(k));
   const unfinished = all.filter(k => !k.finished && !k.eliminated);
-  unfinished.sort((a, b) => progressValue(b) - progressValue(a));
+  unfinished.sort((a, b) => {
+    if (isBattleMode()) {
+      const da = (b.approvals || 0) - (a.approvals || 0);
+      if (da !== 0) return da;
+      // Battle tie-break: balloons popped beats race progress (progress is a racing concept).
+      const ds = (b.battleSteals || 0) - (a.battleSteals || 0);
+      if (ds !== 0) return ds;
+    }
+    return progressValue(b) - progressValue(a);
+  });
   eliminated.sort((a, b) => {
     const survivalDelta = (b.finishTime || 0) - (a.finishTime || 0);
     if (Math.abs(survivalDelta) > 0.001) return survivalDelta;
@@ -9907,6 +10685,14 @@ function finishRace() {
   for (const k of unfinished) finished.push(k);
   for (const k of eliminated) finished.push(k);
   game.finalRanking = finished;
+  if (game.tournament && game.tournament.totalRaces > 1) {
+    if (!game.p2pMode || game.p2pRole === "host") {
+      applyTournamentPoints(game.finalRanking);
+      if (game.p2pMode) {
+        sendP2pMessage({ type: "tournament_standings", tournament: game.tournament });
+      }
+    }
+  }
   if (!HEADLESS_MODE) {
     showFinishScreen();
     Sound.finish();
@@ -9941,6 +10727,13 @@ function rankAll() {
     if (a.finished && !b.finished) return -1;
     if (b.finished && !a.finished) return 1;
     if (a.finished && b.finished) return a.finishTime - b.finishTime;
+    if (isBattleMode()) {
+      const da = (b.approvals || 0) - (a.approvals || 0);
+      if (da !== 0) return da;
+      // Battle tie-break: balloons popped beats race progress (progress is a racing concept).
+      const ds = (b.battleSteals || 0) - (a.battleSteals || 0);
+      if (ds !== 0) return ds;
+    }
     return progressValue(b) - progressValue(a);
   });
   return sorted;
@@ -9953,17 +10746,17 @@ function getWeightedItem(kart) {
   const posRatio = totalKarts > 1 ? (rank - 1) / (totalKarts - 1) : 0;
 
   const weights = {
-    boost:        10 + posRatio * 15,
-    shield:       10 + posRatio * 5,
+    boost:        8 + posRatio * 22,
+    shield:       12 - posRatio * 4,
     handling:     10,
-    conflict:     12 - posRatio * 6,
-    placebo:      9 - posRatio * 3,
+    conflict:     14 - posRatio * 9,
+    placebo:      10 - posRatio * 5,
     doubleblind:  8 + posRatio * 3,
-    dossier:      10 + posRatio * 5,
-    deauth:       8 - posRatio * 4,
-    mergerequest: 5 + posRatio * 15,
-    hotfix:       posRatio >= 0.7 ? (posRatio * 18) : 0,
-    fasttrack:    posRatio >= 0.45 ? (posRatio * 10) : 2
+    dossier:      12 - posRatio * 4,
+    deauth:       9 - posRatio * 5,
+    mergerequest: 4 + posRatio * 20,
+    hotfix:       posRatio >= 0.6 ? (posRatio * 22) : 0,
+    fasttrack:    posRatio >= 0.4 ? (posRatio * 14) : 1
   };
 
   const entries = Object.entries(weights);
@@ -9978,17 +10771,34 @@ function getWeightedItem(kart) {
 
 function completeClosedCircuitLap(kart) {
   kart.lap++;
+  const now = performance.now();
+  if (kart.lastLapAt) {
+    kart.lapTimes.push((now - kart.lastLapAt) / 1000);
+  }
+  kart.lastLapAt = now;
   triggerQuote(kart, "lap");
   if (kart.isPlayer) Sound.lap();
   if (kart.isPlayer && kart.lap === TOTAL_LAPS - 1 && !isDragonEscape()) {
     triggerHitFlash("FINAL LAP!", "#ffd86b", 120, kart);
     game.shake = Math.max(game.shake, 6);
     game.flash = Math.max(game.flash, 8);
+    Sound.finalLap();
+  }
+  if (isBattleMode()) {
+    // In battle there is no lap-based finish; laps just loop around the arena.
+    return;
   }
   if (kart.lap >= TOTAL_LAPS) {
     kart.finished = true;
     kart.finishTime = (performance.now() - game.startTime) / 1000;
     if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
+    if (kart === game.player && !isDragonEscape() && !game.multiplayer) {
+      const bestLapThisRun = kart.lapTimes.length ? Math.min(...kart.lapTimes) : 0;
+      game.newRecord = updateMapRecord(MAPS[game.selectedMapIdx || 0].id, {
+        total: kart.finishTime,
+        lap: bestLapThisRun,
+      });
+    }
     if (kart.isPlayer) {
       const colors = ["#ff4d6d", "#a4ff80", "#7b75ff", "#ffd86b", "#00f0ff"];
       for (let i = 0; i < 75; i++) {
@@ -10047,15 +10857,17 @@ function checkProgress(kart) {
     kart.checkpointsThisLap++;
 
     if (open) {
-      // Lap milestone every 30 checkpoints
+      // Lap milestone every 30 checkpoints (Battle has no laps — checkpoints only steer the AI).
       if (kart.checkpointsThisLap >= 30) {
-        kart.lap++;
-        kart.checkpointsThisLap = 0;
-        triggerQuote(kart, "lap");
-        if (kart.isPlayer) {
-          Sound.lap();
-          game.bestLap = Math.max(game.bestLap || 0, kart.lap);
+        if (!isBattleMode()) {
+          kart.lap++;
+          triggerQuote(kart, "lap");
+          if (kart.isPlayer) {
+            Sound.lap();
+            game.bestLap = Math.max(game.bestLap || 0, kart.lap);
+          }
         }
+        kart.checkpointsThisLap = 0;
       }
       // End-of-trail safety (shouldn't happen)
       if (kart.nextCheckpoint >= checkpointCount) {
@@ -10063,10 +10875,11 @@ function checkProgress(kart) {
       }
     } else {
       // Closed circuit: final checkpoint arms the lap, the goal-line crossing completes it.
+      // In Battle we still loop nextCheckpoint (so AI keeps circling) but never count a lap.
       if (kart.nextCheckpoint >= checkpointCount) {
         kart.nextCheckpoint = 0;
       } else if (kart.nextCheckpoint === 1 && kart.checkpointsThisLap >= checkpointCount) {
-        completeClosedCircuitLap(kart);
+        if (!isBattleMode()) completeClosedCircuitLap(kart);
         kart.checkpointsThisLap = 0;
       }
     }
@@ -10245,6 +11058,32 @@ function applyP2pPickupState(data) {
 /* ============================================================
    KART vs KART COLLISION
    ============================================================ */
+// Battle mechanic: a boosted kart charging into a rival spins them out, which costs the
+// victim one Approval (life) via updateBattleApprovals() on the spinout rising edge.
+// A shield blocks the ram instead. Returns true if the ram connected.
+function tryBoostRam(att, def, dirx, diry) {
+  if (!isBattleMode()) return false;
+  if (att.boostTimer <= 0 || def.boostTimer > 0) return false; // attacker must be boosted, victim not
+  if (def.eliminated || def.finished || def.spinoutTimer > 0 || def.invuln > 0 || (def.recoverGraceTimer || 0) > 0) return false;
+  const closing = att.vx * dirx + att.vy * diry; // must actually be driving into the victim
+  if (closing < 3) return false;
+  def.lastAttacker = att; def.lastAttackerAt = game.raceTime; // for the follow-your-killer spectator chain
+  if (def.shieldTimer > 0) {
+    def.shieldTimer = 0;
+    if (def.isPlayer || att.isPlayer) Sound.tone(600, 0.1, "square", 0.1, 300);
+    game.particles.burst(def.x, def.y, "#78dcff", 15, { type: "spark", spdMin: 1.5, spdMax: 4 });
+    return true;
+  }
+  def.spinoutTimer = TUNING.SPINOUT_TIME; def.spinAngle = 0; def.vx = 0; def.vy = 0;
+  registerBattleHit(att);
+  att.boostTimer = Math.max(att.boostTimer, 10); // keep plowing through the wreck
+  if (def.isPlayer || att.isPlayer) { Sound.crash(); game.shake = Math.max(game.shake, 8); }
+  if (def.isPlayer) triggerHitFlash("REVOKED!", "#ff3366", 80, def);
+  game.particles.burst(def.x, def.y, "#ff3366", 22, { type: "spark", spdMin: 2, spdMax: 6 });
+  triggerQuote(def, "crash");
+  return true; // the actual life loss + attacker reward is handled in popApproval()
+}
+
 function kartCollisions() {
   const all = getActiveKarts();
   const r = 18;
@@ -10295,11 +11134,21 @@ function kartCollisions() {
         if (a.charId === "artur" && a.ultActiveTimer > 0 && b.spinoutTimer <= 0) {
           b.spinoutTimer = Math.max(b.spinoutTimer, 35);
           b.spinAngle = 0;
+          b.lastAttacker = a; b.lastAttackerAt = game.raceTime;
+          registerBattleHit(a);
           game.particles.burst(b.x, b.y, "#ff8a3b", 18, { type: "spark", spdMin: 2, spdMax: 5 });
         } else if (b.charId === "artur" && b.ultActiveTimer > 0 && a.spinoutTimer <= 0) {
           a.spinoutTimer = Math.max(a.spinoutTimer, 35);
           a.spinAngle = 0;
+          a.lastAttacker = b; a.lastAttackerAt = game.raceTime;
+          registerBattleHit(b);
           game.particles.burst(a.x, a.y, "#ff8a3b", 18, { type: "spark", spdMin: 2, spdMax: 5 });
+        }
+
+        // Boosted ram: whoever is charging (boosted) into the other spins them out (steals a life in Battle).
+        const arturUlt = (a.charId === "artur" && a.ultActiveTimer > 0) || (b.charId === "artur" && b.ultActiveTimer > 0);
+        if (!arturUlt) {
+          if (!tryBoostRam(a, b, nx, ny)) tryBoostRam(b, a, -nx, -ny);
         }
 
         // Trigger collision quotes — with rivalry awareness
@@ -10642,8 +11491,15 @@ function update(dt, time) {
   if (game.state === STATE.RACING) {
     game.raceTime = (performance.now() - game.startTime) / 1000;
 
+    if (isBattleMode()) {
+      game.battleTimeLeft = Math.max(0, game.battleDuration - game.raceTime);
+      updateBattleApprovals();
+      updateSpectate();
+      checkBattleEnd();
+    }
+
     // Dynamic Retro Soundtrack Final Lap Tempo surge (only for retro music)
-    if (game.player && Sound.mapStyle === "retro") {
+    if (game.player && Sound.mapStyle === "retro" && !isBattleMode()) {
       const track = Sound.tracks[Sound.trackIdx || 0] || Sound.tracks[0];
       Sound.tempo = track.tempo + (game.player.lap >= TOTAL_LAPS - 1 ? TUNING.FINAL_LAP_TEMPO_BOOST : 0);
     }
@@ -10745,12 +11601,30 @@ function update(dt, time) {
             continue;
           }
 
-          if (!kart.eliminated && kart.spinoutTimer <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24)) {
+          if (!kart.eliminated && kart.spinoutTimer <= 0 && (kart.recoverGraceTimer || 0) <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24)) {
             game.hazards.splice(i, 1);
             const isDossier = (h instanceof DossierProjectile);
             const isRegulatory = (h instanceof RegulatoryProjectile);
             const isPlacebo = (h instanceof PlaceboPill);
             const isDoubleBlind = (h instanceof DoubleBlindCloud);
+            if (isBattleMode()) {
+              // Balloon-battle: every item hit costs exactly one Approval (life), never an instant KO.
+              // A shield still blocks one hit. The spinout gives feedback; updateBattleApprovals()
+              // revokes a single Approval on the spinout rising edge (one source of truth, no double-count).
+              if (h.owner && h.owner !== kart) { kart.lastAttacker = h.owner; kart.lastAttackerAt = game.raceTime; }
+              if (kart.shieldTimer > 0) {
+                kart.shieldTimer = 0;
+                if (kart.isPlayer) Sound.tone(600, 0.1, "square", 0.1, 300);
+                game.particles.burst(h.x, h.y, "#78dcff", 15, { type: "spark", spdMin: 1.5, spdMax: 4 });
+              } else {
+                kart.spinoutTimer = TUNING.SPINOUT_TIME; kart.spinAngle = 0; kart.vx = 0; kart.vy = 0;
+                if (h.owner && h.owner !== kart) registerBattleHit(h.owner);
+                if (kart.isPlayer) { Sound.crash(); game.shake = Math.max(game.shake, 8); triggerHitFlash("REVOKED!", "#ff3366", 80, kart); }
+                game.particles.burst(h.x, h.y, "#ff3366", 20, { type: "spark", spdMin: 2, spdMax: 5.5 });
+                triggerQuote(kart, "crash");
+              }
+              break;
+            }
             if (isRegulatory) {
               if (absorbFatalHitWithShield(kart, h.x, h.y)) {
                 // Shield consumed the fatal audit projectile.
@@ -10937,8 +11811,8 @@ function update(dt, time) {
     });
     game.hudPosition = ranking.indexOf(game.player) + 1;
 
-    // Wrong-way detection for player karts
-    if (!isDragonEscape()) {
+    // Wrong-way detection for player karts (no lap direction in Battle)
+    if (!isDragonEscape() && !isBattleMode()) {
       for (const pk of [game.player, game.player2].filter(Boolean)) {
         if (pk.finished || pk.eliminated || pk.speed() < 1.5) {
           pk.wrongWayTimer = Math.max(0, (pk.wrongWayTimer || 0) - dt * 2);
@@ -11152,6 +12026,7 @@ function drawWorld(pKart, left, top, width, height, time, isP2) {
   // Name tags below karts + speech bubbles above
   for (const k of sorted) {
     drawKartNameTag(ctx, k, time);
+    drawApprovals(ctx, k, time);
     drawSpeechBubble(ctx, k);
   }
 
@@ -13354,7 +14229,7 @@ function sync3DScene(time) {
   // Only set camera for single-player/P2P here (split-screen sets it per viewport in draw3D)
   const isSplitScreen = game.multiplayer && game.player2 && !game.p2pMode;
   if (!isSplitScreen) {
-    setCameraForKart(game.player, time);
+    setCameraForKart(getViewKart(), time);
   }
 
   const pk = game.player;
@@ -14229,7 +15104,7 @@ function sync3DSpectators(time) {
 
 // Start/finish line on track surface
 function build3DStartLine() {
-  if (!window.THREE || !THREE_STATE.scene || !game.track || game.track.isOpen) return;
+  if (!window.THREE || !THREE_STATE.scene || !game.track || game.track.isOpen || isBattleMode()) return;
   const T = window.THREE;
   const gate = game.track.startLineGate();
   if (!gate) return;
@@ -14528,9 +15403,10 @@ function draw3D(time) {
     } else {
       drawHUD(time);
     }
+    if (!isSplitScreen) drawApprovals3DOverlay(hudCtx, time);
     if (game.state === STATE.COUNTDOWN) {
       drawCountdown();
-    } else if ((game.player && game.player.finished) || (game.player2 && game.player2.finished)) {
+    } else if ((game.player && game.player.finished && !game.player.eliminated) || (game.player2 && game.player2.finished && !game.player2.eliminated)) {
       if (game.state === STATE.RACING) {
         drawFinishBanner();
       }
@@ -14582,8 +15458,8 @@ function draw(time) {
     // 5. Dual Symmetrical HUD
     drawHUDMultiplayer(time);
   } else {
-    // Single Player standard full screen drawing
-    drawWorld(game.player, 0, 0, VIEW_W, VIEW_H, time, false);
+    // Single Player standard full screen drawing (follows the spectated kart when rejected in Battle)
+    drawWorld(getViewKart(), 0, 0, VIEW_W, VIEW_H, time, false);
 
     // Boost flash overlay
     if (game.flash > 0) {
@@ -14598,7 +15474,7 @@ function draw(time) {
   // Unified Countdown overlay on top
   if (game.state === STATE.COUNTDOWN) {
     drawCountdown();
-  } else if ((game.player && game.player.finished) || (game.player2 && game.player2.finished)) {
+  } else if ((game.player && game.player.finished && !game.player.eliminated) || (game.player2 && game.player2.finished && !game.player2.eliminated)) {
     if (game.state === STATE.RACING) {
       drawFinishBanner();
     }
@@ -14706,7 +15582,40 @@ function drawHUD(time) {
     ctx.fillStyle = "#a8acd0";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left"; ctx.textBaseline = "top";
-    if (isDragonEscape()) {
+    if (isBattleMode()) {
+      const appr = game.player.approvals || 0;
+      ctx.fillText("APPROVALS", 18, 14);
+      ctx.font = "bold 22px sans-serif";
+      for (let i = 0; i < Math.max(appr, 0); i++) {
+        ctx.fillStyle = "#4dffaa";
+        ctx.beginPath(); ctx.arc(24 + i * 20, 34, 7, 0, TAU); ctx.fill();
+        ctx.fillStyle = "#0a1f14";
+        ctx.font = "bold 9px sans-serif";
+        ctx.fillText("✓", 20 + i * 20, 29);
+        ctx.font = "bold 22px sans-serif";
+      }
+      if (appr <= 0) {
+        ctx.fillStyle = "#ff3366";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText("REJECTED", 18, 28);
+      }
+
+      const tl = Math.max(0, game.battleTimeLeft || 0);
+      ctx.fillStyle = tl < 15 ? "#ff4d6d" : "#a8acd0";
+      ctx.font = "11px sans-serif";
+      ctx.fillText("TIME LEFT", 130, 14);
+      ctx.fillStyle = tl < 15 ? "#ff4d6d" : "#fff";
+      ctx.font = "bold 22px 'SFMono-Regular', Consolas, monospace";
+      ctx.fillText(formatTime(tl), 130, 32);
+
+      const aliveCount = getActiveKarts().filter((k) => k && !k.eliminated).length;
+      ctx.fillStyle = "#a8acd0";
+      ctx.font = "11px sans-serif";
+      ctx.fillText("SURVIVORS", 18, 64);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillText(`${aliveCount} / ${game.totalRacers}`, 18, 78);
+    } else if (isDragonEscape()) {
       ctx.fillText("DISTANCE", 18, 14);
       ctx.fillStyle = "#fff";
       ctx.font = "bold 22px 'SFMono-Regular', Consolas, monospace";
@@ -14738,6 +15647,14 @@ function drawHUD(time) {
       ctx.fillStyle = "#fff";
       ctx.font = "bold 22px 'SFMono-Regular', Consolas, monospace";
       ctx.fillText(formatTime(game.raceTime), 130, 32);
+
+      if (game.mapRecordCache && Number.isFinite(game.mapRecordCache.bestTotal)) {
+        ctx.fillStyle = "#ffd86b";
+        ctx.font = "11px sans-serif";
+        ctx.fillText("BEST", 240, 14);
+        ctx.font = "bold 18px 'SFMono-Regular', Consolas, monospace";
+        ctx.fillText(formatTime(game.mapRecordCache.bestTotal), 240, 31);
+      }
 
       ctx.fillStyle = "#a8acd0";
       ctx.font = "11px sans-serif";
@@ -14831,6 +15748,11 @@ function drawHUD(time) {
 
   // Hit flash overlay
   drawHitFlash(ctx, game.player, 0, 0, VIEW_W, VIEW_H, time);
+
+  // Battle spectator banner: shown after you're rejected while you watch the kill chain play out
+  if (isBattleMode() && game.player && game.player.eliminated) {
+    drawSpectateBanner(ctx, VIEW_W / 2, 70, time);
+  }
 
   // Wrong-way overlay
   drawWrongWay(ctx, game.player, 0, 0, VIEW_W, VIEW_H, time);
@@ -15443,15 +16365,18 @@ function drawMinimap(x, y, size) {
   ctx.lineWidth = 4;
   ctx.stroke();
 
-  // Start line marker
-  const w0 = game.track.waypoints[0];
-  ctx.fillStyle = "#ffd86b";
-  ctx.beginPath();
-  ctx.arc(ox + w0.x * s, oy + w0.y * s, 3, 0, TAU);
-  ctx.fill();
+  // Start line marker (no start/finish in the Battle arena)
+  if (!isBattleMode()) {
+    const w0 = game.track.waypoints[0];
+    ctx.fillStyle = "#ffd86b";
+    ctx.beginPath();
+    ctx.arc(ox + w0.x * s, oy + w0.y * s, 3, 0, TAU);
+    ctx.fill();
+  }
 
-  // Karts
+  // Karts (drop the ones already knocked out in Battle)
   for (const k of game.ais) {
+    if (k.eliminated) continue;
     ctx.fillStyle = k.color;
     ctx.beginPath();
     ctx.arc(ox + k.x * s, oy + k.y * s, 3, 0, TAU);
@@ -15468,13 +16393,17 @@ function drawMinimap(x, y, size) {
     ctx.fill(); ctx.stroke();
   }
 
-  // Player 1
-  ctx.fillStyle = "#fff";
-  ctx.strokeStyle = game.player.color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(ox + game.player.x * s, oy + game.player.y * s, 4, 0, TAU);
-  ctx.fill(); ctx.stroke();
+  // Player 1 — while spectating in Battle, mark the kart the camera is following instead
+  const meMarker = (isBattleMode() && game.player.eliminated && game.spectateTarget && !game.spectateTarget.eliminated)
+    ? game.spectateTarget : (game.player.eliminated && isBattleMode() ? null : game.player);
+  if (meMarker) {
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = meMarker.color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(ox + meMarker.x * s, oy + meMarker.y * s, 4, 0, TAU);
+    ctx.fill(); ctx.stroke();
+  }
 
   // Label
   ctx.fillStyle = "#a8acd0";
@@ -15678,7 +16607,7 @@ function showFinishScreen() {
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p1Place, 4)}">${ordinal(p1Place)}</span></span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : "DNF"}</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player.coinsCollected}</span></div>`;
-      const p1Score = game.player.coinsCollected * 10 + Math.max(0, (5 - p1Place) * 250);
+      const p1Score = game.player.coinsCollected * 10 + Math.max(0, (game.totalRacers + 1 - p1Place)) * 250;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p1Score}</span></div>`;
       html += `</div>`;
 
@@ -15688,7 +16617,7 @@ function showFinishScreen() {
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Place</span><span class="value"><span class="place-badge place-${Math.min(p2Place, 4)}">${ordinal(p2Place)}</span></span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Time</span><span class="value">${game.player2.finished ? formatTime(game.player2.finishTime) : "DNF"}</span></div>`;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Citations</span><span class="value">${game.player2.coinsCollected}</span></div>`;
-      const p2Score = game.player2.coinsCollected * 10 + Math.max(0, (5 - p2Place) * 250);
+      const p2Score = game.player2.coinsCollected * 10 + Math.max(0, (game.totalRacers + 1 - p2Place)) * 250;
       html += `<div class="row" style="margin: 4px 0;"><span class="label">Score</span><span class="value">${p2Score}</span></div>`;
       html += `</div>`;
 
@@ -15707,7 +16636,31 @@ function showFinishScreen() {
     const playerPlace = ranking.indexOf(game.player) + 1;
     const isDragon = isDragonEscape();
 
-    if (isDragon) {
+    if (isBattleMode()) {
+      const playerWon = playerPlace === 1 && !game.player.eliminated;
+      finishTitle.textContent = playerWon ? "Champion of Compliance!" : (game.player.eliminated ? "Submission Rejected!" : "Battle Over");
+      finishTitle.style.background = "";
+      let html = "";
+      const battleWinner = ranking.find((k) => k && !k.eliminated) || ranking[0];
+      if (battleWinner) {
+        html += `<div class="row"><span class="label">Winner</span><span class="value" style="color:${battleWinner.color};font-weight:900;">${battleWinner === game.player ? "YOU" : battleWinner.name} \uD83C\uDFC6</span></div>`;
+      }
+      html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
+      html += `<div class="row"><span class="label">Approvals Remaining</span><span class="value" style="color:#4dffaa;font-weight:900;">${Math.max(0, game.player.approvals || 0)}</span></div>`;
+      html += `<div class="row"><span class="label">Status</span><span class="value">${game.player.eliminated ? `<span style="color:#ff3366;font-weight:900;">REJECTED</span>` : `<span style="color:#4dffaa;font-weight:900;">SURVIVED</span>`}</span></div>`;
+      if (game.player.eliminated && game.player.killedBy) {
+        html += `<div class="row"><span class="label">Rejected By</span><span class="value" style="color:${game.player.killedBy.color};font-weight:700;">${game.player.killedBy.name}</span></div>`;
+      }
+      html += `<div class="row"><span class="label">Battle Time</span><span class="value">${formatTime(game.raceTime)}</span></div>`;
+
+      html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Standings</span><span></span></div>`;
+      ranking.forEach((k, i) => {
+        const status = k.eliminated ? `<span style="color:#ff3366;">REJECTED</span>` : `${Math.max(0, k.approvals || 0)} ✓`;
+        html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${status}</span></div>`;
+      });
+
+      finishResults.innerHTML = html;
+    } else if (isDragon) {
       const bestDist = (game.player.x / 1000).toFixed(1);
       finishTitle.textContent = "Dragon's Wrath!";
       finishTitle.style.background = "linear-gradient(90deg, #ff4d4d, #ff8a00)";
@@ -15760,9 +16713,23 @@ function showFinishScreen() {
       html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
       html += `<div class="row"><span class="label">Final Time</span><span class="value">${game.player.finished ? formatTime(game.player.finishTime) : formatTime(game.raceTime)}</span></div>`;
       html += `<div class="row"><span class="label">Citations Collected</span><span class="value">${game.player.coinsCollected}</span></div>`;
-      const score = game.player.coinsCollected * 10 + Math.max(0, (5 - playerPlace) * 250) + Math.max(0, Math.floor(60 - game.raceTime) * 5);
+      const score = game.player.coinsCollected * 10 + Math.max(0, (game.totalRacers + 1 - playerPlace)) * 250 + Math.max(0, Math.floor(60 - game.raceTime) * 5);
       html += `<div class="row"><span class="label">Score</span><span class="value">${score}</span></div>`;
       html += `<div class="row"><span class="label">Laps Completed</span><span class="value">${game.player.lap} / ${TOTAL_LAPS}</span></div>`;
+
+      // Personal bests for this track
+      const bestLapThisRun = (game.player.lapTimes && game.player.lapTimes.length) ? Math.min(...game.player.lapTimes) : 0;
+      const rec = getMapRecord(MAPS[game.selectedMapIdx || 0].id);
+      const nr = game.newRecord || {};
+      if (bestLapThisRun > 0) {
+        html += `<div class="row"><span class="label">Best Lap${nr.lap ? ` <span style="color:#ffd86b;font-weight:900;">★ NEW!</span>` : ``}</span><span class="value">${formatTime(bestLapThisRun)}</span></div>`;
+      }
+      if (rec && Number.isFinite(rec.bestTotal)) {
+        html += `<div class="row"><span class="label">Track Record${nr.total ? ` <span style="color:#ffd86b;font-weight:900;">★ NEW!</span>` : ``}</span><span class="value">${formatTime(rec.bestTotal)}</span></div>`;
+      }
+      if (nr.total || nr.lap) {
+        html += `<div class="row" style="justify-content:center;margin-top:4px;"><span style="color:#ffd86b;font-weight:900;letter-spacing:1.5px;text-transform:uppercase;">★ New Personal Best! ★</span></div>`;
+      }
 
       // Full ranking
       html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Ranking</span><span></span></div>`;
@@ -15773,6 +16740,41 @@ function showFinishScreen() {
 
       finishResults.innerHTML = html;
     }
+  }
+
+  if (game.tournament && game.tournament.totalRaces > 1) {
+    finishResults.innerHTML = buildTournamentStandingsHtml() + finishResults.innerHTML;
+    if (game.tournament.raceIndex + 1 >= game.tournament.totalRaces) {
+      finishTitle.textContent = "Tournament Complete!";
+      finishTitle.style.background = "";
+    }
+  }
+
+  const tourn = game.tournament;
+  const tournActive = !!(tourn && tourn.totalRaces > 1);
+  const tournDone = tournActive && tourn.raceIndex + 1 >= tourn.totalRaces;
+  const waitHint = document.getElementById("finish-tournament-wait");
+  const isP2pGuest = game.p2pMode && game.p2pRole === "guest";
+
+  if (tournActive && !isBattleMode()) {
+    if (nextTrackBtn) nextTrackBtn.style.display = "none";
+    if (restartBtn) {
+      if (isP2pGuest) {
+        restartBtn.style.display = "none";
+        if (waitHint) waitHint.style.display = "block";
+      } else {
+        restartBtn.style.display = "";
+        restartBtn.textContent = tournDone ? "New Tournament" : "Next Race";
+        if (waitHint) waitHint.style.display = "none";
+      }
+    }
+  } else {
+    if (nextTrackBtn) nextTrackBtn.style.display = isBattleMode() ? "none" : "";
+    if (restartBtn) {
+      restartBtn.style.display = "";
+      restartBtn.textContent = isBattleMode() ? "Battle Again" : "Rematch";
+    }
+    if (waitHint) waitHint.style.display = "none";
   }
 
   finishScreen.classList.remove("hidden");
@@ -15793,6 +16795,7 @@ function showMainMenu() {
   Sound.stopAllRumbles();
   Sound.stopMusic(true);
   if (game.p2pMode) handleP2pDisconnect({ silent: true });
+  game.tournament = null;
   game.state = STATE.TITLE;
   game.p1Locked = false;
   game.p2Locked = false;
@@ -15847,12 +16850,16 @@ function showSettingsScreen() {
   Sound.stopTitleTheme(false);
   hideAll();
   renderAudioSettings();
+  renderRaceSetupSettings();
   if (view2dBtn) view2dBtn.classList.toggle("active", game.viewMode !== "3d");
   if (view3dBtn) view3dBtn.classList.toggle("active", game.viewMode === "3d");
   settingsScreen.classList.remove("hidden");
 }
 
 async function startSelectedRace() {
+  if (!game.tournament && isTournamentEligible()) {
+    game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
+  }
   if (!game.multiplayer) {
     await loadSelectedAiModel();
   }
@@ -15877,6 +16884,39 @@ function applyStoredSettings() {
 }
 
 applyStoredSettings();
+
+const PROMPTLY_TIPS = [
+  "Small steering inputs, big mini-turbos — drift early, release late.",
+  "Hold your item until someone files a Merge Conflict at you.",
+  "Ten Citations charges your ultimate. Collect responsibly.",
+  "Tap the gas exactly on GO for a rocket start. I believe in you.",
+  "Trailing the pack? The item boxes remember. They provide.",
+  "Boost pads are pre-approved. Use every single one.",
+  "Off-road driving is a protocol deviation. 0.65× speed. Don't.",
+  "Honk (E) has no gameplay effect. It is still mandatory.",
+  "The dragon does not negotiate. Keep moving.",
+  "Fast Track through the field — comebacks are always in scope."
+];
+
+let promptlyTipIdx = 0;
+const promptlyTitleBubble = document.getElementById("promptly-title-bubble");
+const promptlyTitleImg = document.getElementById("promptly-title-img");
+
+function showPromptlyTip() {
+  if (titleScreen.classList.contains("hidden") && game.state !== STATE.TITLE) return;
+  if (!promptlyTitleBubble) return;
+  promptlyTitleBubble.textContent = PROMPTLY_TIPS[promptlyTipIdx % PROMPTLY_TIPS.length];
+  promptlyTipIdx++;
+  if (promptlyTitleImg) {
+    promptlyTitleImg.classList.remove("promptly-wiggle");
+    void promptlyTitleImg.offsetWidth;
+    promptlyTitleImg.classList.add("promptly-wiggle");
+    setTimeout(() => promptlyTitleImg.classList.remove("promptly-wiggle"), 600);
+  }
+}
+
+showPromptlyTip();
+setInterval(showPromptlyTip, 6000);
 
 /* ============================================================
    START / RESTART HOOKS
@@ -15907,6 +16947,85 @@ if (sfxVolumeInput) {
   });
   sfxVolumeInput.addEventListener("change", () => {
     Sound.tone(660, 0.08, "square", 0.12);
+  });
+}
+
+function renderRaceSetupSettings() {
+  document.querySelectorAll("#laps-group [data-laps]").forEach((b) => {
+    b.classList.toggle("active", Number(b.dataset.laps) === TOTAL_LAPS);
+  });
+  document.querySelectorAll("#series-group [data-series]").forEach((b) => {
+    b.classList.toggle("active", Number(b.dataset.series) === seriesRaces);
+  });
+  document.querySelectorAll("#aicount-group [data-aicount]").forEach((b) => {
+    b.classList.toggle("active", Number(b.dataset.aicount) === aiCount);
+  });
+  document.querySelectorAll("#aidiff-group [data-aidiff]").forEach((b) => {
+    b.classList.toggle("active", b.dataset.aidiff === aiDifficulty);
+  });
+}
+
+const lapsGroup = document.getElementById("laps-group");
+if (lapsGroup) {
+  lapsGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-laps]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    TOTAL_LAPS = clampLaps(btn.dataset.laps);
+    saveGameSettings({ totalLaps: TOTAL_LAPS });
+    Sound.tone(660, 0.07, "square", 0.1);
+    renderRaceSetupSettings();
+  });
+}
+
+const seriesGroup = document.getElementById("series-group");
+if (seriesGroup) {
+  seriesGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-series]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    seriesRaces = clampSeries(btn.dataset.series);
+    saveGameSettings({ seriesRaces });
+    Sound.tone(660, 0.07, "square", 0.1);
+    renderRaceSetupSettings();
+  });
+}
+
+const aiCountGroup = document.getElementById("aicount-group");
+if (aiCountGroup) {
+  aiCountGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-aicount]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    aiCount = clampAiCount(btn.dataset.aicount);
+    saveGameSettings({ aiCount });
+    Sound.tone(540, 0.07, "square", 0.1);
+    renderRaceSetupSettings();
+  });
+}
+
+const aiDiffGroup = document.getElementById("aidiff-group");
+if (aiDiffGroup) {
+  aiDiffGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-aidiff]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    aiDifficulty = normalizeAiDifficulty(btn.dataset.aidiff);
+    saveGameSettings({ aiDifficulty });
+    Sound.tone(620, 0.07, "square", 0.1);
+    renderRaceSetupSettings();
+  });
+}
+
+const approvalsGroup = document.getElementById("approvals-group");
+if (approvalsGroup) {
+  approvalsGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-approvals]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    game.battleApprovals = clampApprovals(btn.dataset.approvals);
+    Sound.tone(700, 0.07, "square", 0.1);
+    renderApprovalsSelect();
   });
 }
 
@@ -15952,15 +17071,34 @@ titleScreen.addEventListener("click", () => {
 start1pBtn.addEventListener("click", () => {
   Sound.ensure(); Sound.resume();
   Sound.playVocoderTitle();
+  game.tournament = null;
+  game.mode = "race";
   game.multiplayer = false;
   showSelectScreen();
 });
 start2pBtn.addEventListener("click", () => {
   Sound.ensure(); Sound.resume();
   Sound.playVocoderTitle();
+  game.tournament = null;
+  game.mode = "race";
   game.multiplayer = true;
   showSelectScreen();
 });
+if (startBattleBtn) {
+  startBattleBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    Sound.playVocoderTitle();
+    game.tournament = null;
+    game.mode = "battle";
+    game.multiplayer = false;
+    game.selectedMapIdx = getArenaMapIdx();
+    // Default to the classic waypoint AI; the select screen lists battle-trained models to pick from.
+    selectedAiModelId = "classic";
+    selectedAiModelWeights = null;
+    selectedAiOpponentModels = {};
+    showSelectScreen();
+  });
+}
 driveBtn.addEventListener("click", async () => {
   Sound.ensure(); Sound.resume();
   if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) {
@@ -15975,14 +17113,71 @@ driveBtn.addEventListener("click", async () => {
     driveBtn.disabled = false;
   }
 });
-restartBtn.addEventListener("click", () => {
-  showSelectScreen();
-});
+function rematchRace() {
+  Sound.ensure(); Sound.resume();
+  const tourn = game.tournament;
+  const tournActive = !!(tourn && tourn.totalRaces > 1);
+  const tournDone = tournActive && tourn.raceIndex + 1 >= tourn.totalRaces;
+
+  if (tournActive && !tournDone) {
+    if (game.p2pMode && game.p2pRole !== "host") return;
+    tourn.raceIndex += 1;
+    game.selectedMapIdx = getNextCircuitMapIdx(game.selectedMapIdx || 0);
+    if (game.p2pMode) {
+      startP2pRaceFromSelection();
+    } else {
+      startSelectedRace().catch(() => showSelectScreen());
+    }
+    return;
+  }
+
+  if (tournDone) {
+    if (game.p2pMode && game.p2pRole !== "host") return;
+    game.tournament = null;
+    if (isTournamentEligible()) {
+      game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
+    }
+    if (game.p2pMode) {
+      startP2pRaceFromSelection();
+    } else {
+      startSelectedRace().catch(() => showSelectScreen());
+    }
+    return;
+  }
+
+  // P2P rematches must renegotiate the lobby, so fall back to the select screen.
+  if (game.p2pMode) {
+    showSelectScreen();
+    return;
+  }
+  startSelectedRace().catch(() => showSelectScreen());
+}
+
+restartBtn.addEventListener("click", rematchRace);
+
+if (nextTrackBtn) {
+  nextTrackBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    if (game.p2pMode) { showSelectScreen(); return; }
+    game.selectedMapIdx = ((game.selectedMapIdx || 0) + 1) % MAPS.length;
+    startSelectedRace().catch(() => showSelectScreen());
+  });
+}
+
+if (finishMenuBtn) {
+  finishMenuBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    game.tournament = null;
+    showMainMenu();
+  });
+}
 
 // P2P Multiplayer button handlers
 startP2pBtn.addEventListener("click", () => {
   Sound.ensure(); Sound.resume();
   Sound.stopTitleTheme(false);
+  game.tournament = null;
+  game.mode = "race";
   hideAll();
   p2pScreen.classList.remove("hidden");
 });
@@ -16751,6 +17946,7 @@ function handleP2pData(data, sourceConn = null) {
       game.selectedCharIdx2 = data.hostCharIdx;
     }
     game.selectedMapIdx = data.mapIdx !== undefined ? data.mapIdx : 0;
+    game.tournament = data.tournament || null;
 
     // Sync dragon trail from host seed so all clients have the same map
     if (data.dragonSeed !== undefined && MAPS[game.selectedMapIdx].id === "dragon_escape") {
@@ -16762,6 +17958,13 @@ function handleP2pData(data, sourceConn = null) {
     buildRace();
     startCountdown();
     Sound.startEngine(1);
+  }
+
+  else if (data.type === "tournament_standings") {
+    game.tournament = data.tournament;
+    if (!finishScreen.classList.contains("hidden")) {
+      showFinishScreen();
+    }
   }
 
   else if (data.type === "host_sync") {
@@ -17008,18 +18211,16 @@ function headlessFlag(name, defaultValue = false) {
   return raw === "" || raw === "1" || raw === "true" || raw === "yes";
 }
 
-const HEADLESS_OBS_KEYS = [
+// Mode-agnostic "self" features shared by every agent (race + arena/battle).
+// Kept as an identical PREFIX of both observation vectors so a battle policy can
+// optionally warm-start from a race trunk later (transfer learning).
+const HEADLESS_BASE_SELF_KEYS = [
   "speed",
   "forwardSpeed",
-  "headingError",
-  "targetDistance",
-  "lateralOffset",
   "onRoad",
   "driftCharge",
   "boostActive",
   "spinout",
-  "nextHeadingError",
-  "nextTargetDistance",
   "carMaxSpeed",
   "carAcceleration",
   "carTurnSpeed",
@@ -17035,17 +18236,40 @@ const HEADLESS_OBS_KEYS = [
   "mergePulling",
   "mergeTethered",
 ];
+// Race-only navigation tail (checkpoint targeting).
+const HEADLESS_RACE_TAIL_KEYS = [
+  "headingError",
+  "targetDistance",
+  "lateralOffset",
+  "nextHeadingError",
+  "nextTargetDistance",
+];
+// Arena/Battle-only combat tail: own lives, field state, and the 3 nearest rivals.
+const HEADLESS_BATTLE_RIVAL_COUNT = 3;
+const HEADLESS_BATTLE_TAIL_KEYS = ["ownApprovals", "survivorsFraction", "battleTimeLeft", "ramOpportunity"];
+for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
+  HEADLESS_BATTLE_TAIL_KEYS.push(`rival${i}Bearing`, `rival${i}Distance`, `rival${i}Approvals`, `rival${i}Spinning`);
+}
 const HEADLESS_RAY_ANGLES_DEG = [-90, -60, -35, -15, 0, 15, 35, 60, 90];
 const HEADLESS_RAY_ANGLES = HEADLESS_RAY_ANGLES_DEG.map(deg => deg * Math.PI / 180);
 const HEADLESS_RAY_RANGE = 760;
 const HEADLESS_RAY_STEP = 28;
 const HEADLESS_ITEM_TYPES = ["boost", "shield", "handling", "conflict", "placebo", "doubleblind", "dossier", "deauth", "mergerequest", "hotfix", "fasttrack"];
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_OBS_KEYS.push(`roadRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_OBS_KEYS.push(`kartRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_OBS_KEYS.push(`hazardRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_OBS_KEYS.push(`pickupRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_OBS_KEYS.push(`boosterRay${deg}`);
-for (const item of HEADLESS_ITEM_TYPES) HEADLESS_OBS_KEYS.push(`item:${item}`);
+// Base = shared self features + rays + item slot flags (identical for both modes).
+const HEADLESS_BASE_OBS_KEYS = [...HEADLESS_BASE_SELF_KEYS];
+for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`roadRay${deg}`);
+for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`kartRay${deg}`);
+for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`hazardRay${deg}`);
+for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`pickupRay${deg}`);
+for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`boosterRay${deg}`);
+for (const item of HEADLESS_ITEM_TYPES) HEADLESS_BASE_OBS_KEYS.push(`item:${item}`);
+// Full per-mode vectors: base prefix + mode-specific tail.
+const HEADLESS_OBS_KEYS = [...HEADLESS_BASE_OBS_KEYS, ...HEADLESS_RACE_TAIL_KEYS];
+const HEADLESS_BATTLE_OBS_KEYS = [...HEADLESS_BASE_OBS_KEYS, ...HEADLESS_BATTLE_TAIL_KEYS];
+// Keys for whichever mode is currently active (used by reset/step/observation).
+function headlessObsKeys() {
+  return isBattleMode() ? HEADLESS_BATTLE_OBS_KEYS : HEADLESS_OBS_KEYS;
+}
 const HEADLESS_DQN_ACTIONS = [
   { name: "forward", steer: 0, throttle: 1, brake: 0, drift: false },
   { name: "soft_left", steer: -0.45, throttle: 1, brake: 0, drift: false },
@@ -17131,32 +18355,18 @@ function getHeadlessRayObjects(kart) {
   return { otherKarts, hazards, pickups, boosters };
 }
 
-function getHeadlessObservation(kart) {
+// Shared, mode-agnostic base features: self kinematics + car stats + status + rays + item slot.
+// Order MUST match HEADLESS_BASE_OBS_KEYS.
+function getHeadlessBaseValues(kart) {
   const track = game.track;
   const maxSpeed = Math.max(0.001, kart.maxSpeed || kart.baseMaxSpeed || 1);
-  const target = getHeadlessCheckpointCenter(kart.nextCheckpoint) || { x: kart.x + Math.cos(kart.heading), y: kart.y + Math.sin(kart.heading) };
-  const nextTarget = getHeadlessCheckpointCenter(kart.nextCheckpoint + 1) || target;
-  const dx = target.x - kart.x;
-  const dy = target.y - kart.y;
-  const ndx = nextTarget.x - kart.x;
-  const ndy = nextTarget.y - kart.y;
-  const targetAngle = Math.atan2(dy, dx);
-  const nextTargetAngle = Math.atan2(ndy, ndx);
-  const cs = track.closestSegment(kart.x, kart.y);
-  const seg = track.segments[cs.idx] || { halfW: track.halfWidth || 100, nx: 0, ny: 1 };
-  const signedOffset = ((kart.x - cs.proj.x) * seg.nx + (kart.y - cs.proj.y) * seg.ny) / Math.max(1, seg.halfW);
   const values = [
     clamp(kart.speed() / maxSpeed, 0, 2),
     clamp(kart.forwardSpeed() / maxSpeed, -1, 2),
-    clamp(angleDiff(kart.heading, targetAngle) / Math.PI, -1, 1),
-    clamp(Math.hypot(dx, dy) / 1200, 0, 3),
-    clamp(signedOffset, -2, 2),
     track.isOnRoad(kart.x, kart.y) ? 1 : 0,
     clamp((kart.driftCharge || 0) / TUNING.DRIFT_TIER3, 0, 2),
     kart.boostTimer > 0 ? 1 : 0,
     kart.spinoutTimer > 0 ? 1 : 0,
-    clamp(angleDiff(kart.heading, nextTargetAngle) / Math.PI, -1, 1),
-    clamp(Math.hypot(ndx, ndy) / 1600, 0, 3),
     clamp((kart.baseMaxSpeed || kart.maxSpeed || 0) / 8.0, 0, 2),
     clamp((kart.acceleration || 0) / 0.16, 0, 2),
     clamp((kart.turnSpeed || 0) / 0.07, 0, 2),
@@ -17179,7 +18389,70 @@ function getHeadlessObservation(kart) {
   for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.pickups, 20));
   for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.boosters, 28));
   for (const item of HEADLESS_ITEM_TYPES) values.push(kart.itemSlot === item ? 1 : 0);
-  return { keys: HEADLESS_OBS_KEYS, values, target, nextTarget };
+  return values;
+}
+
+// Race navigation tail (checkpoint targeting). Order MUST match HEADLESS_RACE_TAIL_KEYS.
+function getHeadlessRaceTail(kart) {
+  const track = game.track;
+  const target = getHeadlessCheckpointCenter(kart.nextCheckpoint) || { x: kart.x + Math.cos(kart.heading), y: kart.y + Math.sin(kart.heading) };
+  const nextTarget = getHeadlessCheckpointCenter(kart.nextCheckpoint + 1) || target;
+  const dx = target.x - kart.x;
+  const dy = target.y - kart.y;
+  const ndx = nextTarget.x - kart.x;
+  const ndy = nextTarget.y - kart.y;
+  const cs = track.closestSegment(kart.x, kart.y);
+  const seg = track.segments[cs.idx] || { halfW: track.halfWidth || 100, nx: 0, ny: 1 };
+  const signedOffset = ((kart.x - cs.proj.x) * seg.nx + (kart.y - cs.proj.y) * seg.ny) / Math.max(1, seg.halfW);
+  const values = [
+    clamp(angleDiff(kart.heading, Math.atan2(dy, dx)) / Math.PI, -1, 1),
+    clamp(Math.hypot(dx, dy) / 1200, 0, 3),
+    clamp(signedOffset, -2, 2),
+    clamp(angleDiff(kart.heading, Math.atan2(ndy, ndx)) / Math.PI, -1, 1),
+    clamp(Math.hypot(ndx, ndy) / 1600, 0, 3),
+  ];
+  return { values, target, nextTarget };
+}
+
+// Battle combat tail: own lives, field state, ram opportunity, and the N nearest rivals.
+// Order MUST match HEADLESS_BATTLE_TAIL_KEYS.
+function getHeadlessBattleTail(kart) {
+  const alive = getActiveKarts().filter(k => k && !k.eliminated);
+  const survivors = clamp(alive.length / Math.max(1, game.totalRacers || alive.length), 0, 1);
+  const timeLeft = clamp((game.battleTimeLeft || 0) / Math.max(1, game.battleDuration || 1), 0, 1);
+  const rivals = alive
+    .filter(k => k !== kart)
+    .map(k => ({ k, d: dist(kart.x, kart.y, k.x, k.y), bearing: angleDiff(kart.heading, Math.atan2(k.y - kart.y, k.x - kart.x)) }))
+    .sort((a, b) => a.d - b.d);
+  // Ram opportunity: boosted and the nearest rival is close and roughly ahead.
+  let ram = 0;
+  if (kart.boostTimer > 0 && rivals.length && Math.abs(rivals[0].bearing) < 0.5 && rivals[0].d < 260) ram = 1;
+  const values = [clamp((kart.approvals || 0) / 5, 0, 1), survivors, timeLeft, ram];
+  for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
+    const r = rivals[i];
+    if (r) {
+      values.push(
+        clamp(r.bearing / Math.PI, -1, 1),
+        clamp(r.d / HEADLESS_RAY_RANGE, 0, 2),
+        clamp((r.k.approvals || 0) / 5, 0, 1),
+        r.k.spinoutTimer > 0 ? 1 : 0,
+      );
+    } else {
+      values.push(0, 2, 0, 0); // sentinel: no rival (far away, no lives)
+    }
+  }
+  return values;
+}
+
+function getHeadlessObservation(kart) {
+  const values = getHeadlessBaseValues(kart);
+  if (isBattleMode()) {
+    for (const v of getHeadlessBattleTail(kart)) values.push(v);
+    return { keys: HEADLESS_BATTLE_OBS_KEYS, values, target: null, nextTarget: null };
+  }
+  const race = getHeadlessRaceTail(kart);
+  for (const v of race.values) values.push(v);
+  return { keys: HEADLESS_OBS_KEYS, values, target: race.target, nextTarget: race.nextTarget };
 }
 
 function normalizeHeadlessAction(action = {}) {
@@ -17266,9 +18539,12 @@ function headlessMlpForward(weights, inputValues) {
     for (const layer of weights.trunk) x = _mlpLayerForward(x, layer);
     const v = _mlpLayerForward(x, weights.value_head);
     const a = _mlpLayerForward(x, weights.advantage_head);
+    const centerAdvantages = weights.advantageCentering ?? weights.meta?.advantageCentering ?? true;
     let meanA = 0;
-    for (let i = 0; i < a.length; i++) meanA += a[i];
-    meanA /= a.length || 1;
+    if (centerAdvantages) {
+      for (let i = 0; i < a.length; i++) meanA += a[i];
+      meanA /= a.length || 1;
+    }
     const q = new Array(a.length);
     for (let i = 0; i < a.length; i++) q[i] = v[0] + a[i] - meanA;
     applyMeanExpansion(q, weights.meanExpansionK ?? weights.meta?.meanExpansionK ?? 0);
@@ -17373,7 +18649,7 @@ function validateSacModelPayload(payload) {
   if (!Array.isArray(payload.observationKeys)) throw new Error("Model has no observation key schema");
   for (const key of payload.observationKeys) {
     const baseKey = String(key).replace(/@-\d+$/, "");
-    if (!HEADLESS_OBS_KEYS.includes(baseKey)) {
+    if (!HEADLESS_OBS_KEYS.includes(baseKey) && !HEADLESS_BATTLE_OBS_KEYS.includes(baseKey)) {
       console.warn(`Model references removed observation key "${key}" — will use 0`);
     }
   }
@@ -17388,7 +18664,7 @@ function validateDqnModelPayload(payload) {
   if (!Array.isArray(payload.observationKeys)) throw new Error("Model has no observation key schema");
   for (const key of payload.observationKeys) {
     const baseKey = String(key).replace(/@-\d+$/, "");
-    if (!HEADLESS_OBS_KEYS.includes(baseKey)) {
+    if (!HEADLESS_OBS_KEYS.includes(baseKey) && !HEADLESS_BATTLE_OBS_KEYS.includes(baseKey)) {
       console.warn(`Model references removed observation key "${key}" — will use 0`);
     }
   }
@@ -17568,6 +18844,25 @@ class TrainedAIKart extends Kart {
 }
 const DqnAIKart = TrainedAIKart;
 
+// Headline success rate for a model's metrics: battle win rate in Battle mode
+// (finish_rate also exists there but is always 0 — battles aren't "finished"), else finish rate.
+function headlineModelRate(metrics) {
+  const candidates = isBattleMode()
+    ? [metrics.battle_win_rate, metrics.player_win_rate, metrics.win_rate]
+    : [metrics.finish_rate, metrics.win_rate];
+  for (const v of candidates) {
+    if (Number.isFinite(Number(v))) return Number(v);
+  }
+  return null;
+}
+
+// A model is offered only for the mode it was trained on: battle policies in Battle,
+// race policies (mode "race" or legacy entries with no mode) everywhere else.
+function modelMatchesCurrentMode(model) {
+  const modelMode = String(model?.mode || model?.meta?.mode || "race").toLowerCase();
+  return isBattleMode() ? modelMode === "battle" : modelMode !== "battle";
+}
+
 function applySelectedAiModelToOpponents() {
   if (selectedAiModelId === "classic" || !selectedAiModelWeights || !game.ais || !game.ais.length) return;
   game.ais = game.ais.map((ai, idx) => {
@@ -17601,16 +18896,16 @@ function renderAiModelSelector() {
   const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
   const getTrackMetrics = (model, mapId) => {
     const trackEntry = model.eval?.tracks?.[mapId];
-    if (trackEntry) return trackEntry.classic || trackEntry.solo || trackEntry;
+    if (trackEntry) return trackEntry.battle || trackEntry.classic || trackEntry.solo || trackEntry;
     return model.metrics || {};
   };
   const scoreModel = (model) => {
     const m = getTrackMetrics(model, selectedMap);
-    const finish = Number(m.finish_rate ?? 0);
+    const rate = Number(headlineModelRate(m) ?? 0);
     const reward = Number(m.avg_reward ?? -999999);
-    return finish * 100000 + reward;
+    return rate * 100000 + reward;
   };
-  const models = (aiModelManifest?.models || []).slice().sort((a, b) => scoreModel(b) - scoreModel(a));
+  const models = (aiModelManifest?.models || []).filter(modelMatchesCurrentMode).sort((a, b) => scoreModel(b) - scoreModel(a));
   const current = selectedAiModelId;
   const currentExists = current === "classic" || models.some(m => (m.id || m.path) === current);
   aiModelSelect.innerHTML = `<option value="classic">Classic Waypoint AI</option>`;
@@ -17618,8 +18913,9 @@ function renderAiModelSelector() {
     const actionCount = model.actionCount;
     const incompatible = Number.isFinite(actionCount) && actionCount > HEADLESS_DQN_ACTIONS.length;
     const metrics = getTrackMetrics(model, selectedMap);
-    const metricLabel = Number.isFinite(Number(metrics.finish_rate))
-      ? ` · ${(Number(metrics.finish_rate) * 100).toFixed(0)}% finish · ${Number(metrics.avg_reward || 0).toFixed(0)} reward`
+    const rate = headlineModelRate(metrics);
+    const metricLabel = rate !== null
+      ? ` · ${(rate * 100).toFixed(0)}% ${isBattleMode() ? "win" : "finish"} · ${Number(metrics.avg_reward || 0).toFixed(0)} reward`
       : "";
     const option = document.createElement("option");
     option.value = model.id || model.path;
@@ -17641,24 +18937,25 @@ function getAiModelOptionsHtml(selectedId = "classic") {
   const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
   const getTrackMetrics = (model, mapId) => {
     const trackEntry = model.eval?.tracks?.[mapId];
-    if (trackEntry) return trackEntry.classic || trackEntry.solo || trackEntry;
+    if (trackEntry) return trackEntry.battle || trackEntry.classic || trackEntry.solo || trackEntry;
     return model.metrics || {};
   };
   const scoreModel = (model) => {
     const m = getTrackMetrics(model, selectedMap);
-    const finish = Number(m.finish_rate ?? 0);
+    const rate = Number(headlineModelRate(m) ?? 0);
     const reward = Number(m.avg_reward ?? -999999);
-    return finish * 100000 + reward;
+    return rate * 100000 + reward;
   };
-  const models = (aiModelManifest?.models || []).slice().sort((a, b) => scoreModel(b) - scoreModel(a));
+  const models = (aiModelManifest?.models || []).filter(modelMatchesCurrentMode).sort((a, b) => scoreModel(b) - scoreModel(a));
   const options = [`<option value="classic"${selectedId === "classic" ? " selected" : ""}>Classic</option>`];
   for (const model of models) {
     const actionCount = model.actionCount;
     const incompatible = Number.isFinite(actionCount) && actionCount > HEADLESS_DQN_ACTIONS.length;
     const id = model.id || model.path;
     const metrics = getTrackMetrics(model, selectedMap);
-    const label = Number.isFinite(Number(metrics.finish_rate))
-      ? `${model.name || id} · ${(Number(metrics.finish_rate) * 100).toFixed(0)}% · ${Number(metrics.avg_reward || 0).toFixed(0)}`
+    const rate = headlineModelRate(metrics);
+    const label = rate !== null
+      ? `${model.name || id} · ${(rate * 100).toFixed(0)}% · ${Number(metrics.avg_reward || 0).toFixed(0)}`
       : (model.name || id);
     options.push(`<option value="${id}"${selectedId === id ? " selected" : ""}${incompatible ? " disabled" : ""}>${label}</option>`);
   }
@@ -17704,6 +19001,7 @@ function importAiModelPayload(payload, fileName = "imported-model.json") {
     id,
     name,
     path: null,
+    mode: meta.mode || "race",
     map: meta.map || "unknown",
     character: meta.character || "unknown",
     metrics: meta.metrics || {},
@@ -17776,6 +19074,9 @@ function configureHeadlessEpisode(config) {
   }
   game.headlessNoItems = !!config.noItems;
   game.headlessNoHazards = !!config.noHazards;
+  // Re-init battle lives: the agent kart (and self-play opponents) replaced the karts
+  // that buildRace() originally initialized, leaving their `approvals` undefined.
+  if (isBattleMode()) initBattleKartState();
 }
 
 function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0) {
@@ -17803,6 +19104,9 @@ function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0) {
     playerFinished: !!game.player?.finished,
     playerPlace: ranking.find(r => r.charId === game.player?.charId && r.name === game.player?.name)?.place || null,
     playerLap: game.player?.lap || 0,
+    playerApprovals: game.player?.approvals || 0,
+    playerSteals: game.player?.battleSteals || 0,
+    playerEliminated: !!game.player?.eliminated,
     reward: Math.round((game.headlessEpisodeReward || 0) * 1000) / 1000,
     ranking,
   };
@@ -17816,18 +19120,65 @@ function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinis
   return reward;
 }
 
+// Arena/Battle reward, rebalanced toward the actual objective (win) so dense shaping
+// can't be farmed without winning:
+//   combat:   +1 land a hit, +1 revoke a rival life, -1.5 lose your own life
+//   item loop: +0.3 pick up an item, +0.3 fire one, +0.03 per coin (charges items/ult)
+//   terminal: +20 for winning (last standing / top rank), -8 on elimination
+// There is deliberately NO ult-use bonus: ults earn reward only when they land a hit
+// (registerBattleHit), so the agent must aim them at rivals rather than spam them.
+// Steal/loss/hit counts are accumulated in the game logic and consumed (reset) here.
+function computeHeadlessBattleReward(kart) {
+  const steals = game.rlSteals || 0;
+  const losses = game.rlLosses || 0;
+  const hits = game.rlHits || 0;
+  game.rlSteals = 0;
+  game.rlLosses = 0;
+  game.rlHits = 0;
+  let reward = 1.0 * steals - 1.5 * losses + 1.0 * hits;
+  const uses = kart.itemUseCount || 0;
+  if (uses > (kart._rlPrevItemUses || 0)) reward += 0.3 * (uses - (kart._rlPrevItemUses || 0));
+  kart._rlPrevItemUses = uses;
+  const hasItem = kart.itemState === "active";
+  if (hasItem && !kart._rlHadItem) reward += 0.3; // picked up a fresh item
+  kart._rlHadItem = hasItem;
+  const coins = kart.coinsCollected || 0;
+  if (coins > (kart._rlPrevCoins || 0)) reward += 0.03 * (coins - (kart._rlPrevCoins || 0));
+  kart._rlPrevCoins = coins;
+  if (kart.eliminated && !kart._rlEliminationCounted) {
+    kart._rlEliminationCounted = true;
+    reward -= 8;
+  }
+  if (game.state === STATE.FINISHED && !kart._rlWinCounted) {
+    kart._rlWinCounted = true;
+    const alive = getActiveKarts().filter(k => k && !k.eliminated);
+    if (!kart.eliminated && (alive.length <= 1 || rankAll()[0] === kart)) reward += 20;
+  }
+  return reward;
+}
+
+function computeHeadlessStepReward(kart, beforeProgress, beforeLap, beforeFinished) {
+  if (isBattleMode()) return computeHeadlessBattleReward(kart);
+  return computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinished);
+}
+
 function makeHeadlessConfig(overrides = {}) {
+  let mode = String(overrides.mode ?? URL_PARAMS.get("mode") ?? "race").toLowerCase();
+  if (mode === "arena") mode = "battle";
+  const battle = mode === "battle";
   return {
+    mode,
     frames: Math.max(1, Math.floor(Number(overrides.frames ?? URL_PARAMS.get("frames") ?? URL_PARAMS.get("headlessFrames") ?? 60 * 120))),
     episodes: Math.max(1, Math.floor(Number(overrides.episodes ?? URL_PARAMS.get("episodes") ?? 1))),
     agent: String(overrides.agent ?? URL_PARAMS.get("agent") ?? "waypoint").toLowerCase(),
     trace: overrides.trace ?? headlessFlag("trace", false),
     traceEvery: Math.max(1, Math.floor(Number(overrides.traceEvery ?? URL_PARAMS.get("traceEvery") ?? 30))),
     frameSkip: Math.max(1, Math.floor(Number(overrides.frameSkip ?? URL_PARAMS.get("frameSkip") ?? 4))),
-    solo: overrides.solo ?? headlessFlag("solo", false),
-    noItems: overrides.noItems ?? (headlessFlag("noItems", false) || (headlessFlag("items", false) === false && URL_PARAMS.get("items") === "0")),
-    noHazards: overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0")),
-    map: overrides.map ?? URL_PARAMS.get("map") ?? URL_PARAMS.get("headlessMap") ?? "protocol_amendment_labyrinth",
+    // Battle is a free-for-all: force opponents on and items on regardless of race defaults.
+    solo: battle ? false : (overrides.solo ?? headlessFlag("solo", false)),
+    noItems: battle ? false : (overrides.noItems ?? (headlessFlag("noItems", false) || (headlessFlag("items", false) === false && URL_PARAMS.get("items") === "0"))),
+    noHazards: battle ? true : (overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0"))),
+    map: overrides.map ?? URL_PARAMS.get("map") ?? URL_PARAMS.get("headlessMap") ?? (battle ? BATTLE_ARENA_ID : "protocol_amendment_labyrinth"),
     character: overrides.character ?? URL_PARAMS.get("char") ?? URL_PARAMS.get("character") ?? "anton",
   };
 }
@@ -17837,6 +19188,10 @@ function runHeadlessEpisode(config, episodeIdx = 0) {
   game.multiplayer = false;
   game.p2pMode = false;
   game.p2pRole = null;
+  game.mode = config.mode === "battle" ? "battle" : "race";
+  game.rlSteals = 0;
+  game.rlLosses = 0;
+  game.rlHits = 0;
   selectHeadlessCharacter(config.character);
   const map = selectHeadlessMap(config.map);
   hideAll();
@@ -17866,7 +19221,7 @@ function runHeadlessEpisode(config, episodeIdx = 0) {
     update(dt, simSeconds * 1000);
     game.skidMarks.length = 0;
     const afterProgress = progressValue(game.player);
-    const reward = computeHeadlessFrameReward(game.player, beforeProgress, beforeLap, beforeFinished);
+    const reward = computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
     totalReward += reward;
     if (config.trace && frames % config.traceEvery === 0) {
       trace.push({
@@ -17890,7 +19245,7 @@ function runHeadlessEpisode(config, episodeIdx = 0) {
   const result = summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx);
   result.agent = agent;
   if (config.trace) {
-    result.observationKeys = HEADLESS_OBS_KEYS;
+    result.observationKeys = headlessObsKeys();
     result.trace = trace;
   }
   return result;
@@ -17970,6 +19325,10 @@ function setupExternalRlApi() {
     game.multiplayer = false;
     game.p2pMode = false;
     game.p2pRole = null;
+    game.mode = config.mode === "battle" ? "battle" : "race";
+    game.rlSteals = 0;
+    game.rlLosses = 0;
+    game.rlHits = 0;
     selectHeadlessCharacter(config.character);
     const map = selectHeadlessMap(config.map);
     hideAll();
@@ -17984,10 +19343,10 @@ function setupExternalRlApi() {
     const obs = getHeadlessObservation(game.player);
     return {
       obs: obs.values,
-      obsKeys: HEADLESS_OBS_KEYS,
+      obsKeys: obs.keys,
       actions: HEADLESS_DQN_ACTIONS,
       done: false,
-      info: { agent, map: map.id, mapName: map.name, character: CHARACTERS[game.selectedCharIdx || 0].id },
+      info: { agent, mode: config.mode, map: map.id, mapName: map.name, character: CHARACTERS[game.selectedCharIdx || 0].id },
     };
   };
   window.rlStep = (action) => {
@@ -18012,7 +19371,8 @@ function setupExternalRlApi() {
     let reward = 0;
     const repeat = Math.max(1, Math.floor(config.frameSkip || 1));
     for (let i = 0; i < repeat; i++) {
-      if (game.state === STATE.FINISHED || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
+      // Stop frame-skipping once the agent can no longer act (finished a race or eliminated in battle).
+      if (game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
       const beforeProgress = progressValue(game.player);
       const beforeLap = game.player.lap || 0;
       const beforeFinished = !!game.player.finished;
@@ -18021,10 +19381,10 @@ function setupExternalRlApi() {
       game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
       update(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
       game.skidMarks.length = 0;
-      reward += computeHeadlessFrameReward(game.player, beforeProgress, beforeLap, beforeFinished);
+      reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
       if (areAllHumansDone()) finishRace();
     }
-    const done = game.state === STATE.FINISHED || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
+    const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
     const obs = getHeadlessObservation(game.player);
     window.__lastRlRanking = rankAll().map(k => ({
       name: k.name,
@@ -18049,6 +19409,13 @@ function setupExternalRlApi() {
         itemUses: game.player.itemUseCount || 0,
         ultUses: game.player.ultUseCount || 0,
         driftBoosts: game.player.driftBoostCount || 0,
+        // Battle-mode fields (meaningless in race but cheap to always include):
+        mode: config.mode,
+        approvals: game.player.approvals || 0,
+        steals: game.player.battleSteals || 0,
+        eliminated: !!game.player.eliminated,
+        survivors: getActiveKarts().filter(k => k && !k.eliminated).length,
+        battleWin: game.state === STATE.FINISHED && !game.player.eliminated,
       },
     };
   };

@@ -85,6 +85,7 @@ def run_episode(
 ) -> dict[str, Any]:
     env.solo = False
     env.no_items = False
+    # Arena has no dragon hazards; race head-to-head also runs hazard-free for comparability.
     env.no_hazards = True
     env.reset_with(
         map_id=map_id,
@@ -115,6 +116,10 @@ def run_episode(
         "itemUses": float(player_stats.get("itemUses", 0)),
         "ultUses": float(player_stats.get("ultUses", 0)),
         "driftBoosts": float(player_stats.get("driftBoosts", 0)),
+        # Battle-mode extras (0 / meaningless in race, harmless to always include):
+        "approvals": float(info.get("approvals", 0)),
+        "survival": float(info.get("raceTime", 0)),
+        "eliminated": bool(info.get("eliminated")),
         "winner": ranks[0].get("charId") if ranks else "unknown",
     }
 
@@ -133,6 +138,8 @@ def summarize(rows: list[dict[str, Any]]) -> dict[str, float]:
         "avg_items": sum(row["itemUses"] for row in rows) / n,
         "avg_ults": sum(row["ultUses"] for row in rows) / n,
         "avg_drift_boosts": sum(row["driftBoosts"] for row in rows) / n,
+        "avg_approvals": sum(row.get("approvals", 0) for row in rows) / n,
+        "avg_survival": sum(row.get("survival", 0) for row in rows) / n,
     }
 
 
@@ -150,12 +157,21 @@ def add_summary_row(table: Table, label: str, summary: dict[str, float]) -> None
         f"{summary['avg_items']:.1f}",
         f"{summary['avg_ults']:.1f}",
         f"{summary['avg_drift_boosts']:.1f}",
+        f"{summary['avg_approvals']:.2f}",
+        f"{summary['avg_survival']:.1f}",
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default="index.html")
+    parser.add_argument(
+        "--mode",
+        choices=["race", "battle"],
+        default="race",
+        help="'race' (checkpoints/laps) or 'battle' (arena free-for-all).",
+    )
+    parser.add_argument("--arena-map", default="battle_arena", help="Map id used when --mode battle.")
     parser.add_argument("--manifest", default="models/manifest.json")
     parser.add_argument("--model-a", required=True)
     parser.add_argument("--model-b", required=True)
@@ -174,6 +190,9 @@ def main() -> None:
     args = parser.parse_args()
 
     random.seed(args.seed)
+    is_battle = args.mode == "battle"
+    if is_battle:
+        args.maps = args.arena_map
     root = Path(".").resolve()
     manifest = load_manifest(Path(args.manifest))
     entry_a = model_entry(manifest, args.model_a)
@@ -199,6 +218,7 @@ def main() -> None:
             frame_stack=4,
             frame_skip=args.frame_skip,
             classic_opponent_slots=args.classic_opponents,
+            mode=args.mode,
         )
         env.load()
         rows_a: list[dict[str, Any]] = []
@@ -242,6 +262,8 @@ def main() -> None:
     table.add_column("Items", justify="right")
     table.add_column("Ults", justify="right")
     table.add_column("Drifts", justify="right")
+    table.add_column("Approvals", justify="right")
+    table.add_column("Survival", justify="right")
     add_summary_row(table, entry_a.get("name") or args.model_a, summarize(rows_a))
     add_summary_row(table, entry_b.get("name") or args.model_b, summarize(rows_b))
     console.print(table)
