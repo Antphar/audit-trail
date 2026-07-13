@@ -850,9 +850,15 @@ def print_elo_ascii_chart(console: Console, history: list[dict[str, Any]], *, wi
     console.print(f"        step {step_lo:,} … {step_hi:,}   final Elo {ratings[-1]:.1f}")
 
 
-def check_self_play_applied(env: Any, args: argparse.Namespace, console: Console, checked: bool) -> bool:
+def check_self_play_applied(
+    env: Any, args: argparse.Namespace, console: Console, checked: bool, requested_models: int = -1
+) -> bool:
     if checked or not args.self_play:
         return checked
+    if requested_models == 0:
+        # Nothing was requested this episode (e.g. pure self-play before the first
+        # checkpoint exists) — keep waiting for an episode that does request models.
+        return False
     applied = int(env.last_reset_info.get("opponentModelsApplied", 0) or 0)
     if applied == 0:
         console.print(
@@ -1142,7 +1148,7 @@ def train(args: argparse.Namespace) -> None:
         if init_classic is not None:
             reset_kwargs["classic_opponent_slots"] = init_classic
         obs = env.reset_with(**reset_kwargs)
-        self_play_checked = check_self_play_applied(env, args, console, self_play_checked)
+        self_play_checked = check_self_play_applied(env, args, console, self_play_checked, len(init_opponents))
         eval_page = browser.new_page()
         eval_env = common.TurboKartEnv(
             page=eval_page,
@@ -1355,7 +1361,7 @@ def train(args: argparse.Namespace) -> None:
                 if ep_classic is not None:
                     ep_reset_kwargs["classic_opponent_slots"] = ep_classic
                 obs = env.reset_with(**ep_reset_kwargs)
-                self_play_checked = check_self_play_applied(env, args, console, self_play_checked)
+                self_play_checked = check_self_play_applied(env, args, console, self_play_checked, len(ep_opponents))
                 episode_reward = 0.0
 
             if len(buffer) >= args.batch_size and step >= args.learning_starts:
