@@ -1220,6 +1220,9 @@ let p2pConnections = new Map();
 let p2pJoinAttemptSeq = 0;
 let aiModelManifest = null;
 const DEFAULT_AI_MODEL_ID = "dqn-selfplay-booster-stack4-skip6";
+// Trained-model opponents are disabled in the shipped game (classic waypoint AI only).
+// Headless RL training/eval is unaffected. Flip to true to re-enable the model picker.
+const TRAINED_AI_ENABLED = false;
 let selectedAiModelId = DEFAULT_AI_MODEL_ID;
 let selectedAiModelWeights = null;
 let selectedAiOpponentModels = {};
@@ -10044,7 +10047,7 @@ function showSelectScreen() {
     driveBtn.textContent = game.p2pMode && game.p2pRole === "host" ? "Waiting For Players" : "Drive!";
     driveBtn.style.display = game.p2pMode && game.p2pRole === "host" ? "block" : "none";
   } else {
-    if (aiSelectSection) aiSelectSection.style.display = "flex";
+    if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none";
     game.selectedCharIdx2 = undefined;
     game.p1Locked = false;
     game.p2Locked = false;
@@ -10063,7 +10066,7 @@ function showSelectScreen() {
   const mapSection = document.getElementById("map-select-section");
   if (isBattleMode()) {
     if (mapSection) mapSection.style.display = "none";
-    if (aiSelectSection) aiSelectSection.style.display = "flex"; // let players pick battle-trained AIs (CSS default is none)
+    if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none"; // model picker hidden while trained AIs are disabled
     if (battleSection) battleSection.style.display = "flex";
     document.getElementById("lobby-subtitle").innerText = "Battle Arena: Choose Your Coder";
     document.getElementById("lobby-hint").innerText = "Press Space or Enter to Battle!";
@@ -18864,6 +18867,7 @@ function modelMatchesCurrentMode(model) {
 }
 
 function applySelectedAiModelToOpponents() {
+  if (!TRAINED_AI_ENABLED && !HEADLESS_MODE) return;
   if (selectedAiModelId === "classic" || !selectedAiModelWeights || !game.ais || !game.ais.length) return;
   game.ais = game.ais.map((ai, idx) => {
     const char = CHARACTERS.find(c => c.id === ai.charId) || CHARACTERS[(idx + 1) % CHARACTERS.length];
