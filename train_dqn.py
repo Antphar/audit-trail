@@ -646,7 +646,12 @@ def resolve_training_opponents(
     checkpoint_pool: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int | None]:
     if is_battle and args.self_play:
-        opponent_models, classic_slots = common.sample_battle_opponents(anchors, checkpoint_pool)
+        opponent_models, classic_slots = common.sample_battle_opponents(
+            anchors,
+            checkpoint_pool,
+            classic_prob=args.train_classic_prob,
+            anchor_prob=args.train_anchor_prob,
+        )
         return opponent_models, classic_slots
     return common.sample_league_opponents(args, league), None
 
@@ -1713,6 +1718,20 @@ def parse_args() -> argparse.Namespace:
         help="How many most-recent previous checkpoints join the Elo rating set.",
     )
     parser.add_argument("--elo-k", type=float, default=32.0, help="Elo K-factor for checkpoint rating duels.")
+    parser.add_argument(
+        "--train-classic-prob",
+        type=float,
+        default=0.35,
+        help="Probability a training episode includes one classic AI (battle self-play). "
+        "0 = pure self-play; classic still fills slots while the checkpoint pool is empty.",
+    )
+    parser.add_argument(
+        "--train-anchor-prob",
+        type=float,
+        default=0.35,
+        help="Probability a training episode includes one anchor model (battle self-play). "
+        "0 = never train against anchors; they remain Elo eval opponents only.",
+    )
     parser.add_argument("--no-auto-install-browser", dest="auto_install_browser", action="store_false")
     parser.add_argument("--install-browser-only", action="store_true")
     parser.set_defaults(auto_install_browser=True, orthogonal_init=True)
