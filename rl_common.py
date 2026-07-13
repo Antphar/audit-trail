@@ -584,22 +584,32 @@ def sample_battle_opponents(
     anchors: list[dict[str, Any]],
     checkpoint_pool: list[dict[str, Any]],
     *,
+    total_slots: int = 4,
+    classic_prob: float = 0.35,
+    anchor_prob: float = 0.35,
     rng: random.Random | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Sample battle self-play opponents: 1 classic slot + 3 model payloads."""
-    pick = (rng or random).choice
-    choices = (rng or random).choices
-    classic_slots = 1
+    """Sample battle self-play opponents for one episode.
+
+    Composition is self-play-first: most slots are the agent's own recent
+    checkpoints (recency-weighted). With probability ``classic_prob`` one slot
+    is the classic waypoint AI, and with probability ``anchor_prob`` one slot
+    is a fixed anchor model (e.g. v5/v1). While the checkpoint pool is still
+    empty (early training), remaining slots fall back to classic AI so the
+    curriculum starts easy.
+    """
+    r = rng or random
+    classic_slots = 1 if r.random() < classic_prob else 0
     opponents: list[dict[str, Any]] = []
-    if anchors:
-        opponents.append(pick(anchors)["payload"])
-    for _ in range(2):
+    if anchors and r.random() < anchor_prob:
+        opponents.append(r.choice(anchors)["payload"])
+    while len(opponents) + classic_slots < total_slots:
         if checkpoint_pool:
             # Pool is ordered oldest-first; weight the most recent checkpoints highest.
             weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
-            opponents.append(choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
-        elif anchors:
-            opponents.append(pick(anchors)["payload"])
+            opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
+        else:
+            classic_slots += 1
     return opponents, classic_slots
 
 
