@@ -1220,9 +1220,9 @@ let p2pConnections = new Map();
 let p2pJoinAttemptSeq = 0;
 let aiModelManifest = null;
 const DEFAULT_AI_MODEL_ID = "dqn-selfplay-booster-stack4-skip6";
-// Trained-model opponents are disabled in the shipped game (classic waypoint AI only).
-// Headless RL training/eval is unaffected. Flip to true to re-enable the model picker.
-const TRAINED_AI_ENABLED = false;
+// Trained-model opponents in interactive play: the lobby model picker lets you
+// battle trained agents (e.g. DQN Arena v5). Flip to false to hide the picker.
+const TRAINED_AI_ENABLED = true;
 let selectedAiModelId = DEFAULT_AI_MODEL_ID;
 let selectedAiModelWeights = null;
 let selectedAiOpponentModels = {};
