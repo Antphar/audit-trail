@@ -157,6 +157,8 @@ class TurboKartEnv:
         self.frame_skip = max(1, int(frame_skip))
         self.opponent_models = opponent_models or []
         self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self.opponent_count: int | None = None
+        self.last_reset_info: dict[str, Any] = {}
         self.obs_keys: list[str] = []
         self._base_keys: list[str] = []
         self.actions: list[dict[str, Any]] = []
@@ -226,6 +228,7 @@ class TurboKartEnv:
         character: str | None = None,
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int | None = None,
+        opponent_count: int | None = None,
     ) -> np.ndarray:
         if map_id is not None:
             self.map_id = map_id
@@ -235,21 +238,25 @@ class TurboKartEnv:
             self.opponent_models = opponent_models
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
-        result = self.page.evaluate(
-            """(cfg) => window.rlReset(cfg)""",
-            {
-                "mode": self.mode,
-                "map": self.map_id,
-                "character": self.character,
-                "frames": self.frames,
-                "solo": self.solo,
-                "noItems": self.no_items,
-                "noHazards": self.no_hazards,
-                "frameSkip": self.frame_skip,
-                "opponentModels": self.opponent_models,
-                "classicOpponentSlots": self.classic_opponent_slots,
-            },
-        )
+        # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
+        # into subsequent baseline evals on the same env.
+        self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
+        cfg: dict[str, Any] = {
+            "mode": self.mode,
+            "map": self.map_id,
+            "character": self.character,
+            "frames": self.frames,
+            "solo": self.solo,
+            "noItems": self.no_items,
+            "noHazards": self.no_hazards,
+            "frameSkip": self.frame_skip,
+            "opponentModels": self.opponent_models,
+            "classicOpponentSlots": self.classic_opponent_slots,
+        }
+        if self.opponent_count is not None:
+            cfg["opponentCount"] = self.opponent_count
+        result = self.page.evaluate("""(cfg) => window.rlReset(cfg)""", cfg)
+        self.last_reset_info = dict(result.get("info", {}))
         self._base_keys = result["obsKeys"]
         self.obs_keys = self._stack_keys(self._base_keys)
         self.actions = result["actions"]
@@ -571,6 +578,67 @@ def sample_league_opponents(args: Any, league: list[dict[str, Any]]) -> list[dic
         chosen = random.choices(league, weights=weights, k=1)[0]
         opponents.append(chosen["payload"])
     return opponents
+
+
+def sample_battle_opponents(
+    anchors: list[dict[str, Any]],
+    checkpoint_pool: list[dict[str, Any]],
+    *,
+    rng: random.Random | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Sample battle self-play opponents: 1 classic slot + 3 model payloads."""
+    pick = (rng or random).choice
+    choices = (rng or random).choices
+    classic_slots = 1
+    opponents: list[dict[str, Any]] = []
+    if anchors:
+        opponents.append(pick(anchors)["payload"])
+    for _ in range(2):
+        if checkpoint_pool:
+            # Pool is ordered oldest-first; weight the most recent checkpoints highest.
+            weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
+            opponents.append(choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
+        elif anchors:
+            opponents.append(pick(anchors)["payload"])
+    return opponents, classic_slots
+
+
+# --- Elo rating helpers -------------------------------------------------------
+
+def elo_expected(ra: float, rb: float) -> float:
+    return 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+
+
+def elo_update(ra: float, rb: float, score_a: float, k: float = 32.0) -> tuple[float, float]:
+    ea = elo_expected(ra, rb)
+    eb = 1.0 - ea
+    return ra + k * (score_a - ea), rb + k * ((1.0 - score_a) - eb)
+
+
+def load_elo_store(path: Path) -> dict:
+    """Load persistent Elo ratings.
+
+    Schema::
+
+        {
+          "ratings": {"classic": 1000.0, "dqn-arena-v5": 1050.0, "ckpt-25000": 1020.0},
+          "history": [
+            {"step": 25000, "name": "ckpt-25000", "rating": 1020.0,
+             "records": {"classic": "2-1-0", "dqn-arena-v5": "1-2-0"}}
+          ]
+        }
+    """
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    return {"ratings": {"classic": 1000.0}, "history": []}
+
+
+def save_elo_store(path: Path, store: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(store, indent=2), encoding="utf-8")
 
 
 def sample_character(args: Any) -> str:

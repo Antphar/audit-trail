@@ -19059,6 +19059,10 @@ function configureHeadlessEpisode(config) {
     game.track.movingObjects = [];
     game.track.regulatoryDragon = null;
   }
+  if (config.opponentCount !== null && game.ais && game.ais.length > config.opponentCount) {
+    game.ais = game.ais.slice(0, config.opponentCount);
+    game.totalRacers = 1 + game.ais.length;
+  }
   if (!config.solo && Array.isArray(config.opponentModels) && config.opponentModels.length && game.ais?.length) {
     const classicSlots = Math.max(0, Math.floor(Number(config.classicOpponentSlots || 0)));
     game.ais = game.ais.map((ai, idx) => {
@@ -19184,6 +19188,9 @@ function makeHeadlessConfig(overrides = {}) {
     noHazards: battle ? true : (overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0"))),
     map: overrides.map ?? URL_PARAMS.get("map") ?? URL_PARAMS.get("headlessMap") ?? (battle ? BATTLE_ARENA_ID : "protocol_amendment_labyrinth"),
     character: overrides.character ?? URL_PARAMS.get("char") ?? URL_PARAMS.get("character") ?? "anton",
+    opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,
+    classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
+    opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.max(0, Math.floor(Number(overrides.opponentCount))) : null,
   };
 }
 
@@ -19350,7 +19357,15 @@ function setupExternalRlApi() {
       obsKeys: obs.keys,
       actions: HEADLESS_DQN_ACTIONS,
       done: false,
-      info: { agent, mode: config.mode, map: map.id, mapName: map.name, character: CHARACTERS[game.selectedCharIdx || 0].id },
+      info: {
+        agent,
+        mode: config.mode,
+        map: map.id,
+        mapName: map.name,
+        character: CHARACTERS[game.selectedCharIdx || 0].id,
+        opponentModelsApplied: game.ais ? game.ais.filter(ai => ai instanceof TrainedAIKart).length : 0,
+        opponentCount: game.ais ? game.ais.length : 0,
+      },
     };
   };
   window.rlStep = (action) => {

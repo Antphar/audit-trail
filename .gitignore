@@ -25,3 +25,4 @@ __pycache__/
 models/checkpoints/
 logs/
 *.log
+elo-*.png

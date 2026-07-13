@@ -598,6 +598,269 @@ def sample_league_opponents(args: argparse.Namespace, league: list[dict[str, Any
     return opponents
 
 
+def load_anchor_models(
+    manifest_path: Path,
+    anchor_ids: list[str],
+    *,
+    console: Console | None = None,
+) -> list[dict[str, Any]]:
+    anchors: list[dict[str, Any]] = []
+    if not manifest_path.exists():
+        return anchors
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return anchors
+    root = manifest_path.parent.parent
+    by_id = {m.get("id"): m for m in manifest.get("models", []) if m.get("id")}
+    for anchor_id in anchor_ids:
+        entry = by_id.get(anchor_id)
+        if not entry:
+            if console:
+                console.print(f"[yellow]Anchor model '{anchor_id}' not found in manifest; skipping.[/yellow]")
+            continue
+        path = entry.get("path")
+        if not path:
+            continue
+        model_path = root / path
+        if not model_path.exists():
+            if console:
+                console.print(f"[yellow]Anchor model file missing: {model_path}[/yellow]")
+            continue
+        try:
+            payload = json.loads(model_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "dqn":
+            continue
+        anchors.append({"name": anchor_id, "payload": payload})
+    return anchors
+
+
+def resolve_training_opponents(
+    args: argparse.Namespace,
+    *,
+    is_battle: bool,
+    league: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+    checkpoint_pool: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int | None]:
+    if is_battle and args.self_play:
+        opponent_models, classic_slots = common.sample_battle_opponents(anchors, checkpoint_pool)
+        return opponent_models, classic_slots
+    return common.sample_league_opponents(args, league), None
+
+
+@torch.no_grad()
+def score_battle_duel(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+) -> float:
+    """Run a 1v1 duel; return 1.0 win, 0.5 draw, 0.0 loss.
+
+    Scoring: elimination is a loss; ``battleWin`` with player atop ``__lastRlRanking``
+    is a win; otherwise ranking order decides (timer/survival), with equal approvals
+    as a draw.
+    """
+    obs = env.reset_with(
+        map_id=map_id,
+        character=character,
+        opponent_models=[opponent_payload] if opponent_payload else [],
+        classic_opponent_slots=0 if opponent_payload else 1,
+        opponent_count=1,
+    )
+    done = False
+    last_info: dict[str, Any] = {}
+    while not done:
+        q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+        action = int(torch.argmax(q_vals, dim=1).item())
+        obs, _, done, last_info = env.step(action)
+
+    if last_info.get("eliminated"):
+        return 0.0
+
+    ranking = env.page.evaluate("() => window.__lastRlRanking || []")
+    if last_info.get("battleWin") and ranking and ranking[0].get("charId") == character:
+        return 1.0
+
+    player_entry = next((r for r in ranking if r.get("charId") == character), None)
+    opp_entry = next((r for r in ranking if r.get("charId") != character), None)
+    if not player_entry or not opp_entry:
+        return 0.5
+
+    player_idx = ranking.index(player_entry)
+    opp_idx = ranking.index(opp_entry)
+    player_approvals = float(last_info.get("approvals", 0))
+    opp_approvals = float(
+        env.page.evaluate(
+            """() => {
+              const karts = typeof getActiveKarts === 'function' ? getActiveKarts() : [];
+              const playerChar = game.player?.charId;
+              const opp = karts.find(k => k && k.charId !== playerChar);
+              return opp ? (opp.approvals || 0) : 0;
+            }"""
+        )
+        or 0
+    )
+    if player_approvals == opp_approvals:
+        return 0.5
+    return 1.0 if player_idx < opp_idx else 0.0
+
+
+def run_elo_rating_round(
+    eval_env: Any,
+    model: DQN,
+    args: argparse.Namespace,
+    *,
+    step: int,
+    checkpoint_name: str,
+    anchors: list[dict[str, Any]],
+    checkpoint_pool: list[dict[str, Any]],
+    elo_store: dict[str, Any],
+    console: Console,
+) -> dict[str, Any]:
+    ratings = elo_store.setdefault("ratings", {})
+    history = elo_store.setdefault("history", [])
+    ratings.setdefault("classic", 1000.0)
+
+    prev_ckpts = [c for c in checkpoint_pool if c["name"] != checkpoint_name]
+    prev_rating = ratings.get(prev_ckpts[-1]["name"], 1000.0) if prev_ckpts else 1000.0
+    ratings[checkpoint_name] = prev_rating
+    rating_at_start = prev_rating
+
+    opponents: list[tuple[str, dict[str, Any] | None]] = [("classic", None)]
+    for anchor in anchors:
+        opponents.append((anchor["name"], anchor["payload"]))
+        ratings.setdefault(anchor["name"], 1000.0)
+    for ckpt in prev_ckpts[-args.rating_recent_checkpoints :]:
+        opponents.append((ckpt["name"], ckpt["payload"]))
+        ratings.setdefault(ckpt["name"], 1000.0)
+
+    records: dict[str, str] = {}
+    for opp_name, opp_payload in opponents:
+        wins = losses = draws = 0
+        for _ in range(args.rating_episodes):
+            score = score_battle_duel(
+                eval_env,
+                model,
+                map_id=args.map,
+                character=args.character,
+                opponent_payload=opp_payload,
+            )
+            if score >= 1.0:
+                wins += 1
+            elif score <= 0.0:
+                losses += 1
+            else:
+                draws += 1
+
+            ckpt_rating = ratings[checkpoint_name]
+            opp_rating = ratings[opp_name]
+            if opp_name == "classic":
+                new_ckpt, _ = common.elo_update(ckpt_rating, opp_rating, score, args.elo_k)
+                ratings[checkpoint_name] = new_ckpt
+            else:
+                new_ckpt, new_opp = common.elo_update(ckpt_rating, opp_rating, score, args.elo_k)
+                ratings[checkpoint_name] = new_ckpt
+                ratings[opp_name] = new_opp
+
+        records[opp_name] = f"{wins}-{losses}-{draws}"
+
+    final_rating = ratings[checkpoint_name]
+    delta = final_rating - rating_at_start
+    history.append(
+        {
+            "step": step,
+            "name": checkpoint_name,
+            "rating": final_rating,
+            "records": records,
+            # Full ratings snapshot so anchor trajectories can be plotted later.
+            "ratings_snapshot": {name: round(value, 2) for name, value in ratings.items()},
+        }
+    )
+
+    table = Table(title=f"Elo Rating @ step {step} ({checkpoint_name})")
+    table.add_column("Opponent")
+    table.add_column("Rating", justify="right")
+    table.add_column("W-L-D")
+    for opp_name, _ in opponents:
+        table.add_row(opp_name, f"{ratings[opp_name]:.1f}", records.get(opp_name, "-"))
+    console.print(table)
+    console.print(
+        f"Checkpoint {checkpoint_name} Elo: {final_rating:.1f} "
+        f"(Δ vs previous: {delta:+.1f})"
+    )
+    ckpt_history = [(h["step"], h["rating"]) for h in history if str(h.get("name", "")).startswith("ckpt-")]
+    if ckpt_history:
+        progression = ", ".join(f"({s},{r:.0f})" for s, r in ckpt_history)
+        console.print(f"Elo progression: {progression}")
+    return elo_store
+
+
+def print_elo_ascii_chart(console: Console, history: list[dict[str, Any]], *, width: int = 64, height: int = 12) -> None:
+    """Render the checkpoint Elo progression as a simple terminal chart."""
+    points = sorted(
+        (int(h["step"]), float(h["rating"]))
+        for h in history
+        if str(h.get("name", "")).startswith("ckpt-")
+    )
+    if len(points) < 2:
+        return
+    ratings = [r for _, r in points]
+    lo, hi = min(ratings + [1000.0]), max(ratings + [1000.0])
+    if hi - lo < 1e-9:
+        hi = lo + 1.0
+    pad = (hi - lo) * 0.08
+    lo, hi = lo - pad, hi + pad
+
+    grid = [[" "] * width for _ in range(height)]
+    def col(i: int) -> int:
+        return round(i * (width - 1) / max(1, len(points) - 1))
+    def row(r: float) -> int:
+        return (height - 1) - round((r - lo) / (hi - lo) * (height - 1))
+
+    baseline_row = row(1000.0)
+    for x in range(width):
+        grid[baseline_row][x] = "·"
+    prev = None
+    for i, (_, r) in enumerate(points):
+        x, y = col(i), row(r)
+        if prev is not None:
+            px, py = prev
+            step_dir = 1 if y > py else -1
+            for yy in range(py + step_dir, y, step_dir):
+                grid[yy][px] = "|"
+        grid[y][x] = "●"
+        prev = (x, y)
+
+    console.print(f"[bold]Elo progression[/bold] (● checkpoints, ···· classic baseline 1000)")
+    for y, line in enumerate(grid):
+        label = f"{hi - (hi - lo) * y / (height - 1):7.0f} " if y in (0, baseline_row, height - 1) else "        "
+        console.print(label + "".join(line), highlight=False)
+    step_lo, step_hi = points[0][0], points[-1][0]
+    console.print(f"        step {step_lo:,} … {step_hi:,}   final Elo {ratings[-1]:.1f}")
+
+
+def check_self_play_applied(env: Any, args: argparse.Namespace, console: Console, checked: bool) -> bool:
+    if checked or not args.self_play:
+        return checked
+    applied = int(env.last_reset_info.get("opponentModelsApplied", 0) or 0)
+    if applied == 0:
+        console.print(
+            Panel(
+                "[bold red]Self-play opponent models were NOT applied by the browser.[/bold red]\n"
+                "TrainedAIKart opponents may be missing — check makeHeadlessConfig pass-through.",
+                title="Self-Play Warning",
+                border_style="red",
+            )
+        )
+    return True
+
+
 def sample_character(args: argparse.Namespace) -> str:
     if not args.random_character:
         return args.character
@@ -851,11 +1114,30 @@ def train(args: argparse.Namespace) -> None:
         )
         env.load()
         league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode) if args.self_play else []
-        obs = env.reset_with(
-            map_id=common.sample_map(args),
-            character=common.sample_character(args),
-            opponent_models=common.sample_league_opponents(args, league),
+        anchors = (
+            load_anchor_models(Path(args.league_manifest), parse_csv(args.anchor_models), console=console)
+            if is_battle and args.self_play
+            else []
         )
+        checkpoint_pool: list[dict[str, Any]] = []
+        elo_store = common.load_elo_store(Path(args.checkpoint_dir) / f"elo-{args.model_id}.json")
+        self_play_checked = False
+        init_opponents, init_classic = resolve_training_opponents(
+            args,
+            is_battle=is_battle,
+            league=league,
+            anchors=anchors,
+            checkpoint_pool=checkpoint_pool,
+        )
+        reset_kwargs: dict[str, Any] = {
+            "map_id": common.sample_map(args),
+            "character": common.sample_character(args),
+            "opponent_models": init_opponents,
+        }
+        if init_classic is not None:
+            reset_kwargs["classic_opponent_slots"] = init_classic
+        obs = env.reset_with(**reset_kwargs)
+        self_play_checked = check_self_play_applied(env, args, console, self_play_checked)
         eval_page = browser.new_page()
         eval_env = common.TurboKartEnv(
             page=eval_page,
@@ -977,7 +1259,8 @@ def train(args: argparse.Namespace) -> None:
                             f"[bold]RDQ[/bold]: {args.rdq} (β={args.rdq_beta if args.rdq else 0.0})",
                             f"[bold]PER[/bold]: {args.prioritized_replay}"
                             + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
-                            f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)",
+                            f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)"
+                            + (f", {len(anchors)} anchors" if anchors else ""),
                         ]
                     ),
                     title="TurboKart DQN Training",
@@ -1050,13 +1333,24 @@ def train(args: argparse.Namespace) -> None:
                 recent_finishes.append(1.0 if info.get("finished") else 0.0)
                 recent_maps.append(env.map_id)
                 recent_chars.append(env.character)
-                if args.self_play:
+                if args.self_play and not is_battle:
                     league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
-                obs = env.reset_with(
-                    map_id=common.sample_map(args),
-                    character=common.sample_character(args),
-                    opponent_models=common.sample_league_opponents(args, league),
+                ep_opponents, ep_classic = resolve_training_opponents(
+                    args,
+                    is_battle=is_battle,
+                    league=league,
+                    anchors=anchors,
+                    checkpoint_pool=checkpoint_pool,
                 )
+                ep_reset_kwargs: dict[str, Any] = {
+                    "map_id": common.sample_map(args),
+                    "character": common.sample_character(args),
+                    "opponent_models": ep_opponents,
+                }
+                if ep_classic is not None:
+                    ep_reset_kwargs["classic_opponent_slots"] = ep_classic
+                obs = env.reset_with(**ep_reset_kwargs)
+                self_play_checked = check_self_play_applied(env, args, console, self_play_checked)
                 episode_reward = 0.0
 
             if len(buffer) >= args.batch_size and step >= args.learning_starts:
@@ -1197,6 +1491,34 @@ def train(args: argparse.Namespace) -> None:
                 if eval_report["avg_reward"] > best_eval_reward:
                     best_eval_reward = eval_report["avg_reward"]
 
+                try:
+                    ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                    checkpoint_pool.append({"name": f"ckpt-{step}", "payload": ckpt_payload})
+                    checkpoint_pool = checkpoint_pool[-args.checkpoint_pool_size :]
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+                if is_battle and args.self_play:
+                    elo_path = Path(args.checkpoint_dir) / f"elo-{args.model_id}.json"
+                    elo_store = run_elo_rating_round(
+                        eval_env,
+                        q,
+                        args,
+                        step=step,
+                        checkpoint_name=f"ckpt-{step}",
+                        anchors=anchors,
+                        checkpoint_pool=checkpoint_pool,
+                        elo_store=elo_store,
+                        console=console,
+                    )
+                    common.save_elo_store(elo_path, elo_store)
+
+        ckpt_history = [
+            (h["step"], h["rating"])
+            for h in elo_store.get("history", [])
+            if str(h.get("name", "")).startswith("ckpt-")
+        ]
+        final_elo = ckpt_history[-1][1] if ckpt_history else 1000.0
         final_eval_report = evaluate_tracks(eval_env, q, args)
         final_track_report = final_eval_report["tracks"].get(args.map) or next(
             iter(final_eval_report["tracks"].values())
@@ -1230,6 +1552,8 @@ def train(args: argparse.Namespace) -> None:
                 "eval": final_eval_report,
                 "reference": reference_metrics,
                 "attribution": final_attribution,
+                "elo": final_elo,
+                "eloHistory": ckpt_history,
             },
             Path(args.manifest),
         )
@@ -1257,6 +1581,21 @@ def train(args: argparse.Namespace) -> None:
                 console, "Final Action Distribution", action_counts, [a["name"] for a in env.actions]
             )
             console.print(f"[green]Exported model:[/green] {args.out}")
+            if ckpt_history:
+                console.print(f"[green]Final Elo:[/green] {final_elo:.1f}  progression={ckpt_history}")
+                print_elo_ascii_chart(console, elo_store.get("history", []))
+                elo_store_path = Path(args.checkpoint_dir) / f"elo-{args.model_id}.json"
+                elo_png = f"elo-{args.model_id}.png"
+                try:
+                    subprocess.run(
+                        ["uv", "run", "plot_elo.py", "--store", str(elo_store_path), "--out", elo_png],
+                        check=True,
+                        capture_output=True,
+                        timeout=300,
+                    )
+                    console.print(f"[green]Elo chart written:[/green] {elo_png}")
+                except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+                    console.print(f"[yellow]Could not render Elo chart PNG: {exc}[/yellow]")
         eval_page.close()
         browser.close()
 
@@ -1350,6 +1689,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--league-opponents", type=int, default=3)
     parser.add_argument("--league-recency-tau", type=float, default=4.0)
     parser.add_argument("--classic-opponent-prob", type=float, default=0.25)
+    parser.add_argument(
+        "--anchor-models",
+        default="dqn-arena-v5,dqn-arena",
+        help="Comma-separated manifest ids used as fixed anchor opponents (battle self-play).",
+    )
+    parser.add_argument(
+        "--checkpoint-pool-size",
+        type=int,
+        default=8,
+        help="How many recent own checkpoints stay in the battle self-play pool.",
+    )
+    parser.add_argument(
+        "--rating-episodes",
+        type=int,
+        default=3,
+        help="Duel episodes per rated opponent at each checkpoint (battle only).",
+    )
+    parser.add_argument(
+        "--rating-recent-checkpoints",
+        type=int,
+        default=2,
+        help="How many most-recent previous checkpoints join the Elo rating set.",
+    )
+    parser.add_argument("--elo-k", type=float, default=32.0, help="Elo K-factor for checkpoint rating duels.")
     parser.add_argument("--no-auto-install-browser", dest="auto_install_browser", action="store_false")
     parser.add_argument("--install-browser-only", action="store_true")
     parser.set_defaults(auto_install_browser=True, orthogonal_init=True)
