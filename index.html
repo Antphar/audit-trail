@@ -1111,7 +1111,7 @@
         <button class="btn toggle-btn" data-approvals="4" type="button">4</button>
         <button class="btn toggle-btn" data-approvals="5" type="button">5</button>
       </div>
-      <div class="ai-helper-text" style="text-align:center;margin-top:6px;">Get rivals' submissions REVOKED. Lose all your Approvals and you're REJECTED. Opponent count &amp; difficulty are in Settings.</div>
+      <div class="ai-helper-text" style="text-align:center;margin-top:6px;">Knock rivals out to STEAL their Approvals — Merge Request rips one straight off. Lose all yours and you're REJECTED. Opponent count &amp; difficulty are in Settings.</div>
     </div>
 
     <div class="ai-select-section" id="ai-select-section">
@@ -1846,6 +1846,8 @@ function applyDeauthShockwave(sourceKart) {
     } else {
       kart.spinoutTimer = Math.max(kart.spinoutTimer, 32);
       kart.spinAngle = 0;
+      kart.lastAttacker = sourceKart;
+      kart.lastAttackerAt = game.raceTime;
       triggerQuote(kart, "crash");
       if (kart.isPlayer) triggerHitFlash("DE-AUTH!", "#ff3366", 80, kart);
       if (game.particles) {
@@ -1927,6 +1929,7 @@ function findMergeRequestTarget(kart) {
 }
 
 function startMergeRequestPull(kart) {
+  kart.mergeBattleStole = false;
   const target = findMergeRequestTarget(kart);
   if (!target) {
     kart.boostTimer = Math.max(kart.boostTimer, 36);
@@ -1951,6 +1954,21 @@ function startMergeRequestPull(kart) {
   kart.mergePullTargetId = getKartId(target);
   kart.mergePullTimer = 110;
   target.mergePullVictimTimer = 110;
+  if (isBattleMode() && !kart.mergeBattleStole) {
+    kart.mergeBattleStole = true;
+    if (target.shieldTimer > 0) {
+      if (game.particles) {
+        game.particles.add({
+          type: "text", text: "BLOCKED", x: target.x, y: target.y - 28,
+          vx: 0, vy: -0.9, life: 40, maxLife: 40, size: 15, color: "#78dcff", drag: 0.98,
+        });
+      }
+    } else {
+      target.lastAttacker = kart;
+      target.lastAttackerAt = game.raceTime;
+      popApproval(target);
+    }
+  }
   triggerQuote(kart, "boost");
   if (target.isPlayer) {
     triggerHitFlash("MERGE REQUESTED!", "#39ff14", 80, target);
@@ -1995,6 +2013,7 @@ function applyMergeRequestPull(kart, dt) {
     kart.mergePullTimer = 0;
     kart.mergePullTarget = null;
     kart.mergePullTargetId = null;
+    kart.mergeBattleStole = false;
     return;
   }
 
@@ -2005,6 +2024,7 @@ function applyMergeRequestPull(kart, dt) {
     kart.mergePullTimer = 0;
     kart.mergePullTarget = null;
     kart.mergePullTargetId = null;
+    kart.mergeBattleStole = false;
     kart.boostTimer = Math.max(kart.boostTimer, 48);
     return;
   }
@@ -2247,6 +2267,8 @@ function activateUltimate(kart) {
       k.vy += ny * force * falloff;
       k.spinoutTimer = Math.max(k.spinoutTimer, stunTime);
       k.spinAngle = 0;
+      k.lastAttacker = kart;
+      k.lastAttackerAt = game.raceTime;
       triggerQuote(k, "crash");
       if (k.isPlayer) triggerHitFlash("THINKPAD SLAM!", "#9d4dff", 85, k);
       slamHits++;
@@ -2436,22 +2458,34 @@ function popApproval(kart) {
   }
   // Reward whoever caused this hit (esp. the human) with a clear "you stole a life" cue.
   const attacker = kart.lastAttacker;
-  if (attacker && attacker !== kart && !attacker.eliminated && (game.raceTime - (kart.lastAttackerAt || 0)) < 2) {
-    attacker.battleSteals = (attacker.battleSteals || 0) + 1; // pops scoreboard (all karts)
-    if (attacker.isPlayer) {
+  const creditedAttacker = attacker && attacker !== kart && !attacker.eliminated && (game.raceTime - (kart.lastAttackerAt || 0)) < 2 ? attacker : null;
+  if (creditedAttacker) {
+    creditedAttacker.battleSteals = (creditedAttacker.battleSteals || 0) + 1; // pops scoreboard (all karts)
+    // Steals transfer the popped approval to the attacker, capped at max starting stack.
+    creditedAttacker.approvals = Math.min(5, (creditedAttacker.approvals || 0) + 1);
+    if (creditedAttacker.isPlayer) {
       game.rlSteals = (game.rlSteals || 0) + 1; // headless RL: player stole a life this frame
-      if (Sound.approvalPop) Sound.approvalPop();
+      if (Sound.approvalSteal) Sound.approvalSteal();
       game.shake = Math.max(game.shake, 7);
       game.flash = Math.max(game.flash, 4);
+      triggerHitFlash("APPROVAL STOLEN +1", "#a4ff80", 80, creditedAttacker);
     }
     if (game.particles) {
       game.particles.add({
-        type: "text", text: attacker.isPlayer ? "+1 STEAL!" : "STOLEN!", x: kart.x, y: kart.y - 50,
+        type: "text", text: creditedAttacker.isPlayer ? "+1 APPROVAL!" : "STOLEN!", x: kart.x, y: kart.y - 50,
         vx: 0, vy: -1.2, life: 60, maxLife: 60, size: 17, color: "#a4ff80", drag: 0.98,
+      });
+      game.particles.add({
+        type: "text", text: "+1", x: creditedAttacker.x, y: creditedAttacker.y - 30,
+        vx: 0, vy: -1.0, life: 45, maxLife: 45, size: 14, color: "#a4ff80", drag: 0.98,
       });
     }
   }
   if (kart.approvals <= 0) {
+    if (creditedAttacker && creditedAttacker.isPlayer) {
+      triggerHitFlash("REJECTED THEM!", "#ffd86b", 100, creditedAttacker);
+      if (Sound.killConfirm) Sound.killConfirm();
+    }
     eliminateKart(kart, "REJECTED!", kart.x, kart.y, "#ff3366", kart.lastAttacker);
   }
 }
@@ -3264,6 +3298,46 @@ const Sound = {
     osc.connect(filter); filter.connect(g); g.connect(this.sfxGain);
     osc.start(t); osc.stop(t + 0.26);
     this.noise(0.12, 0.08, 800);
+  },
+  approvalSteal() {
+    if (!this.ctx || this.muted) return;
+    const freqs = [520, 660, 880];
+    freqs.forEach((f, i) => {
+      setTimeout(() => {
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = "triangle"; osc.frequency.value = f;
+        osc2.type = "square"; osc2.frequency.value = f * 1.01;
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.linearRampToValueAtTime(0.12, t + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.001, t + (i === 2 ? 0.14 : 0.08));
+        osc.connect(g); osc2.connect(g); g.connect(this.sfxGain);
+        osc.start(t); osc.stop(t + 0.16);
+        osc2.start(t); osc2.stop(t + 0.16);
+      }, i * 45);
+    });
+  },
+  killConfirm() {
+    if (!this.ctx || this.muted) return;
+    const freqs = [440, 880];
+    freqs.forEach((f, i) => {
+      setTimeout(() => {
+        const t = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const osc2 = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        osc.type = "triangle"; osc.frequency.value = f;
+        osc2.type = "square"; osc2.frequency.value = f * 0.5;
+        g.gain.setValueAtTime(0.001, t);
+        g.gain.linearRampToValueAtTime(0.14, t + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.001, t + (i === 0 ? 0.12 : 0.22));
+        osc.connect(g); osc2.connect(g); g.connect(this.sfxGain);
+        osc.start(t); osc.stop(t + 0.25);
+        osc2.start(t); osc2.stop(t + 0.25);
+      }, i * 90);
+    });
   },
   honk(charId) {
     if (!this.ctx || this.muted) return;
