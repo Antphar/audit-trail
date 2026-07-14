@@ -19217,7 +19217,10 @@ function computeHeadlessBattleReward(kart) {
   game.rlSteals = 0;
   game.rlLosses = 0;
   game.rlHits = 0;
-  let reward = 1.0 * steals - 1.5 * losses + 1.0 * hits;
+  // Aggression-shaped: pops/steals pay far more than passive survival, and every frame
+  // costs a little so running out the clock is never the best policy.
+  let reward = 3.0 * steals - 1.5 * losses + 1.5 * hits;
+  reward -= 0.001; // time pressure: ~-7.2 over a full 120s match
   const uses = kart.itemUseCount || 0;
   if (uses > (kart._rlPrevItemUses || 0)) reward += 0.3 * (uses - (kart._rlPrevItemUses || 0));
   kart._rlPrevItemUses = uses;
@@ -19235,6 +19238,7 @@ function computeHeadlessBattleReward(kart) {
     kart._rlWinCounted = true;
     const alive = getActiveKarts().filter(k => k && !k.eliminated);
     if (!kart.eliminated && (alive.length <= 1 || rankAll()[0] === kart)) reward += 20;
+    else if (!kart.eliminated) reward -= 5; // surviving to a timeout without leading is a soft loss
   }
   return reward;
 }
