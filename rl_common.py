@@ -605,9 +605,13 @@ def sample_battle_opponents(
         opponents.append(r.choice(anchors)["payload"])
     while len(opponents) + classic_slots < total_slots:
         if checkpoint_pool:
-            # Pool is ordered oldest-first; weight the most recent checkpoints highest.
-            weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
-            opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
+            if r.random() < 0.5:
+                # Recency-weighted: fight your recent self (pool is oldest-first).
+                weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
+                opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
+            else:
+                # Uniform over full history: keep beating old play styles too.
+                opponents.append(r.choice(checkpoint_pool)["payload"])
         else:
             classic_slots += 1
     return opponents, classic_slots
