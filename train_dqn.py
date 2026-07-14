@@ -213,6 +213,7 @@ class TurboKartEnv:
         return stacked
 
     def _stack_obs(self, obs: np.ndarray, reset: bool = False) -> np.ndarray:
+        self.last_base_obs = obs.copy()
         if reset or not self._frames:
             self._frames.clear()
             for _ in range(self.frame_stack):
@@ -1193,10 +1194,17 @@ def train(args: argparse.Namespace) -> None:
         )
         target_q.load_state_dict(q.state_dict())
         optimizer = torch.optim.Adam(q.parameters(), lr=args.lr)
-        if args.prioritized_replay:
-            buffer = common.PrioritizedReplayBuffer(args.buffer_size, alpha=args.per_alpha)
-        else:
-            buffer = common.ReplayBuffer(args.buffer_size)
+        if env.frame_stack > 1 and not hasattr(env, "_stack_mask"):
+            env._build_stack_mask()
+        buffer = common.FrameReplayBuffer(
+            capacity=args.buffer_size,
+            base_dim=len(env._base_keys),
+            frame_stack=args.frame_stack,
+            stack_mask=getattr(env, "_stack_mask", None),
+            dtype=args.replay_dtype,
+            alpha=args.per_alpha if args.prioritized_replay else None,
+        )
+        buffer.start_episode(env.last_base_obs)
 
         episode_reward = 0.0
         episode_count = 0
@@ -1270,6 +1278,8 @@ def train(args: argparse.Namespace) -> None:
                             f"[bold]RDQ[/bold]: {args.rdq} (β={args.rdq_beta if args.rdq else 0.0})",
                             f"[bold]PER[/bold]: {args.prioritized_replay}"
                             + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
+                            f"[bold]Replay dtype[/bold]: {args.replay_dtype} "
+                            f"({buffer.memory_bytes / 1024 / 1024:.2f} MiB buffer)",
                             f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)"
                             + (f", {len(anchors)} anchors" if anchors else ""),
                         ]
@@ -1313,7 +1323,7 @@ def train(args: argparse.Namespace) -> None:
             recent_action_counts[action] += 1
 
             next_obs, reward, done, info = env.step(action)
-            buffer.add(common.Transition(obs, action, reward, next_obs, done))
+            buffer.add(env.last_base_obs, action, reward, done)
             obs = next_obs
             episode_reward += reward
 
@@ -1361,6 +1371,7 @@ def train(args: argparse.Namespace) -> None:
                 if ep_classic is not None:
                     ep_reset_kwargs["classic_opponent_slots"] = ep_classic
                 obs = env.reset_with(**ep_reset_kwargs)
+                buffer.start_episode(env.last_base_obs)
                 self_play_checked = check_self_play_applied(env, args, console, self_play_checked, len(ep_opponents))
                 episode_reward = 0.0
 
@@ -1427,6 +1438,8 @@ def train(args: argparse.Namespace) -> None:
                     "recent_maps": dict(sorted({m: recent_maps.count(m) for m in set(recent_maps)}.items())),
                     "recent_chars": dict(sorted({c: recent_chars.count(c) for c in set(recent_chars)}.items())),
                 }
+                if args.replay_dtype == "int8" and buffer.clip_events > 0:
+                    progress_payload["replay_clip_events"] = buffer.clip_events
                 recent_action_counts[:] = 0
                 if args.json_logs:
                     emit_json(progress_payload)
@@ -1439,6 +1452,10 @@ def train(args: argparse.Namespace) -> None:
                         loss=common.format_float(last_loss, 4),
                         episodes=f"{episode_count} a:{top_action}",
                     )
+                    if args.replay_dtype == "int8" and buffer.clip_events > 0:
+                        console.print(
+                            f"[yellow]warning[/yellow] replay int8 clip events: {buffer.clip_events}"
+                        )
 
             if step % args.eval_every == 0:
                 eval_report = evaluate_tracks(eval_env, q, args)
@@ -1669,6 +1686,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--prioritized-replay", action="store_true")
+    parser.add_argument(
+        "--replay-dtype",
+        choices=["float16", "int8", "float32"],
+        default="float16",
+        help="Storage dtype for frame replay buffer (base frames only).",
+    )
     parser.add_argument("--per-alpha", type=float, default=0.6)
     parser.add_argument("--per-beta-start", type=float, default=0.4)
     parser.add_argument("--per-beta-end", type=float, default=1.0)

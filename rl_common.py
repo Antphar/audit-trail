@@ -116,6 +116,207 @@ class PrioritizedReplayBuffer:
             self._max_priority = max(self._max_priority, float(p))
 
 
+class FrameReplayBuffer:
+    """Stores single base frames at reduced precision; reconstructs frame stacks on sample.
+
+    Memory layout:
+      frames:   np.ndarray (capacity, base_dim) dtype float16 (or int8, scaled by 127 over [-1,1])
+      episodes: np.ndarray (capacity,) uint32   — episode id per frame
+      actions:  np.ndarray (capacity,) int16
+      rewards:  np.ndarray (capacity,) float32
+      dones:    np.ndarray (capacity,) bool
+      valid:    np.ndarray (capacity,) bool     — slot holds a *transition* (frame i has action/reward
+                                                and frame i+1 exists in same episode)
+
+    Ring invalidation: overwriting slot *p* clears ``valid[p]``.  A transition at slot *p−1*
+    references next-frame *p*; if that next frame is overwritten, ``valid[p−1]`` is also cleared.
+    Stale lookbacks at sample time are rejected by the episode-id check (substitute earliest
+    in-episode frame, matching reset padding in ``_stack_obs``).
+    """
+
+    def __init__(
+        self,
+        capacity: int,
+        base_dim: int,
+        frame_stack: int,
+        stack_mask: np.ndarray | None,
+        dtype: str = "float16",
+        alpha: float | None = None,
+    ):
+        self._capacity = capacity
+        self._base_dim = base_dim
+        self._frame_stack = max(1, int(frame_stack))
+        self._stack_mask = stack_mask
+        self._stacked_dim = int(stack_mask.shape[0]) if stack_mask is not None else base_dim * self._frame_stack
+        self._dtype_name = dtype
+        self._alpha = alpha
+        self._int8 = dtype == "int8"
+        if dtype == "int8":
+            self.frames = np.zeros((capacity, base_dim), dtype=np.int8)
+        elif dtype == "float32":
+            self.frames = np.zeros((capacity, base_dim), dtype=np.float32)
+        else:
+            self.frames = np.zeros((capacity, base_dim), dtype=np.float16)
+        self.episodes = np.zeros(capacity, dtype=np.uint32)
+        self.actions = np.zeros(capacity, dtype=np.int16)
+        self.rewards = np.zeros(capacity, dtype=np.float32)
+        self.dones = np.zeros(capacity, dtype=bool)
+        self.valid = np.zeros(capacity, dtype=bool)
+        self._priorities = np.zeros(capacity, dtype=np.float64) if alpha is not None else None
+        self._max_priority = 1.0
+        self._write_pos = 0
+        self._size = 0
+        self._n_valid = 0
+        self._episode_id = 0
+        self._current_episode = 0
+        self.clip_events = 0
+
+    @property
+    def memory_bytes(self) -> int:
+        total = (
+            self.frames.nbytes
+            + self.episodes.nbytes
+            + self.actions.nbytes
+            + self.rewards.nbytes
+            + self.dones.nbytes
+            + self.valid.nbytes
+        )
+        if self._priorities is not None:
+            total += self._priorities.nbytes
+        return total
+
+    def __len__(self) -> int:
+        return self._n_valid
+
+    def _encode(self, obs: np.ndarray) -> np.ndarray:
+        obs = np.asarray(obs, dtype=np.float32)
+        if self._int8:
+            if np.any(np.abs(obs) > 1.001):
+                self.clip_events += 1
+            obs = np.clip(obs, -1.0, 1.0)
+            return np.round(obs * 127.0).astype(np.int8)
+        if self._dtype_name == "float32":
+            return obs.astype(np.float32)
+        return obs.astype(np.float16)
+
+    def _dequantize(self, arr: np.ndarray) -> np.ndarray:
+        if self._int8:
+            return arr.astype(np.float32) / 127.0
+        return arr.astype(np.float32)
+
+    def _invalidate_slot(self, p: int) -> None:
+        # Writes are sequential, so the transition at p-1 (if any) was overwritten on the
+        # previous write and its replacement's next-frame is the new content of p. Only the
+        # transition anchored at p itself loses its obs frame here.
+        if self.valid[p]:
+            self.valid[p] = False
+            self._n_valid -= 1
+
+    def _write_frame(self, base_obs: np.ndarray, episode_id: int) -> None:
+        p = self._write_pos
+        if self._size == self._capacity:
+            self._invalidate_slot(p)
+        self.frames[p] = self._encode(base_obs)
+        self.episodes[p] = episode_id
+        self.valid[p] = False
+        self._write_pos = (p + 1) % self._capacity
+        self._size = min(self._size + 1, self._capacity)
+
+    def start_episode(self, base_obs: np.ndarray) -> None:
+        self._episode_id += 1
+        self._current_episode = self._episode_id
+        self._write_frame(base_obs, self._current_episode)
+
+    def add(self, base_obs_next: np.ndarray, action: int, reward: float, done: bool) -> None:
+        prev = (self._write_pos - 1) % self._capacity
+        self.actions[prev] = action
+        self.rewards[prev] = reward
+        self.dones[prev] = done
+        if not self.valid[prev]:
+            self.valid[prev] = True
+            self._n_valid += 1
+            if self._priorities is not None:
+                self._priorities[prev] = self._max_priority**self._alpha
+        self._write_frame(base_obs_next, self._current_episode)
+
+    def _valid_indices(self) -> np.ndarray:
+        return np.flatnonzero(self.valid)
+
+    def _stack_index_matrix(self, anchors: np.ndarray, episode_ids: np.ndarray) -> np.ndarray:
+        cap = self._capacity
+        batch = anchors.shape[0]
+        idx_matrix = np.empty((batch, self._frame_stack), dtype=np.intp)
+        for lag in range(self._frame_stack):
+            raw_idx = (anchors - lag) % cap
+            if lag == 0:
+                idx_matrix[:, 0] = raw_idx
+                earliest = raw_idx.copy()
+            else:
+                same_ep = self.episodes[raw_idx] == episode_ids
+                earliest = np.where(same_ep, raw_idx, earliest)
+                idx_matrix[:, lag] = earliest
+        return idx_matrix
+
+    def _reconstruct_stacks(self, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        episode_ids = self.episodes[indices]
+        obs_idx = self._stack_index_matrix(indices, episode_ids)
+        next_anchors = (indices + 1) % self._capacity
+        next_idx = self._stack_index_matrix(next_anchors, episode_ids)
+
+        obs_raw = self.frames[obs_idx]
+        next_raw = self.frames[next_idx]
+        batch = indices.shape[0]
+        obs_full = obs_raw.reshape(batch, self._frame_stack * self._base_dim)
+        next_full = next_raw.reshape(batch, self._frame_stack * self._base_dim)
+        if self._stack_mask is not None:
+            obs_full = obs_full[:, self._stack_mask]
+            next_full = next_full[:, self._stack_mask]
+        return self._dequantize(obs_full), self._dequantize(next_full)
+
+    def sample(self, batch_size: int, beta: float = 0.4) -> tuple[torch.Tensor, ...]:
+        valid_idx = self._valid_indices()
+        if valid_idx.shape[0] < batch_size:
+            raise ValueError(f"Not enough valid transitions: {valid_idx.shape[0]} < {batch_size}")
+        if self._priorities is not None:
+            priorities = self._priorities[valid_idx]
+            probs = priorities / priorities.sum()
+            choice = np.random.choice(valid_idx.shape[0], size=batch_size, replace=False, p=probs)
+            indices = valid_idx[choice]
+            total = valid_idx.shape[0]
+            weights = (total * probs[choice]) ** (-beta)
+            weights /= weights.max()
+            weights_t = torch.tensor(weights, dtype=torch.float32)
+        else:
+            indices = np.random.choice(valid_idx, size=batch_size, replace=False)
+            weights_t = None
+
+        obs, next_obs = self._reconstruct_stacks(indices)
+        actions = torch.tensor(self.actions[indices], dtype=torch.int64).unsqueeze(1)
+        rewards = torch.tensor(self.rewards[indices], dtype=torch.float32)
+        dones = torch.tensor(self.dones[indices], dtype=torch.float32)
+        obs_t = torch.tensor(obs, dtype=torch.float32)
+        next_obs_t = torch.tensor(next_obs, dtype=torch.float32)
+        if weights_t is not None:
+            return obs_t, actions, rewards, next_obs_t, dones, weights_t, indices
+        return obs_t, actions, rewards, next_obs_t, dones
+
+    def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
+        if self._priorities is None or self._alpha is None:
+            return
+        priorities = (np.abs(td_errors) + 1e-6) ** self._alpha
+        for idx, p in zip(indices, priorities):
+            self._priorities[idx] = p
+            self._max_priority = max(self._max_priority, float(p))
+
+    def sample_obs(self, n: int) -> np.ndarray:
+        valid_idx = self._valid_indices()
+        if valid_idx.shape[0] < n:
+            raise ValueError(f"Not enough valid transitions: {valid_idx.shape[0]} < {n}")
+        indices = np.random.choice(valid_idx, size=n, replace=False)
+        obs, _ = self._reconstruct_stacks(indices)
+        return obs
+
+
 class TurboKartEnv:
     def __init__(
         self,
@@ -182,6 +383,7 @@ class TurboKartEnv:
         return stacked
 
     def _stack_obs(self, obs: np.ndarray, reset: bool = False) -> np.ndarray:
+        self.last_base_obs = obs.copy()
         if reset or not self._frames:
             self._frames.clear()
             for _ in range(self.frame_stack):
@@ -289,8 +491,11 @@ def smoothgrad_attribution(
 ) -> dict[str, float]:
     if len(buffer) < n_samples:
         return {}
-    batch = random.sample(buffer.data, n_samples)
-    obs_batch = torch.tensor(np.stack([t.obs for t in batch]), dtype=torch.float32)
+    if hasattr(buffer, "sample_obs"):
+        obs_batch = torch.tensor(buffer.sample_obs(n_samples), dtype=torch.float32)
+    else:
+        batch = random.sample(buffer.data, n_samples)
+        obs_batch = torch.tensor(np.stack([t.obs for t in batch]), dtype=torch.float32)
     obs_batch.requires_grad_(True)
 
     attributions = torch.zeros(obs_batch.shape[1])
