@@ -35,14 +35,14 @@ def parse_csv(value: str) -> list[str]:
 
 def launch_chromium(playwright: Any, auto_install: bool) -> Any:
     try:
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=["--allow-file-access-from-files"])
     except PlaywrightError as exc:
         message = str(exc)
         missing_browser = "Executable doesn't exist" in message or "playwright install" in message
         if not missing_browser or not auto_install:
             raise
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=["--allow-file-access-from-files"])
 
 
 def load_manifest(path: Path) -> list[dict[str, Any]]:

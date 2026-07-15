@@ -925,9 +925,14 @@ def print_battle_report(console: Console, title: str, report: dict[str, Any]) ->
     console.print(table)
 
 
+# The game is now split into ES modules; file:// pages need this flag so
+# Chromium allows module imports from the local filesystem.
+CHROMIUM_LAUNCH_ARGS = ["--allow-file-access-from-files"]
+
+
 def launch_chromium(playwright: Any, auto_install: bool) -> Any:
     try:
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
     except PlaywrightError as exc:
         message = str(exc)
         missing_browser = "Executable doesn't exist" in message or "playwright install" in message
@@ -943,7 +948,7 @@ def launch_chromium(playwright: Any, auto_install: bool) -> Any:
 
         print(json.dumps({"event": "browser_install", "command": "python -m playwright install chromium"}), flush=True)
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
 
 
 def update_model_manifest(manifest_path: Path, model_path: Path, payload: dict[str, Any]) -> None:

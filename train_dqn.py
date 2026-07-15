@@ -426,7 +426,7 @@ def print_eval_report(
 
 def launch_chromium(playwright: Any, auto_install: bool) -> Any:
     try:
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=["--allow-file-access-from-files"])
     except PlaywrightError as exc:
         message = str(exc)
         missing_browser = "Executable doesn't exist" in message or "playwright install" in message
@@ -442,7 +442,7 @@ def launch_chromium(playwright: Any, auto_install: bool) -> Any:
 
         print(json.dumps({"event": "browser_install", "command": "python -m playwright install chromium"}), flush=True)
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
-        return playwright.chromium.launch(headless=True)
+        return playwright.chromium.launch(headless=True, args=["--allow-file-access-from-files"])
 
 
 def _serialize_linear(layer: torch.nn.Linear) -> dict[str, Any]:

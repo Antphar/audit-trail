@@ -125,6 +125,54 @@ import {
   spawn3DShockwave,
   emit3DItemPickupBurst,
 } from "./render/three-frame.js";
+import { URL_PARAMS, HEADLESS_MODE, headlessFlag } from "./core/env.js";
+import { netRuntime } from "./net/net-runtime.js";
+import { rlRuntime } from "./rl/rl-runtime.js";
+import {
+  peer,
+  setPeer,
+  p2pConnections,
+  loadPeerJS,
+  generateLobbyCode,
+  getKartId,
+  sendP2pMessage,
+  serializeKartState,
+  applyKartState,
+  serializeKartCompact,
+  sendHostSync,
+  sendGuestSync,
+  handleP2pData,
+  handleP2pDisconnect,
+  addP2pGuest,
+  removeP2pGuestByConn,
+  broadcastP2pLobby,
+  broadcastP2pMessage,
+  resetP2pReadyForLobbyChange,
+  getP2pLobbyMapPayload,
+  p2pReturnToLobbyLocal,
+  p2pHostCancelRaceToLobby,
+  p2pGuestLeaveMatch,
+  sendP2pBattleEnd,
+  applyP2pPickupRequest,
+} from "./net/p2p.js";
+import {
+  HEADLESS_DQN_ACTIONS,
+  HEADLESS_OBS_KEYS,
+  headlessObsKeys,
+} from "./rl/observation.js";
+import {
+  validateModelPayload,
+  makeHeadlessConfig,
+  runHeadlessSimulation,
+  loadHeadlessPolicyModel,
+} from "./rl/headless.js";
+import {
+  setupExternalRlApi,
+  installWindowExports,
+  installTestHooks,
+} from "./rl/api.js";
+import { TrainedAIKart, DqnAIKart } from "./rl/headless.js";
+
 
 /* ============================================================
    AUDIT TRAIL — single-file arcade kart racer
@@ -190,8 +238,6 @@ screens.register("pause", pauseScreen);
 screens.register("finish", finishScreen);
 screens.register("p2p", p2pScreen);
 
-let peer = null;
-let p2pConnections = new Map();
 let p2pJoinAttemptSeq = 0;
 let aiModelManifest = null;
 const DEFAULT_AI_MODEL_ID = "dqn-selfplay-booster-stack4-skip6";
@@ -204,8 +250,6 @@ let selectedAiOpponentModels = {};
 
 const savedSettings = loadGameSettings();
 applySavedSettingsBoot(savedSettings);
-const URL_PARAMS = new URLSearchParams(window.location.search);
-const HEADLESS_MODE = URL_PARAMS.has("headless");
 
 
 function saveGameSettings(patch = {}) {
@@ -1631,16 +1675,6 @@ function sanitizeP2pLobbyMode(mode) {
   return mode === "battle" ? "battle" : "race";
 }
 
-function resetP2pReadyForLobbyChange() {
-  if (!game.p2pMode) return;
-  for (const p of (game.p2pPlayers || [])) p.locked = false;
-  game.p1Locked = false;
-  game.p2Locked = false;
-  syncP2pSelectionFromRoster({ preserveLocal: true });
-  if (game.p2pRole === "host") broadcastP2pLobby();
-  updateSelectionHighlight();
-  updateP2pStartButton();
-}
 
 function selectArenaMap(idx) {
   const map = MAPS[idx];
@@ -1765,17 +1799,6 @@ function getGrandPrixPreviewSvg() {
   `;
 }
 
-function getP2pLobbyMapPayload() {
-  return {
-    mode: isBattleMode() ? "battle" : "race",
-    battleApprovals: clampApprovals(game.battleApprovals),
-    battleUntimed: !!game.battleUntimed,
-    mapIdx: game.selectedMapIdx,
-    mapSelection: game.mapSelection,
-    grandPrixRaces,
-    trackIdx: Sound.trackIdx,
-  };
-}
 function isGroundHazardImmuneWhenAirborne(h) {
   return (h instanceof MergeConflict) || (h instanceof PlaceboPill) || (h instanceof DoubleBlindCloud);
 }
@@ -2163,6 +2186,60 @@ renderRuntime.drawCountdown = () => drawCountdown();
 renderRuntime.drawFinishBanner = () => drawFinishBanner();
 renderRuntime.drawApprovals3DOverlay = (c, time) => drawApprovals3DOverlay(c, time);
 
+// ---- net runtime (p2p subsystem callbacks) ----
+netRuntime.renderP2pLobby = renderP2pLobby;
+netRuntime.applyLobbyMapSelection = applyLobbyMapSelection;
+netRuntime.setMusicTrack = setMusicTrack;
+netRuntime.previewSelectedMapMusic = previewSelectedMapMusic;
+netRuntime.hideAll = hideAll;
+netRuntime.showSelectScreen = showSelectScreen;
+netRuntime.showFinishScreen = showFinishScreen;
+netRuntime.buildRace = buildRace;
+netRuntime.startCountdown = startCountdown;
+netRuntime.enterP2pSelectScreen = enterP2pSelectScreen;
+netRuntime.syncP2pSelectionFromRoster = syncP2pSelectionFromRoster;
+netRuntime.updateSelectionHighlight = updateSelectionHighlight;
+netRuntime.updateP2pStartButton = updateP2pStartButton;
+netRuntime.renderMapSelect = renderMapSelect;
+netRuntime.renderApprovalsSelect = renderApprovalsSelect;
+netRuntime.updateP2pBattleLobbyUi = updateP2pBattleLobbyUi;
+netRuntime.updateDriveButtonLabel = updateDriveButtonLabel;
+netRuntime.checkMultiplayerSelectFinish = checkMultiplayerSelectFinish;
+netRuntime.triggerHitFlash = triggerHitFlash;
+netRuntime.applyDeauthShockwave = applyDeauthShockwave;
+netRuntime.triggerShootEffect = triggerShootEffect;
+netRuntime.startMergeRequestPull = startMergeRequestPull;
+netRuntime.createDragonEscapeEntity = createDragonEscapeEntity;
+netRuntime.ensureSelectedMapMatchesMode = ensureSelectedMapMatchesMode;
+netRuntime.clampApprovals = clampApprovals;
+netRuntime.grandPrixRaces = grandPrixRaces;
+netRuntime.p2pHostStatus = p2pHostStatus;
+netRuntime.p2pCodeBox = p2pCodeBox;
+netRuntime.p2pMyCode = p2pMyCode;
+netRuntime.p2pHostRoster = p2pHostRoster;
+netRuntime.p2pJoinRoster = p2pJoinRoster;
+netRuntime.p2pStartRaceBtn = p2pStartRaceBtn;
+netRuntime.p2pJoinInput = p2pJoinInput;
+netRuntime.p2pJoinStatus = p2pJoinStatus;
+
+// ---- rl runtime (headless subsystem callbacks) ----
+rlRuntime.hideAll = hideAll;
+rlRuntime.buildRace = buildRace;
+rlRuntime.update = update;
+rlRuntime.finishRace = finishRace;
+rlRuntime.areAllHumansDone = areAllHumansDone;
+rlRuntime.rankAll = rankAll;
+rlRuntime.progressValue = progressValue;
+rlRuntime.gridSlot = gridSlot;
+rlRuntime.initBattleKartState = initBattleKartState;
+rlRuntime.getKartCollisionRadius = getKartCollisionRadius;
+rlRuntime.getRayObjectRadius = getRayObjectRadius;
+rlRuntime.qualifiesApprovalRam = qualifiesApprovalRam;
+rlRuntime.activateUltimate = activateUltimate;
+rlRuntime.startMergeRequestPull = startMergeRequestPull;
+rlRuntime.AI_DIFFICULTIES = AI_DIFFICULTIES;
+rlRuntime.aiDifficulty = aiDifficulty;
+rlRuntime.BATTLE_ARENA_ID = BATTLE_ARENA_ID;
 
 function drawItemNamePopup(ctx, x, y, kart, time) {
   if (!kart || !kart.itemNamePopup || kart.itemNamePopup.timer <= 0) return;
@@ -2979,128 +3056,12 @@ function ensureHostP2pPlayer() {
   renderP2pLobby();
 }
 
-function addP2pGuest(conn) {
-  const taken = new Set(game.p2pPlayers.map(p => p.id));
-  let slot = 1;
-  while (taken.has("guest_" + slot)) slot++;
-  if (slot > 7) {
-    try { conn.send({ type: "lobby_full" }); } catch(e) {}
-    try { conn.close(); } catch(e) {}
-    return null;
-  }
 
-  const id = "guest_" + slot;
-  const usedChars = new Set(game.p2pPlayers.map(p => p.charIdx));
-  let charIdx = slot % CHARACTERS.length;
-  for (let i = 0; i < CHARACTERS.length; i++) {
-    if (!usedChars.has(i)) { charIdx = i; break; }
-  }
 
-  const player = { id, charIdx, locked: false, joinedAt: Date.now() };
-  game.p2pPlayers.push(player);
-  p2pConnections.set(id, conn);
-  renderP2pLobby();
-  return player;
-}
 
-function removeP2pGuestByConn(conn) {
-  const removedId = getP2pIdForConn(conn);
-  if (!removedId) return;
-  p2pConnections.delete(removedId);
-  handleP2pPlayerRemoved(removedId);
-}
 
-function markP2pKartDisconnected(playerId) {
-  const kart = getKartById(playerId);
-  if (!kart) return;
-  if (isBattleMode()) {
-    if (!kart.eliminated) {
-      kart.eliminated = true;
-      kart.vx = 0;
-      kart.vy = 0;
-    }
-  } else {
-    kart.finished = true;
-    kart.finishTime = undefined;
-  }
-  triggerHitFlash("PLAYER LEFT", "#ff4d6d", 90, kart);
-  if (game.particles) {
-    game.particles.add({
-      type: "text",
-      text: "PLAYER LEFT",
-      x: kart.x,
-      y: kart.y - 30,
-      vx: 0,
-      vy: -0.8,
-      life: 55,
-      maxLife: 55,
-      size: 16,
-      color: "#ff4d6d",
-      drag: 0.98
-    });
-  }
-}
 
-function handleP2pPlayerRemoved(playerId) {
-  const midRace = [STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED].includes(game.state);
-  if (midRace) {
-    markP2pKartDisconnected(playerId);
-    const p = game.p2pPlayers.find((row) => row.id === playerId);
-    if (p) p.disconnected = true;
-  } else {
-    game.p2pPlayers = game.p2pPlayers.filter((p) => p.id !== playerId);
-    if (game.state === STATE.SELECT) {
-      syncP2pSelectionFromRoster({ preserveLocal: true });
-      updateSelectionHighlight();
-      updateP2pStartButton();
-    }
-  }
-  renderP2pLobby();
-  if (!midRace) broadcastP2pLobby();
-}
 
-function p2pReturnToLobbyLocal(lobbyData = null) {
-  Sound.stopAllEngines();
-  Sound.stopAllDriftSqueals();
-  Sound.stopAllRumbles();
-  game.hazards = [];
-  game.p2pBattleEndPending = false;
-  game.tournament = null;
-  game._pauseFromState = null;
-  game.p2pConnectionUnstable = false;
-  screens.hide("pause");
-  if (lobbyData) {
-    if (lobbyData.players) game.p2pPlayers = lobbyData.players;
-    applyLobbyMapSelection(lobbyData);
-    if (lobbyData.trackIdx !== undefined && lobbyData.trackIdx !== null) setMusicTrack(lobbyData.trackIdx);
-  }
-  if (game.p2pRole === "host") {
-    game.p2pPlayers = (game.p2pPlayers || []).filter((p) => !p.disconnected);
-  }
-  resetP2pReadyForLobbyChange();
-  hideAll();
-  showSelectScreen();
-}
-
-function p2pHostCancelRaceToLobby() {
-  if (!game.p2pMode || game.p2pRole !== "host") return;
-  resetP2pReadyForLobbyChange();
-  broadcastP2pMessage({
-    type: "return_lobby",
-    players: game.p2pPlayers.filter((p) => !p.disconnected),
-    ...getP2pLobbyMapPayload(),
-  });
-  p2pReturnToLobbyLocal();
-}
-
-function p2pGuestLeaveMatch() {
-  if (!game.p2pMode || game.p2pRole !== "guest") return;
-  Sound.stopAllEngines();
-  Sound.stopAllDriftSqueals();
-  Sound.stopAllRumbles();
-  screens.hide("pause");
-  handleP2pDisconnect({ silent: true });
-}
 
 function updatePauseScreenUi() {
   const isP2pPaused = game.p2pMode && game.state === STATE.PAUSED;
@@ -3114,45 +3075,10 @@ function updatePauseScreenUi() {
   }
 }
 
-function getP2pIdForConn(conn) {
-  for (const [id, existing] of p2pConnections.entries()) {
-    if (existing === conn) return id;
-  }
-  return null;
-}
 
-function isHighFrequencyP2pMessage(data) {
-  return data && (data.type === "host_sync" || data.type === "guest_sync");
-}
 
-function sendToConn(conn, data) {
-  if (!conn || !conn.open) return;
-  const dataChannel = conn._dc || conn.dataChannel;
-  if (
-    isHighFrequencyP2pMessage(data) &&
-    dataChannel &&
-    dataChannel.bufferedAmount > TUNING.P2P_MAX_BUFFERED_BYTES
-  ) {
-    return;
-  }
-  conn.send(data);
-}
 
-function broadcastP2pMessage(data, exceptConn = null) {
-  for (const conn of p2pConnections.values()) {
-    if (conn !== exceptConn) sendToConn(conn, data);
-  }
-}
 
-function broadcastP2pLobby() {
-  if (game.p2pRole !== "host") return;
-  broadcastP2pMessage({
-    type: "lobby_state",
-    players: game.p2pPlayers,
-    ...getP2pLobbyMapPayload(),
-  });
-  renderP2pLobby();
-}
 
 function gridSlot(i) {
   return { f: -5 - 40 * i, l: (i % 2 === 0 ? -28 : 28) };
@@ -3831,66 +3757,7 @@ function requestP2pPickup(pickup, index, kart) {
   });
 }
 
-function applyP2pPickupRequest(data, sourceConn = null) {
-  if (game.p2pRole !== "host" || !game.track) return false;
 
-  const index = Math.floor(Number(data.index));
-  if (!Number.isFinite(index) || index < 0) return false;
-
-  const requesterId = getP2pIdForConn(sourceConn) || data.kartId;
-  const kart = getKartById(requesterId);
-  if (!kart || kart.finished || kart.eliminated) return false;
-
-  if (data.pickup === "coin") {
-    const coin = game.track.coins[index];
-    if (!coin || coin.collected) return false;
-    coin.collected = true;
-    coin.respawn = 700;
-    kart.coinsCollected++;
-    if (!kart.ultReady) {
-      kart.ultCharge = Math.min((kart.ultCharge || 0) + 1, TUNING.ULTIMATE_COINS_NEEDED);
-      if (kart.ultCharge >= TUNING.ULTIMATE_COINS_NEEDED) kart.ultReady = true;
-    }
-    return true;
-  }
-
-  if (data.pickup === "itemBox") {
-    const box = game.track.itemBoxes[index];
-    if (!box || !box.active) return false;
-    box.active = false;
-    box.respawn = 240;
-    if (kart.itemState === "empty") {
-      kart.itemState = "rolling";
-      kart.itemRollTimer = TUNING.ITEM_ROLL_TIME;
-    }
-    return true;
-  }
-
-  return false;
-}
-
-function applyP2pPickupState(data) {
-  if (!game.track) return;
-  const index = Math.floor(Number(data.index));
-  if (!Number.isFinite(index) || index < 0) return;
-
-  if (data.pickup === "coin") {
-    const coin = game.track.coins[index];
-    if (!coin) return;
-    coin.collected = true;
-    coin.respawn = 700;
-    const kart = getKartById(data.kartId);
-    if (kart && data.coinsCollected !== undefined) {
-      kart.coinsCollected = Math.max(kart.coinsCollected || 0, data.coinsCollected);
-      kart.citationBoostTimer = Math.max(kart.citationBoostTimer || 0, TUNING.CITATION_BOOST_DURATION);
-    }
-  } else if (data.pickup === "itemBox") {
-    const box = game.track.itemBoxes[index];
-    if (!box) return;
-    box.active = false;
-    box.respawn = 240;
-  }
-}
 
 /* ============================================================
    KART vs KART COLLISION
@@ -7124,7 +6991,7 @@ p2pHostBtn.addEventListener("click", () => {
       if (peer) {
         try { peer.destroy(); } catch(e) {}
       }
-      peer = new Peer("TKD-" + code, { config: getP2pIceConfig("relay") });
+      setPeer(new Peer("TKD-" + code, { config: getP2pIceConfig("relay") }));
 
       const hostTimeout = setTimeout(() => {
         if (!game.p2pMode) {
@@ -7288,7 +7155,7 @@ function startP2pJoinAttempt(rawCode, mode = "direct") {
       try { peer.destroy(); } catch(e) {}
     }
     game.p2pConn = null;
-    peer = new Peer(undefined, { config: getP2pIceConfig(mode) });
+    setPeer(new Peer(undefined, { config: getP2pIceConfig(mode) }));
 
     peer.on("open", () => {
       if (!isCurrentAttempt()) return;
@@ -7364,1444 +7231,62 @@ function startP2pJoinAttempt(rawCode, mode = "direct") {
   }
 }
 
-function loadPeerJS(callback) {
-  if (window.Peer) {
-    callback();
-    return;
-  }
-  const script = document.createElement("script");
-  script.src = "peerjs.min.js";
-  script.onload = () => {
-    callback();
-  };
-  script.onerror = () => {
-    alert("Could not load PeerJS library. Please check your internet connection.");
-  };
-  document.head.appendChild(script);
-}
 
-function generateLobbyCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
 
-function getKartId(kart) {
-  if (!kart) return null;
-  if (game.p2pMode && kart.p2pId) return kart.p2pId;
-  if (game.p2pMode) {
-    if (game.p2pRole === "host") {
-      if (kart === game.player) return "host";
-      if (kart === game.player2) return "guest";
-    } else {
-      if (kart === game.player) return "guest";
-      if (kart === game.player2) return "host";
-    }
-  } else {
-    if (kart === game.player) return "p1";
-    if (kart === game.player2) return "p2";
-  }
-  if (game.ais) {
-    const idx = game.ais.indexOf(kart);
-    if (idx !== -1) return "ai_" + idx;
-  }
-  return null;
-}
 
-function sendP2pMessage(data) {
-  if (game.p2pRole === "host") {
-    broadcastP2pMessage(data);
-    return;
-  }
-  if (game.p2pConn && game.p2pConn.open) {
-    sendToConn(game.p2pConn, data);
-  }
-}
 
-function serializeKartState(kart) {
-  return serializeKart(kart, { battle: isBattleMode(), getKartId }, { compact: false });
-}
 
-function applyKartState(kart, p, opts = {}) {
-  applyKartSync(kart, p, {
-    ...opts,
-    velocityLead: TUNING.P2P_REMOTE_VELOCITY_LEAD,
-    snapDist: TUNING.P2P_REMOTE_SNAP_DIST,
-    interp: TUNING.P2P_REMOTE_INTERP,
-    resolveKartById: getKartById,
-  });
-}
 
-function applyLocalAuthoritativeEffects(kart, p) {
-  if (!kart || !p) return;
-  if (game.p2pMode && isBattleMode()) {
-    applyBattleCompactFields(kart, p);
-    if (p.mp !== undefined) kart.mergePullTimer = p.mp;
-    if (p.mt !== undefined) {
-      kart.mergePullTargetId = p.mt;
-      kart.mergePullTarget = getKartById(p.mt);
-    }
-    if (p.elim !== undefined || p.eliminated !== undefined) {
-      kart.eliminated = !!(p.elim ?? p.eliminated);
-    }
-  }
-  const remoteSpinout = p.spinoutTimer ?? p.sp ?? 0;
-  if (remoteSpinout > (kart.spinoutTimer || 0) + 2) {
-    kart.spinoutTimer = remoteSpinout;
-    kart.spinAngle = 0;
-    kart.vx = p.vx ?? kart.vx;
-    kart.vy = p.vy ?? kart.vy;
-    if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
-      kart.x = p.x;
-      kart.y = p.y;
-    }
-    triggerHitFlash("BLACK ICE!", "#57f2ff", 75, kart);
-  }
 
-  const remoteShield = p.shieldTimer ?? p.st;
-  if (remoteShield !== undefined && remoteShield < (kart.shieldTimer || 0)) {
-    kart.shieldTimer = remoteShield;
-  }
 
-  const remoteDoubleBlind = p.doubleBlindTimer ?? p.dbt ?? 0;
-  if (remoteDoubleBlind > (kart.doubleBlindTimer || 0)) kart.doubleBlindTimer = remoteDoubleBlind;
 
-  const remotePlacebo = p.placeboSlowTimer ?? p.pst ?? 0;
-  if (remotePlacebo > (kart.placeboSlowTimer || 0)) kart.placeboSlowTimer = remotePlacebo;
 
-  if (p.eliminated || p.elim) {
-    applyKartState(kart, p);
-  }
-}
 
-function serializeDragonState(dragon) {
-  if (!dragon) return null;
-  return {
-    x: dragon.x,
-    y: dragon.y,
-    vx: dragon.vx,
-    vy: dragon.vy,
-    heading: dragon.heading,
-    fireTimer: dragon.fireTimer,
-    jawPhase: dragon.jawPhase,
-    wingPhase: dragon.wingPhase,
-    enraged: dragon.enraged,
-    active: dragon.active
-  };
-}
 
-function applyDragonState(state) {
-  const dragon = game.track && game.track.regulatoryDragon;
-  applyDragonObjectState(dragon, state);
-}
 
-function applyDragonEscapeState(state) {
-  if (!state) return;
-  if (!game.dragonEscape) game.dragonEscape = createDragonEscapeEntity();
-  applyDragonObjectState(game.dragonEscape, state);
-}
 
-function applyBattleCompactFields(kart, p) {
-  if (!kart || !p) return;
-  if (p.ap !== undefined) kart.approvals = p.ap;
-  if (p.bs !== undefined) kart.battleSteals = p.bs;
-  if (p.rg !== undefined) kart.recoverGraceTimer = p.rg;
-  if (p.kb !== undefined) kart.killedBy = p.kb ? getKartById(p.kb) : null;
-}
 
-function sendP2pBattleEnd() {
-  if (!game.p2pMode || game.p2pRole !== "host" || !isBattleMode()) return;
-  const ranking = game.finalRanking || [];
-  sendP2pMessage({
-    type: "battle_end",
-    raceTime: game.raceTime,
-    ranking: ranking.map((k) => getKartId(k)).filter(Boolean),
-    karts: ranking.map((k) => ({ id: getKartId(k), s: serializeKartCompact(k) })).filter((row) => row.id),
-  });
-}
 
-function applyP2pBattleEnd(data) {
-  Sound.stopAllEngines();
-  Sound.stopAllDriftSqueals();
-  Sound.stopAllRumbles();
-  if (data.raceTime !== undefined) game.raceTime = data.raceTime;
-  const snapshots = data.karts || [];
-  for (const snap of snapshots) {
-    const kart = getKartById(snap.id);
-    if (kart && snap.s) applyKartState(kart, snap.s);
-  }
-  const ids = data.ranking || [];
-  game.finalRanking = ids.map((id) => getKartById(id)).filter(Boolean);
-  game.p2pBattleEndPending = false;
-  game._pauseFromState = null;
-  screens.hide("pause");
-  game.state = STATE.FINISHED;
-  showFinishScreen();
-  bus.emit("race:finished", {});
-}
 
-function applyDragonObjectState(dragon, state) {
-  if (!dragon || !state) return;
-  dragon.x = state.x;
-  dragon.y = state.y;
-  dragon.vx = state.vx || 0;
-  dragon.vy = state.vy || 0;
-  dragon.heading = state.heading || 0;
-  dragon.fireTimer = state.fireTimer !== undefined ? state.fireTimer : dragon.fireTimer;
-  dragon.jawPhase = state.jawPhase || 0;
-  dragon.wingPhase = state.wingPhase || 0;
-  dragon.enraged = !!state.enraged;
-  dragon.active = state.active !== false;
-}
 
-function serializeKartCompact(k) {
-  return serializeKart(k, { battle: isBattleMode(), getKartId }, { compact: true });
-}
 
-function serializeHazardCompact(h) {
-  const type = (h instanceof DossierProjectile) ? 1 :
-    (h instanceof RegulatoryProjectile) ? 2 :
-    (h instanceof PlaceboPill) ? 3 :
-    (h instanceof DoubleBlindCloud) ? 4 :
-    (h instanceof DragonFire) ? 5 : 0;
-  const out = {
-    id: h.hid,
-    t: type,
-    x: Math.round(h.x * 10) / 10,
-    y: Math.round(h.y * 10) / 10,
-  };
-  if (h.heading) out.h = Math.round(h.heading * 1000) / 1000;
-  if (h.vx) out.vx = Math.round(h.vx * 100) / 100;
-  if (h.vy) out.vy = Math.round(h.vy * 100) / 100;
-  if (h.speed) out.sp = Math.round(h.speed * 100) / 100;
-  if (h.spin) out.sn = Math.round(h.spin * 100) / 100;
-  if (h.life) out.li = Math.round(h.life);
-  if (h.r && h.r !== 18 && h.r !== 15 && h.r !== 12 && h.r !== 17 && h.r !== 20) out.r = h.r;
-  if (h.enraged) out.en = 1;
-  if (h.owner) out.oi = getKartId(h.owner);
-  if (h.ignoreOwnerTimer > 0) out.io = Math.round(h.ignoreOwnerTimer);
-  return out;
-}
 
-function sendHostSync() {
-  if (!game.player) return;
-  const now = performance.now();
-  const includePickupState = !game.p2pLastPickupSyncAt ||
-    now - game.p2pLastPickupSyncAt >= TUNING.P2P_PICKUP_FULL_SYNC_INTERVAL_MS;
-  const includeHazards = !game.p2pLastHazardSyncAt ||
-    now - game.p2pLastHazardSyncAt >= (1000 / TUNING.P2P_HAZARD_SYNC_HZ);
-  const authState = (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState)
-    ? game._pauseFromState
-    : game.state;
-  const sync = {
-    type: "host_sync",
-    rt: game.raceTime,
-    gs: authState,
-    dr: serializeDragonState(game.track && game.track.regulatoryDragon),
-    de: serializeDragonState(game.dragonEscape),
-    pl: (game.p2pPlayers || []).map(p => ({
-      id: p.id,
-      s: serializeKartCompact(getKartById(p.id))
-    })),
-    p2: serializeKartCompact(game.player),
-    ai: game.ais.map(ai => serializeKartCompact(ai)),
-  };
-  if (includeHazards) {
-    game.p2pLastHazardSyncAt = now;
-    sync.hz = (game.hazards || []).map(serializeHazardCompact);
-  }
-  if (includePickupState) {
-    game.p2pLastPickupSyncAt = now;
-    sync.co = game.track.coins.map(c => c.collected ? 1 : 0);
-    sync.ib = game.track.itemBoxes.map(b => b.active ? 1 : 0);
-  }
-  if (isBattleMode()) sync.btl = game.battleTimeLeft;
-  sendP2pMessage(sync);
-}
 
-function sendGuestSync() {
-  if (!game.player) return;
-  sendP2pMessage({
-    type: "guest_sync",
-    playerId: game.p2pLocalId || "guest",
-    state: serializeKartState(game.player),
-    p2: serializeKartCompact(game.player),
-  });
-}
 
-function handleP2pDisconnect({ silent = false } = {}) {
-  p2pJoinAttemptSeq++;
-  const battleEndPending = !!game.p2pBattleEndPending;
-  const leaveMsg = {
-    type: "player_left",
-    playerId: game.p2pLocalId || (game.p2pRole === "host" ? "host" : "guest"),
-    role: game.p2pRole
-  };
-  for (const conn of p2pConnections.values()) {
-    try { sendToConn(conn, leaveMsg); } catch(e) {}
-  }
-  if (game.p2pConn && game.p2pConn.open) {
-    try { sendToConn(game.p2pConn, leaveMsg); } catch(e) {}
-  }
 
-  for (const conn of p2pConnections.values()) {
-    try { conn.close(); } catch(e) {}
-  }
-  p2pConnections.clear();
-  if (game.p2pConn) {
-    try { game.p2pConn.close(); } catch(e) {}
-    game.p2pConn = null;
-  }
-  if (peer) {
-    try { peer.destroy(); } catch(e) {}
-    peer = null;
-  }
 
-  game.p2pMode = false;
-  game.p2pRole = null;
-  game.p2pPlayers = [];
-  game.p2pLocalId = null;
-  game.p2pKartById = {};
-  game.multiplayer = false;
-  game.p1Locked = false;
-  game.p2Locked = false;
-  game.p2pBattleEndPending = false;
 
-  p2pHostStatus.innerText = "Click Create Lobby to generate a code";
-  p2pHostStatus.className = "p2p-status";
-  p2pCodeBox.style.display = "none";
-  p2pMyCode.innerText = "------";
-  p2pHostRoster.innerHTML = "";
-  p2pJoinRoster.innerHTML = "";
-  p2pStartRaceBtn.style.display = "none";
 
-  p2pJoinInput.value = "";
-  p2pJoinStatus.innerText = "Enter code and click Join";
-  p2pJoinStatus.className = "p2p-status";
 
-  if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED || battleEndPending) {
-    Sound.stopAllEngines();
-    Sound.stopAllDriftSqueals();
-    Sound.stopAllRumbles();
-    game.state = STATE.TITLE;
-    hideAll();
-    screens.show("title");
-    if (!silent) alert("Peer disconnected! Returning to menu.");
-  }
-}
 
-function handleP2pData(data, sourceConn = null) {
-  if (!data) return;
-
-  if (data.type === "ping") {
-    const reply = { type: "pong", t: data.t };
-    if (sourceConn) sendToConn(sourceConn, reply);
-    else sendP2pMessage(reply);
-    return;
-  }
-  if (data.type === "pong") {
-    game.p2pPing = Math.round(performance.now() - data.t);
-    return;
-  }
-
-  if (data.type === "lobby_connected") {
-    game.p2pMode = true;
-    game.p2pRole = "guest";
-    game.multiplayer = true;
-    game.p2pLocalId = data.playerId || "guest_1";
-    game.p2pPlayers = data.players || [];
-    applyLobbyMapSelection(data);
-    if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
-    renderP2pLobby();
-    p2pJoinStatus.innerText = "Connected! Waiting for host to start...";
-    p2pJoinStatus.className = "p2p-status ready";
-    enterP2pSelectScreen();
-  }
-
-  else if (data.type === "lobby_full") {
-    p2pJoinStatus.innerText = "Lobby is full!";
-    p2pJoinStatus.className = "p2p-status error";
-  }
-
-  else if (data.type === "lobby_state") {
-    game.p2pPlayers = data.players || game.p2pPlayers;
-    applyLobbyMapSelection(data);
-    if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
-    syncP2pSelectionFromRoster();
-    renderP2pLobby();
-    if (game.state === STATE.SELECT) {
-      updateSelectionHighlight();
-      updateP2pStartButton();
-      renderMapSelect();
-      renderApprovalsSelect();
-      updateP2pBattleLobbyUi();
-    }
-  }
-
-  else if (data.type === "lobby_char_update") {
-    if (game.p2pRole !== "host") return;
-    const sourceId = getP2pIdForConn(sourceConn);
-    const playerId = sourceId || data.playerId;
-    const player = game.p2pPlayers.find(p => p.id === playerId);
-    if (!player) return;
-    player.charIdx = Math.round(clamp(Number(data.charIdx), 0, CHARACTERS.length - 1));
-    player.locked = !!data.locked;
-    broadcastP2pLobby();
-    if (game.state === STATE.SELECT) {
-      syncP2pSelectionFromRoster({ preserveLocal: true });
-      updateSelectionHighlight();
-      updateP2pStartButton();
-      checkMultiplayerSelectFinish();
-    }
-  }
-
-  else if (data.type === "select_update") {
-    const sourceId = getP2pIdForConn(sourceConn);
-    const playerId = sourceId || data.playerId || (game.p2pRole === "guest" ? "host" : "guest_1");
-    const player = game.p2pPlayers && game.p2pPlayers.find(p => p.id === playerId);
-    if (player) {
-      player.charIdx = Math.round(clamp(Number(data.charIdx), 0, CHARACTERS.length - 1));
-      player.locked = !!data.locked;
-    }
-    syncP2pSelectionFromRoster({ preserveLocal: true });
-    updateSelectionHighlight();
-    updateP2pStartButton();
-    renderP2pLobby();
-    if (game.p2pRole === "host") {
-      broadcastP2pMessage({ ...data, playerId }, sourceConn);
-    }
-    checkMultiplayerSelectFinish();
-  }
-
-  else if (data.type === "map_update") {
-    applyLobbyMapSelection(data);
-    const selectedMap = MAPS[game.selectedMapIdx || 0];
-    if (selectedMap) previewSelectedMapMusic(selectedMap);
-    renderMapSelect();
-    renderApprovalsSelect();
-    updateP2pBattleLobbyUi();
-    updateDriveButtonLabel();
-  }
-
-  else if (data.type === "return_lobby") {
-    p2pReturnToLobbyLocal(data);
-  }
-
-  else if (data.type === "battle_end") {
-    game.p2pLastHostSyncReceivedAt = performance.now();
-    applyP2pBattleEnd(data);
-  }
-
-  else if (data.type === "merge_request") {
-    if (game.p2pRole !== "host" || !isBattleMode()) return;
-    const requesterId = getP2pIdForConn(sourceConn) || data.kartId;
-    const kart = getKartById(requesterId);
-    if (!kart || kart.eliminated || kart.finished) return;
-    const now = performance.now();
-    if ((kart.mergePullTimer || 0) > 0 || now - (kart._lastMergeRequestRpcAt || -Infinity) < 2500) return;
-    kart._lastMergeRequestRpcAt = now;
-    startMergeRequestPull(kart);
-  }
-
-  else if (data.type === "start_race") {
-    applyLobbyMapSelection(data);
-    if (data.players) game.p2pPlayers = data.players;
-    if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
-    if (!data.players) {
-      game.selectedCharIdx = data.guestCharIdx;
-      game.selectedCharIdx2 = data.hostCharIdx;
-    }
-    game.tournament = data.tournament || null;
-    if (game.tournament?.format === "grand_prix") {
-      game.mapSelection = GRAND_PRIX_ID;
-    }
-    ensureSelectedMapMatchesMode();
-    game.p2pBattleEndPending = false;
-    if (game.p2pRole === "guest") {
-      game.p2pLastHostSyncReceivedAt = performance.now();
-    }
-
-    // Sync dragon trail from host seed so all clients have the same map
-    if (data.dragonSeed !== undefined && MAPS[game.selectedMapIdx].id === "dragon_escape") {
-      regenerateDragonTrail(data.dragonSeed);
-    }
-
-    Sound.stopTitleTheme();
-    hideAll();
-    buildRace();
-    startCountdown();
-    Sound.startEngine(1);
-  }
-
-  else if (data.type === "tournament_standings") {
-    game.tournament = data.tournament;
-    if (screens.isVisible("finish")) {
-      showFinishScreen();
-    }
-  }
-
-  else if (data.type === "host_sync") {
-    if (game.p2pRole === "guest") {
-      game.p2pLastHostSyncReceivedAt = performance.now();
-      game.p2pConnectionUnstable = false;
-    }
-    const gs = data.gs ?? data.state;
-    if (gs !== undefined) {
-      if (game.state !== gs) {
-        if (game.p2pMode && game.state === STATE.PAUSED && gs !== STATE.FINISHED) {
-          // Keep local pause overlay while the online race continues.
-        } else if (gs === STATE.FINISHED) {
-          game._pauseFromState = null;
-          screens.hide("pause");
-          game.state = STATE.FINISHED;
-          if (game.p2pMode && isBattleMode() && game.p2pRole === "guest") {
-            game.p2pBattleEndPending = true;
-          } else {
-            showFinishScreen();
-          }
-        } else {
-          game.state = gs;
-        }
-      }
-    }
-    if ((data.rt ?? data.raceTime) !== undefined) game.raceTime = data.rt ?? data.raceTime;
-    if (data.btl !== undefined && isBattleMode()) game.battleTimeLeft = data.btl;
-    if (data.dr ?? data.dragon) applyDragonState(data.dr ?? data.dragon);
-    if (data.de ?? data.dragonEscape) applyDragonEscapeState(data.de ?? data.dragonEscape);
-
-    const players = data.pl ?? data.players;
-    if (players) {
-      for (const ps of players) {
-        if (!ps) continue;
-        const state = ps.s ?? ps.state;
-        if (ps.id === game.p2pLocalId) {
-          applyLocalAuthoritativeEffects(game.player, state);
-          continue;
-        }
-        applyKartState(getKartById(ps.id), state, { smooth: true });
-      }
-    }
-
-    if (game.player2 && data.p2) {
-      applyKartState(game.player2, data.p2, { smooth: true });
-    }
-
-    const ais = data.ai ?? data.ais;
-    if (game.ais && ais) {
-      for (let i = 0; i < game.ais.length; i++) {
-        if (ais[i]) {
-          applyKartState(game.ais[i], ais[i], { smooth: true });
-        }
-      }
-    }
-
-    const coins = data.co ?? data.coins;
-    if (coins) {
-      for (let i = 0; i < game.track.coins.length; i++) {
-        game.track.coins[i].collected = !!coins[i];
-      }
-    }
-
-    const ibs = data.ib ?? data.itemBoxes;
-    if (ibs) {
-      for (let i = 0; i < game.track.itemBoxes.length; i++) {
-        game.track.itemBoxes[i].active = !!ibs[i];
-      }
-    }
-
-    const hazards = data.hz ?? data.hazards;
-    if (hazards) {
-      const existingById = new Map();
-      for (const h of (game.hazards || [])) {
-        if (h.hid) existingById.set(h.hid, h);
-      }
-      const newHazards = [];
-      for (const h of hazards) {
-        const hid = h.id ?? h.hid;
-        const type = h.t;
-        let existing = hid ? existingById.get(hid) : null;
-        if (existing) {
-          existing.x = h.x;
-          existing.y = h.y;
-          if (h.h !== undefined || h.heading !== undefined) existing.heading = h.h ?? h.heading;
-          if (h.vx !== undefined) existing.vx = h.vx;
-          if (h.vy !== undefined) existing.vy = h.vy;
-          if (h.sn !== undefined || h.spin !== undefined) existing.spin = h.sn ?? h.spin ?? existing.spin;
-          if (h.li !== undefined || h.life !== undefined) existing.life = h.li ?? h.life ?? existing.life;
-          if (h.r !== undefined) existing.r = h.r;
-          existing.active = h.active !== false;
-          if (h.io !== undefined || h.ignoreOwnerTimer !== undefined) existing.ignoreOwnerTimer = h.io ?? h.ignoreOwnerTimer ?? 0;
-          existingById.delete(hid);
-          newHazards.push(existing);
-        } else {
-          let obj;
-          const hType = type ?? ((h.isDossier) ? 1 : (h.isRegulatory) ? 2 : (h.isPlacebo) ? 3 : (h.isDoubleBlind) ? 4 : (h.isDragonFire) ? 5 : 0);
-          const heading = h.h ?? h.heading ?? 0;
-          const speed = h.sp ?? h.speed ?? 8;
-          if (hType === 1) {
-            obj = new DossierProjectile(h.x, h.y, heading, getKartById(h.oi ?? h.ownerId));
-          } else if (hType === 2) {
-            obj = new RegulatoryProjectile(h.x, h.y, heading, speed, !!(h.en ?? h.enraged));
-          } else if (hType === 3) {
-            obj = new PlaceboPill(h.x, h.y, getKartById(h.oi ?? h.ownerId));
-          } else if (hType === 4) {
-            obj = new DoubleBlindCloud(h.x, h.y, heading, getKartById(h.oi ?? h.ownerId));
-          } else if (hType === 5) {
-            obj = new DragonFire(h.x, h.y, heading, speed);
-          } else {
-            obj = new MergeConflict(h.x, h.y, getKartById(h.oi ?? h.ownerId));
-          }
-          if (hid) obj.hid = hid;
-          if (h.vx !== undefined) obj.vx = h.vx;
-          if (h.vy !== undefined) obj.vy = h.vy;
-          if (h.sn !== undefined || h.spin !== undefined) obj.spin = h.sn ?? h.spin ?? obj.spin;
-          if (h.li !== undefined || h.life !== undefined) obj.life = h.li ?? h.life ?? obj.life;
-          if (h.r !== undefined) obj.r = h.r;
-          if (h.io !== undefined || h.ignoreOwnerTimer !== undefined) obj.ignoreOwnerTimer = h.io ?? h.ignoreOwnerTimer ?? 0;
-          obj.active = h.active !== false;
-          newHazards.push(obj);
-        }
-      }
-      game.hazards = newHazards;
-    }
-  }
-
-  else if (data.type === "pickup_request") {
-    if (applyP2pPickupRequest(data, sourceConn)) {
-      const requesterId = getP2pIdForConn(sourceConn) || data.kartId;
-      const requester = getKartById(requesterId);
-      broadcastP2pMessage({
-        type: "pickup_confirm",
-        pickup: data.pickup,
-        index: data.index,
-        kartId: requesterId,
-        coinsCollected: requester ? requester.coinsCollected : undefined
-      });
-    }
-  }
-
-  else if (data.type === "pickup_confirm") {
-    applyP2pPickupState(data);
-  }
-
-  else if (data.type === "guest_sync") {
-    if (data.playerId && data.state) {
-      applyKartState(getKartById(data.playerId), data.state, {
-        smooth: true,
-        preserveBattleAuthority: game.p2pMode && isBattleMode(),
-      });
-      if (game.p2pRole === "host") {
-        broadcastP2pMessage(data, sourceConn);
-      }
-      return;
-    }
-    if (game.player2 && data.p2) {
-      applyKartState(game.player2, data.p2, {
-        smooth: true,
-        preserveBattleAuthority: game.p2pMode && isBattleMode(),
-      });
-    }
-  }
-
-  else if (data.type === "shoot_dossier") {
-    const ownerKart = getKartById(data.kartId) || game.player2;
-    if (ownerKart) {
-      const d = new DossierProjectile(data.x, data.y, data.heading, ownerKart);
-      game.hazards.push(d);
-    }
-  }
-
-  else if (data.type === "drop_conflict") {
-    if (game.p2pMode && game.p2pRole === "host" && game.player2) {
-      const h = new MergeConflict(data.x, data.y, getKartById(data.kartId));
-      game.hazards.push(h);
-    }
-  }
-
-  else if (data.type === "drop_placebo") {
-    if (game.p2pMode && game.p2pRole === "host") {
-      game.hazards.push(new PlaceboPill(data.x, data.y, getKartById(data.kartId)));
-    }
-  }
-
-  else if (data.type === "double_blind_cloud") {
-    if (game.p2pMode && game.p2pRole === "host") {
-      game.hazards.push(new DoubleBlindCloud(data.x, data.y, data.heading, getKartById(data.kartId)));
-    }
-  }
-
-  else if (data.type === "deauth_shockwave") {
-    if (game.p2pMode && game.p2pRole === "host") {
-      const kart = getKartById(data.kartId);
-      if (kart) applyDeauthShockwave(kart);
-    }
-  }
-
-  else if (data.type === "action_event") {
-    const kart = getKartById(data.kartId);
-    if (kart) {
-      triggerShootEffect(kart, data.item);
-    }
-    if (game.p2pRole === "host") {
-      broadcastP2pMessage(data, sourceConn);
-    }
-  }
-
-  else if (data.type === "player_left") {
-    if (game.p2pRole === "host") {
-      handleP2pPlayerRemoved(data.playerId);
-    } else {
-      handleP2pDisconnect({ silent: true });
-      const who = data.role === "host" ? "Host" : "A player";
-      if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED) {
-        alert(`${who} left the race. Returning to menu.`);
-      }
-    }
-  }
-
-  else if (data.type === "hazard_collision") {
-    let bestIdx = -1;
-    let bestDist = 50;
-    for (let i = 0; i < game.hazards.length; i++) {
-      const d = dist(data.x, data.y, game.hazards[i].x, game.hazards[i].y);
-      if (d < bestDist) {
-        bestDist = d;
-        bestIdx = i;
-      }
-    }
-    if (bestIdx !== -1) {
-      const h = game.hazards[bestIdx];
-      game.particles.burst(h.x, h.y, h instanceof DossierProjectile ? "#57f2ff" : "#ff4d6d", 15);
-      game.hazards.splice(bestIdx, 1);
-    }
-  }
-}
-
-function noopParticleSystem() {
-  return {
-    list: [],
-    add() {},
-    burst() {},
-    update() {},
-    draw() {},
-  };
-}
-
-function selectHeadlessMap(mapOverride = null) {
-  const requestedMap = mapOverride || URL_PARAMS.get("map") || URL_PARAMS.get("headlessMap") || "protocol_amendment_labyrinth";
-  const idx = MAPS.findIndex(m => m.id === requestedMap || m.name === requestedMap);
-  game.selectedMapIdx = idx >= 0 ? idx : 0;
-  return MAPS[game.selectedMapIdx];
-}
-
-function selectHeadlessCharacter(charOverride = null) {
-  const requestedChar = charOverride || URL_PARAMS.get("char") || URL_PARAMS.get("character") || "anton";
-  const idx = CHARACTERS.findIndex(c => c.id === requestedChar || c.name.toLowerCase() === requestedChar.toLowerCase());
-  game.selectedCharIdx = idx >= 0 ? idx : 0;
-  return CHARACTERS[game.selectedCharIdx];
-}
-
-function headlessFlag(name, defaultValue = false) {
-  const raw = URL_PARAMS.get(name);
-  if (raw === null) return defaultValue;
-  return raw === "" || raw === "1" || raw === "true" || raw === "yes";
-}
-
-// Mode-agnostic "self" features shared by every agent (race + arena/battle).
-// Kept as an identical PREFIX of both observation vectors so a battle policy can
-// optionally warm-start from a race trunk later (transfer learning).
-const HEADLESS_BASE_SELF_KEYS = [
-  "speed",
-  "forwardSpeed",
-  "onRoad",
-  "driftCharge",
-  "boostActive",
-  "spinout",
-  "carMaxSpeed",
-  "carAcceleration",
-  "carTurnSpeed",
-  "carWeight",
-  "carGripNormal",
-  "carGripDrift",
-  "citationCount",
-  "ultimateCharge",
-  "shieldActive",
-  "invulnActive",
-  "doubleBlind",
-  "placeboSlow",
-  "mergePulling",
-  "mergeTethered",
-];
-// Race-only navigation tail (checkpoint targeting).
-const HEADLESS_RACE_TAIL_KEYS = [
-  "headingError",
-  "targetDistance",
-  "lateralOffset",
-  "nextHeadingError",
-  "nextTargetDistance",
-];
-// Arena/Battle-only combat tail: own lives, field state, and the 3 nearest rivals.
-const HEADLESS_BATTLE_RIVAL_COUNT = 3;
-const HEADLESS_BATTLE_TAIL_KEYS = ["ownApprovals", "survivorsFraction", "battleTimeLeft", "ramOpportunity"];
-for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
-  HEADLESS_BATTLE_TAIL_KEYS.push(`rival${i}Bearing`, `rival${i}Distance`, `rival${i}Approvals`, `rival${i}Spinning`);
-}
-const HEADLESS_RAY_ANGLES_DEG = [-90, -60, -35, -15, 0, 15, 35, 60, 90];
-const HEADLESS_RAY_ANGLES = HEADLESS_RAY_ANGLES_DEG.map(deg => deg * Math.PI / 180);
-const HEADLESS_RAY_RANGE = 760;
-const HEADLESS_RAY_STEP = 28;
-const HEADLESS_ITEM_TYPES = ["boost", "shield", "handling", "conflict", "placebo", "doubleblind", "dossier", "deauth", "mergerequest", "hotfix", "fasttrack"];
-// Base = shared self features + rays + item slot flags (identical for both modes).
-const HEADLESS_BASE_OBS_KEYS = [...HEADLESS_BASE_SELF_KEYS];
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`roadRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`kartRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`hazardRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`pickupRay${deg}`);
-for (const deg of HEADLESS_RAY_ANGLES_DEG) HEADLESS_BASE_OBS_KEYS.push(`boosterRay${deg}`);
-for (const item of HEADLESS_ITEM_TYPES) HEADLESS_BASE_OBS_KEYS.push(`item:${item}`);
-// Full per-mode vectors: base prefix + mode-specific tail.
-const HEADLESS_OBS_KEYS = [...HEADLESS_BASE_OBS_KEYS, ...HEADLESS_RACE_TAIL_KEYS];
-const HEADLESS_BATTLE_OBS_KEYS = [...HEADLESS_BASE_OBS_KEYS, ...HEADLESS_BATTLE_TAIL_KEYS];
-// Keys for whichever mode is currently active (used by reset/step/observation).
-function headlessObsKeys() {
-  return isBattleMode() ? HEADLESS_BATTLE_OBS_KEYS : HEADLESS_OBS_KEYS;
-}
-const HEADLESS_DQN_ACTIONS = [
-  { name: "forward", steer: 0, throttle: 1, brake: 0, drift: false },
-  { name: "soft_left", steer: -0.45, throttle: 1, brake: 0, drift: false },
-  { name: "soft_right", steer: 0.45, throttle: 1, brake: 0, drift: false },
-  { name: "hard_left", steer: -1, throttle: 1, brake: 0, drift: false },
-  { name: "hard_right", steer: 1, throttle: 1, brake: 0, drift: false },
-  { name: "drift_left", steer: -1, throttle: 1, brake: 0, drift: true },
-  { name: "drift_right", steer: 1, throttle: 1, brake: 0, drift: true },
-  { name: "soft_drift_left", steer: -0.45, throttle: 1, brake: 0, drift: true },
-  { name: "soft_drift_right", steer: 0.45, throttle: 1, brake: 0, drift: true },
-  { name: "brake_left", steer: -0.6, throttle: 0, brake: 1, drift: false },
-  { name: "brake_right", steer: 0.6, throttle: 0, brake: 1, drift: false },
-  { name: "use_item", steer: 0, throttle: 1, brake: 0, drift: false, item: true },
-  { name: "item_left", steer: -0.45, throttle: 1, brake: 0, drift: false, item: true },
-  { name: "item_right", steer: 0.45, throttle: 1, brake: 0, drift: false, item: true },
-  { name: "use_ultimate", steer: 0, throttle: 1, brake: 0, drift: false, ultimate: true },
-];
-
-function getHeadlessCheckpointCenter(index) {
-  if (!game.track) return null;
-  const count = game.track.checkpointCount || game.track.n;
-  const idx = game.track.isOpen ? Math.min(index, count - 1) : ((index % count) + count) % count;
-  return game.track.checkpointCenter(idx);
-}
-
-function getPolicyCheckpointCenter(kart) {
-  if (!game.track) return null;
-  const count = game.track.checkpointCount || game.track.n;
-  const idx = game.track.isOpen ? Math.min(kart.nextCheckpoint, count - 1) : (kart.nextCheckpoint % count);
-  return game.track.checkpointCenter(idx);
-}
-
-function normalizedRoadRayDistance(kart, relAngle) {
-  const track = game.track;
-  const ang = kart.heading + relAngle;
-  const dx = Math.cos(ang);
-  const dy = Math.sin(ang);
-  for (let d = HEADLESS_RAY_STEP; d <= HEADLESS_RAY_RANGE; d += HEADLESS_RAY_STEP) {
-    if (!track.isOnRoad(kart.x + dx * d, kart.y + dy * d)) {
-      return clamp(d / HEADLESS_RAY_RANGE, 0, 1);
-    }
-  }
-  return 1;
-}
-
-function normalizedObjectRayDistance(kart, relAngle, objects, defaultRadius = 20) {
-  const ang = kart.heading + relAngle;
-  const fx = Math.cos(ang);
-  const fy = Math.sin(ang);
-  const lx = -fy;
-  const ly = fx;
-  let best = HEADLESS_RAY_RANGE;
-
-  for (const obj of objects) {
-    if (!obj || obj === kart) continue;
-    const ox = obj.x - kart.x;
-    const oy = obj.y - kart.y;
-    const forward = ox * fx + oy * fy;
-    if (forward <= 0 || forward > HEADLESS_RAY_RANGE) continue;
-    const lateral = Math.abs(ox * lx + oy * ly);
-    const radius = getRayObjectRadius(obj, defaultRadius) + getKartCollisionRadius(kart);
-    if (lateral <= radius) best = Math.min(best, Math.max(0, forward - radius));
-  }
-
-  return clamp(best / HEADLESS_RAY_RANGE, 0, 1);
-}
-
-function getHeadlessRayObjects(kart) {
-  const otherKarts = getActiveKarts().filter(k => k && k !== kart && !k.finished && !k.eliminated);
-  const hazards = [
-    ...(game.hazards || []),
-    ...(game.track?.movingObjects || []),
-  ];
-  if (game.track?.regulatoryDragon) hazards.push(game.track.regulatoryDragon);
-
-  const pickups = [
-    ...(game.track?.itemBoxes || []).filter(b => b.active).map(b => ({ ...b, r: 24 })),
-    ...(game.track?.coins || []).filter(c => !c.collected).map(c => ({ ...c, r: 16 })),
-  ];
-
-  const boosters = (game.track?.boostPads || []).map(p => ({ ...p, r: 28 }));
-
-  return { otherKarts, hazards, pickups, boosters };
-}
 
 // Shared, mode-agnostic base features: self kinematics + car stats + status + rays + item slot.
 // Order MUST match HEADLESS_BASE_OBS_KEYS.
-function getHeadlessBaseValues(kart) {
-  const track = game.track;
-  const maxSpeed = Math.max(0.001, kart.maxSpeed || kart.baseMaxSpeed || 1);
-  const values = [
-    clamp(kart.speed() / maxSpeed, 0, 2),
-    clamp(kart.forwardSpeed() / maxSpeed, -1, 2),
-    track.isOnRoad(kart.x, kart.y) ? 1 : 0,
-    clamp((kart.driftCharge || 0) / TUNING.DRIFT_TIER3, 0, 2),
-    kart.boostTimer > 0 ? 1 : 0,
-    kart.spinoutTimer > 0 ? 1 : 0,
-    clamp((kart.baseMaxSpeed || kart.maxSpeed || 0) / 8.0, 0, 2),
-    clamp((kart.acceleration || 0) / 0.16, 0, 2),
-    clamp((kart.turnSpeed || 0) / 0.07, 0, 2),
-    clamp((kart.weight || 0) / 36, 0, 2),
-    clamp((kart.gripNormal || 0) / 0.22, 0, 2),
-    clamp((kart.gripDrift || 0) / 0.06, 0, 2),
-    clamp((kart.coinsCollected || 0) / 20, 0, 1),
-    kart.ultReady ? 1 : clamp((kart.ultCharge || 0) / TUNING.ULTIMATE_COINS_NEEDED, 0, 1),
-    kart.shieldTimer > 0 ? 1 : 0,
-    kart.invuln > 0 ? 1 : 0,
-    kart.doubleBlindTimer > 0 ? 1 : 0,
-    kart.placeboSlowTimer > 0 ? 1 : 0,
-    kart.mergePullTimer > 0 ? 1 : 0,
-    (kart.mergePullVictimTimer || 0) > 0 ? 1 : 0,
-  ];
-  const rayObjects = getHeadlessRayObjects(kart);
-  for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedRoadRayDistance(kart, angle));
-  for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.otherKarts, 18));
-  for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.hazards, 24));
-  for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.pickups, 20));
-  for (const angle of HEADLESS_RAY_ANGLES) values.push(normalizedObjectRayDistance(kart, angle, rayObjects.boosters, 28));
-  for (const item of HEADLESS_ITEM_TYPES) values.push(kart.itemSlot === item ? 1 : 0);
-  return values;
-}
 
 // Race navigation tail (checkpoint targeting). Order MUST match HEADLESS_RACE_TAIL_KEYS.
-function getHeadlessRaceTail(kart) {
-  const track = game.track;
-  const target = getHeadlessCheckpointCenter(kart.nextCheckpoint) || { x: kart.x + Math.cos(kart.heading), y: kart.y + Math.sin(kart.heading) };
-  const nextTarget = getHeadlessCheckpointCenter(kart.nextCheckpoint + 1) || target;
-  const dx = target.x - kart.x;
-  const dy = target.y - kart.y;
-  const ndx = nextTarget.x - kart.x;
-  const ndy = nextTarget.y - kart.y;
-  const cs = track.closestSegment(kart.x, kart.y);
-  const seg = track.segments[cs.idx] || { halfW: track.halfWidth || 100, nx: 0, ny: 1 };
-  const signedOffset = ((kart.x - cs.proj.x) * seg.nx + (kart.y - cs.proj.y) * seg.ny) / Math.max(1, seg.halfW);
-  const values = [
-    clamp(angleDiff(kart.heading, Math.atan2(dy, dx)) / Math.PI, -1, 1),
-    clamp(Math.hypot(dx, dy) / 1200, 0, 3),
-    clamp(signedOffset, -2, 2),
-    clamp(angleDiff(kart.heading, Math.atan2(ndy, ndx)) / Math.PI, -1, 1),
-    clamp(Math.hypot(ndx, ndy) / 1600, 0, 3),
-  ];
-  return { values, target, nextTarget };
-}
 
 // Battle combat tail: own lives, field state, ram opportunity, and the N nearest rivals.
 // Order MUST match HEADLESS_BATTLE_TAIL_KEYS.
-function getHeadlessBattleTail(kart) {
-  const alive = getActiveKarts().filter(k => k && !k.eliminated);
-  const survivors = clamp(alive.length / Math.max(1, game.totalRacers || alive.length), 0, 1);
-  const timeLeft = clamp((game.battleTimeLeft || 0) / Math.max(1, game.battleDuration || 1), 0, 1);
-  const rivals = alive
-    .filter(k => k !== kart)
-    .map(k => ({ k, d: dist(kart.x, kart.y, k.x, k.y), bearing: angleDiff(kart.heading, Math.atan2(k.y - kart.y, k.x - kart.x)) }))
-    .sort((a, b) => a.d - b.d);
-  // Ram opportunity: high-speed closing window on the nearest rival ahead.
-  let ram = 0;
-  if (rivals.length && rivals[0].d < 260) {
-    const def = rivals[0].k;
-    const inv = Math.max(0.001, rivals[0].d);
-    const dirx = (def.x - kart.x) / inv;
-    const diry = (def.y - kart.y) / inv;
-    if (qualifiesApprovalRam(kart, def, dirx, diry)) ram = 1;
-  }
-  const values = [clamp((kart.approvals || 0) / 5, 0, 1), survivors, timeLeft, ram];
-  for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
-    const r = rivals[i];
-    if (r) {
-      values.push(
-        clamp(r.bearing / Math.PI, -1, 1),
-        clamp(r.d / HEADLESS_RAY_RANGE, 0, 2),
-        clamp((r.k.approvals || 0) / 5, 0, 1),
-        r.k.spinoutTimer > 0 ? 1 : 0,
-      );
-    } else {
-      values.push(0, 2, 0, 0); // sentinel: no rival (far away, no lives)
-    }
-  }
-  return values;
-}
 
-function getHeadlessObservation(kart) {
-  const values = getHeadlessBaseValues(kart);
-  if (isBattleMode()) {
-    for (const v of getHeadlessBattleTail(kart)) values.push(v);
-    return { keys: HEADLESS_BATTLE_OBS_KEYS, values, target: null, nextTarget: null };
-  }
-  const race = getHeadlessRaceTail(kart);
-  for (const v of race.values) values.push(v);
-  return { keys: HEADLESS_OBS_KEYS, values, target: race.target, nextTarget: race.nextTarget };
-}
 
-function normalizeHeadlessAction(action = {}) {
-  if (typeof action === "number") return HEADLESS_DQN_ACTIONS[Math.max(0, Math.min(HEADLESS_DQN_ACTIONS.length - 1, Math.floor(action)))] || HEADLESS_DQN_ACTIONS[0];
-  return {
-    steer: clamp(Number(action.steer || 0), -1, 1),
-    throttle: clamp(action.throttle === undefined ? 1 : Number(action.throttle), 0, 1),
-    brake: clamp(Number(action.brake || 0), 0, 1),
-    drift: !!action.drift,
-    item: !!action.item,
-    ultimate: !!action.ultimate,
-  };
-}
 
-function applyHeadlessAction(kart, track, dt, action) {
-  const a = normalizeHeadlessAction(action);
-  if (a.item && kart.itemState === "active" && kart.itemSlot) kart.useItem();
-  if (a.ultimate && kart.ultReady) activateUltimate(kart);
-  const input = {
-    forward: a.throttle >= 0.5,
-    back: a.brake >= 0.5,
-    left: a.steer < -0.15,
-    right: a.steer > 0.15,
-    drift: a.drift,
-    continuousSteer: a.steer,
-  };
-  if (kart.ultActiveTimer > 0) kart.ultActiveTimer -= dt;
-  const onRoad = track.isOnRoad(kart.x, kart.y);
-  kart.applyPhysics(input, track, dt, onRoad);
-  kart.lastHeadlessAction = a;
-}
 
-function _mlpLayerForward(x, layer) {
-  const w = layer.weights || layer.w || [];
-  const b = layer.biases || layer.b || [];
-  const outSize = b.length || Math.floor(w.length / Math.max(1, x.length));
-  const next = new Array(outSize).fill(0);
-  for (let o = 0; o < outSize; o++) {
-    let sum = Number(b[o] || 0);
-    for (let i = 0; i < x.length; i++) {
-      sum += Number(w[o * x.length + i] || 0) * x[i];
-    }
-    next[o] = sum;
-  }
-  if (layer.layernorm) {
-    const ln = layer.layernorm;
-    const eps = ln.eps || 1e-5;
-    let mean = 0;
-    for (let i = 0; i < outSize; i++) mean += next[i];
-    mean /= outSize;
-    let variance = 0;
-    for (let i = 0; i < outSize; i++) variance += (next[i] - mean) * (next[i] - mean);
-    variance /= outSize;
-    const invStd = 1 / Math.sqrt(variance + eps);
-    for (let i = 0; i < outSize; i++) {
-      next[i] = (next[i] - mean) * invStd * (ln.weight?.[i] ?? 1) + (ln.bias?.[i] ?? 0);
-    }
-  }
-  const act = layer.activation;
-  if (act === "linear") return next;
-  for (let o = 0; o < outSize; o++) {
-    if (act === "relu") next[o] = Math.max(0, next[o]);
-    else if (act === "gelu") {
-      const v = next[o];
-      next[o] = 0.5 * v * (1 + Math.tanh(Math.sqrt(2 / Math.PI) * (v + 0.044715 * v * v * v)));
-    }
-    else next[o] = Math.tanh(next[o]);
-  }
-  return next;
-}
 
-function headlessMlpForward(weights, inputValues) {
-  if (!weights) return null;
-  let x = inputValues.slice();
-  if (weights.architecture === "gaussian_actor" && Array.isArray(weights.trunk)) {
-    for (const layer of weights.trunk) x = _mlpLayerForward(x, layer);
-    const mean = _mlpLayerForward(x, weights.mean_head);
-    const action = new Array(mean.length);
-    action[0] = Math.tanh(mean[0]);
-    for (let i = 1; i < mean.length; i++) action[i] = 1 / (1 + Math.exp(-mean[i]));
-    return action;
-  }
-  if (weights.architecture === "dueling" && Array.isArray(weights.trunk)) {
-    for (const layer of weights.trunk) x = _mlpLayerForward(x, layer);
-    const v = _mlpLayerForward(x, weights.value_head);
-    const a = _mlpLayerForward(x, weights.advantage_head);
-    const centerAdvantages = weights.advantageCentering ?? weights.meta?.advantageCentering ?? true;
-    let meanA = 0;
-    if (centerAdvantages) {
-      for (let i = 0; i < a.length; i++) meanA += a[i];
-      meanA /= a.length || 1;
-    }
-    const q = new Array(a.length);
-    for (let i = 0; i < a.length; i++) q[i] = v[0] + a[i] - meanA;
-    applyMeanExpansion(q, weights.meanExpansionK ?? weights.meta?.meanExpansionK ?? 0);
-    return q;
-  }
-  if (!Array.isArray(weights.layers)) return null;
-  for (let li = 0; li < weights.layers.length; li++) {
-    const layer = weights.layers[li];
-    const isLast = li === weights.layers.length - 1;
-    const patched = isLast ? { ...layer, activation: layer.activation || "linear" } : layer;
-    x = _mlpLayerForward(x, patched);
-  }
-  return x;
-}
 
-function applyMeanExpansion(values, k) {
-  k = Number(k || 0);
-  if (!Number.isFinite(k) || k <= 0 || !values.length) return values;
-  let mean = 0;
-  for (let i = 0; i < values.length; i++) mean += values[i];
-  mean /= values.length;
-  for (let i = 0; i < values.length; i++) values[i] = values[i] - mean + (k + 1) * mean;
-  return values;
-}
 
-function runHeadlessMlp(weights, observation) {
-  const x = headlessMlpForward(weights, observation.values);
-  if (!x) {
-    return { steer: 0, throttle: 1, brake: 0, drift: false };
-  }
-  return {
-    steer: x[0] || 0,
-    throttle: x.length > 1 ? (x[1] + 1) / 2 : 1,
-    brake: x.length > 2 ? (x[2] + 1) / 2 : 0,
-    drift: (x[3] || 0) > 0.2,
-  };
-}
 
-function buildModelObservationValues(weights, observation, kart = null) {
-  const obsKeys = Array.isArray(weights?.observationKeys) ? weights.observationKeys : HEADLESS_OBS_KEYS;
-  const current = new Map();
-  observation.keys.forEach((key, idx) => current.set(key, observation.values[idx] ?? 0));
 
-  if (kart) {
-    if (!kart._dqnObsFrames) kart._dqnObsFrames = [];
-    kart._dqnObsFrames.unshift(current);
-    const requestedStack = obsKeys.reduce((maxLag, key) => {
-      const m = String(key).match(/@-(\d+)$/);
-      return m ? Math.max(maxLag, Number(m[1]) + 1) : maxLag;
-    }, 1);
-    while (kart._dqnObsFrames.length < requestedStack) kart._dqnObsFrames.push(current);
-    kart._dqnObsFrames.length = Math.max(requestedStack, 1);
-  }
 
-  return obsKeys.map(key => {
-    const strKey = String(key);
-    const m = strKey.match(/^(.*)@-(\d+)$/);
-    if (!m) return current.get(strKey) ?? 0;
-    const frame = kart?._dqnObsFrames?.[Number(m[2])] || current;
-    return frame.get(m[1]) ?? 0;
-  });
-}
 
-function runHeadlessDqn(weights, observation, kart = null) {
-  const values = buildModelObservationValues(weights, observation, kart);
-  const qValues = headlessMlpForward(weights, values);
-  const actionSchema = Array.isArray(weights?.actions) && weights.actions.length ? weights.actions : HEADLESS_DQN_ACTIONS;
-  if (!qValues || !qValues.length) return { actionIndex: 0, action: actionSchema[0] || HEADLESS_DQN_ACTIONS[0], qValues: [] };
-  let bestIdx = 0;
-  for (let i = 1; i < Math.min(qValues.length, actionSchema.length); i++) {
-    if (qValues[i] > qValues[bestIdx]) bestIdx = i;
-  }
-  return { actionIndex: bestIdx, action: actionSchema[bestIdx] || HEADLESS_DQN_ACTIONS[0], qValues };
-}
 
-function runHeadlessSac(weights, observation, kart = null) {
-  const values = buildModelObservationValues(weights, observation, kart);
-  const raw = headlessMlpForward(weights, values);
-  if (!raw || !raw.length) return { action: { steer: 0, throttle: 1, brake: 0, drift: false, item: false, ultimate: false }, raw: [] };
-  return {
-    action: {
-      steer: raw[0] || 0,
-      throttle: raw[1] !== undefined ? raw[1] : 1,
-      brake: raw[2] || 0,
-      drift: (raw[3] || 0) > 0.5,
-      item: (raw[4] || 0) > 0.5,
-      ultimate: (raw[5] || 0) > 0.5,
-    },
-    raw,
-  };
-}
 
-function validateModelPayload(payload) {
-  if (!payload || !payload.type) throw new Error("Not an Audit Trail model");
-  if (payload.type === "sac") return validateSacModelPayload(payload);
-  return validateDqnModelPayload(payload);
-}
 
-function validateSacModelPayload(payload) {
-  if (payload.type !== "sac") throw new Error("Expected an Audit Trail SAC model");
-  if (!Array.isArray(payload.trunk) || !payload.mean_head) throw new Error("SAC model missing trunk or mean_head");
-  if (!Array.isArray(payload.observationKeys)) throw new Error("Model has no observation key schema");
-  for (const key of payload.observationKeys) {
-    const baseKey = String(key).replace(/@-\d+$/, "");
-    if (!HEADLESS_OBS_KEYS.includes(baseKey) && !HEADLESS_BATTLE_OBS_KEYS.includes(baseKey)) {
-      console.warn(`Model references removed observation key "${key}" — will use 0`);
-    }
-  }
-  return payload;
-}
 
-function validateDqnModelPayload(payload) {
-  if (!payload || payload.type !== "dqn") throw new Error("Expected an Audit Trail DQN model");
-  const isDueling = payload.architecture === "dueling" && Array.isArray(payload.trunk);
-  if (!isDueling && (!Array.isArray(payload.layers) || payload.layers.length === 0)) throw new Error("Model has no layers");
-  if (isDueling && (!payload.value_head || !payload.advantage_head)) throw new Error("Dueling model missing value/advantage heads");
-  if (!Array.isArray(payload.observationKeys)) throw new Error("Model has no observation key schema");
-  for (const key of payload.observationKeys) {
-    const baseKey = String(key).replace(/@-\d+$/, "");
-    if (!HEADLESS_OBS_KEYS.includes(baseKey) && !HEADLESS_BATTLE_OBS_KEYS.includes(baseKey)) {
-      console.warn(`Model references removed observation key "${key}" — will use 0`);
-    }
-  }
-  if (!Array.isArray(payload.actions) || payload.actions.length === 0) {
-    throw new Error("Model action schema does not match this game build");
-  }
-  function _checkLayer(label, layer, expectedIn) {
-    const w = layer.weights || layer.w;
-    const b = layer.biases || layer.b;
-    const isNumericArray = value => Array.isArray(value) || ArrayBuffer.isView(value);
-    if (!isNumericArray(w) || !isNumericArray(b) || b.length === 0) throw new Error(`${label} missing weights/biases`);
-    if (expectedIn !== null && w.length !== expectedIn * b.length) throw new Error(`${label} shape mismatch`);
-    return b.length;
-  }
-  let inputSize = payload.observationKeys.length;
-  if (isDueling) {
-    for (let i = 0; i < payload.trunk.length; i++) inputSize = _checkLayer(`Trunk[${i}]`, payload.trunk[i], inputSize);
-    _checkLayer("value_head", payload.value_head, inputSize);
-    const advOut = _checkLayer("advantage_head", payload.advantage_head, inputSize);
-    if (advOut !== payload.actions.length) throw new Error("Advantage head output size must match action count");
-  } else {
-    for (let i = 0; i < payload.layers.length; i++) inputSize = _checkLayer(`Layer ${i}`, payload.layers[i], inputSize);
-    if (inputSize !== payload.actions.length) throw new Error("Model output size must match its action count");
-  }
-  return payload;
-}
 
-function expandCompactDqnPolicy(payload) {
-  if (payload?.format !== "turbo-kart-headless-dqn-compact-v1") return payload;
-  if (payload.encoding !== "base64-f32le" || typeof payload.weightsBase64 !== "string") {
-    throw new Error("Compact DQN policy has unsupported encoding");
-  }
-  const binary = atob(payload.weightsBase64);
-  if (binary.length % 4 !== 0) throw new Error("Compact DQN byte length is not float32 aligned");
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const floats = new Float32Array(bytes.buffer);
-  if (floats.length !== Number(payload.floatCount)) {
-    throw new Error("Compact DQN float count mismatch");
-  }
-  const view = descriptor => {
-    const offset = Number(descriptor?.offset);
-    const length = Number(descriptor?.length);
-    if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length < 0
-        || offset + length > floats.length) {
-      throw new Error("Compact DQN tensor descriptor is out of bounds");
-    }
-    return floats.subarray(offset, offset + length);
-  };
-  const expandLayer = layer => {
-    const expanded = {
-      weights: view(layer.weights),
-      biases: view(layer.biases),
-      activation: layer.activation,
-    };
-    if (layer.layernorm) {
-      expanded.layernorm = {
-        weight: view(layer.layernorm.weight),
-        bias: view(layer.layernorm.bias),
-        eps: layer.layernorm.eps,
-      };
-    }
-    return expanded;
-  };
-  return {
-    type: "dqn",
-    format: payload.format,
-    architecture: "dueling",
-    observationKeys: payload.observationKeys,
-    actions: payload.actions,
-    trunk: payload.trunk.map(expandLayer),
-    value_head: expandLayer(payload.value_head),
-    advantage_head: expandLayer(payload.advantage_head),
-    advantageCentering: payload.advantageCentering,
-    meanExpansionK: payload.meanExpansionK,
-    meta: payload.meta || {},
-    _compactWeights: floats,
-  };
-}
 
-class HeadlessRandomKart extends Kart {
-  constructor(x, y, heading, char) {
-    super(x, y, heading, char, true);
-    this.playerIndex = 1;
-    this.randomSteer = 0;
-    this.randomSteerTimer = 0;
-  }
 
-  update(dt, track) {
-    if (this.eliminated) return;
-    this.randomSteerTimer -= dt;
-    if (this.randomSteerTimer <= 0) {
-      this.randomSteerTimer = rand(10, 42);
-      const roll = Math.random();
-      this.randomSteer = roll < 0.36 ? -1 : roll < 0.72 ? 1 : 0;
-    }
 
-    if (this.ultActiveTimer > 0) this.ultActiveTimer -= dt;
-    const input = {
-      forward: true,
-      back: false,
-      left: this.randomSteer < 0,
-      right: this.randomSteer > 0,
-      drift: false,
-    };
-    const onRoad = track.isOnRoad(this.x, this.y);
-    this.applyPhysics(input, track, dt, onRoad);
-  }
-}
 
-class HeadlessMlpKart extends Kart {
-  constructor(x, y, heading, char, weights) {
-    super(x, y, heading, char, true);
-    this.playerIndex = 1;
-    this.weights = weights;
-  }
-
-  update(dt, track) {
-    if (this.eliminated) return;
-    const observation = getHeadlessObservation(this);
-    const action = runHeadlessMlp(this.weights, observation);
-    this.lastHeadlessObservation = observation.values;
-    applyHeadlessAction(this, track, dt, action);
-  }
-}
-
-class HeadlessDqnKart extends Kart {
-  constructor(x, y, heading, char, weights) {
-    super(x, y, heading, char, true);
-    this.playerIndex = 1;
-    this.weights = weights;
-    this.frameSkip = Math.max(1, Math.floor(Number(weights?.meta?.frameSkip) || 1));
-    this.skipCounter = 0;
-    this.cachedAction = HEADLESS_DQN_ACTIONS[0];
-  }
-
-  update(dt, track) {
-    if (this.eliminated) return;
-    this.skipCounter--;
-    if (this.skipCounter <= 0) {
-      this.skipCounter = this.frameSkip;
-      const observation = getHeadlessObservation(this);
-      const decision = runHeadlessDqn(this.weights, observation, this);
-      this.lastHeadlessObservation = observation.values;
-      this.lastHeadlessActionIndex = decision.actionIndex;
-      this.lastHeadlessQValues = decision.qValues;
-      this.cachedAction = decision.action;
-    }
-    applyHeadlessAction(this, track, dt, this.cachedAction);
-  }
-}
-
-class HeadlessExternalKart extends Kart {
-  constructor(x, y, heading, char) {
-    super(x, y, heading, char, true);
-    this.playerIndex = 1;
-    this.pendingAction = HEADLESS_DQN_ACTIONS[0];
-  }
-
-  update(dt, track) {
-    if (this.eliminated) return;
-    applyHeadlessAction(this, track, dt, this.pendingAction || HEADLESS_DQN_ACTIONS[0]);
-  }
-}
-
-function enableHeadlessAgent(agentType) {
-  const existing = game.player;
-  const char = CHARACTERS[game.selectedCharIdx || 0];
-  const type = (agentType || "waypoint").toLowerCase();
-  const mlpWeights = window.HEADLESS_MLP_WEIGHTS || null;
-  const dqnWeights = window.HEADLESS_DQN_WEIGHTS || mlpWeights;
-  let bot;
-  if (type === "random") {
-    bot = new HeadlessRandomKart(existing.x, existing.y, existing.heading, char);
-  } else if (type === "external") {
-    bot = new HeadlessExternalKart(existing.x, existing.y, existing.heading, char);
-  } else if (type === "dqn") {
-    bot = new HeadlessDqnKart(existing.x, existing.y, existing.heading, char, dqnWeights);
-  } else if (type === "mlp") {
-    bot = new HeadlessMlpKart(existing.x, existing.y, existing.heading, char, mlpWeights);
-  } else {
-    bot = new AIKart(existing.x, existing.y, existing.heading, char, 1.05);
-  }
-  bot.isPlayer = true;
-  bot.playerIndex = 1;
-  bot.name = existing.name;
-  bot.color = existing.color;
-  bot.charId = existing.charId;
-  game.player = bot;
-  return ["random", "mlp", "dqn", "external"].includes(type) ? type : "waypoint";
-}
-
-class TrainedAIKart extends Kart {
-  constructor(x, y, heading, char, weights, skill = 1.0) {
-    super(x, y, heading, char, false);
-    this.weights = weights;
-    this.isSac = weights?.type === "sac";
-    this.skill = skill;
-    this.maxSpeed = this.baseMaxSpeed * (0.91 + skill * 0.1);
-    this.acceleration = char.acceleration * (0.92 + skill * 0.08);
-    this.turnSpeed = char.turnSpeed * (0.92 + skill * 0.08);
-    this.aiTargetIdx = 1;
-    this.frameSkip = Math.max(1, Math.floor(Number(weights?.meta?.frameSkip) || 1));
-    this.skipCounter = 0;
-    this.cachedAction = this.isSac ? { steer: 0, throttle: 1, brake: 0, drift: false, item: false, ultimate: false } : HEADLESS_DQN_ACTIONS[0];
-  }
-
-  update(dt, track) {
-    if (this.eliminated) return;
-    this.skipCounter--;
-    if (this.skipCounter <= 0) {
-      this.skipCounter = this.frameSkip;
-      const observation = getHeadlessObservation(this);
-      if (this.isSac) {
-        const decision = runHeadlessSac(this.weights, observation, this);
-        this.cachedAction = decision.action;
-      } else {
-        const decision = runHeadlessDqn(this.weights, observation, this);
-        this.cachedAction = decision.action;
-      }
-    }
-    applyHeadlessAction(this, track, dt, this.cachedAction);
-    const target = getPolicyCheckpointCenter(this);
-    if (target) {
-      const advanceRadius = Math.max(55, track.halfWidth * 1.2);
-      if (dist(this.x, this.y, target.x, target.y) < advanceRadius) {
-        this.aiTargetIdx = this.nextCheckpoint;
-      }
-    }
-  }
-}
-const DqnAIKart = TrainedAIKart;
 
 // Headline success rate for a model's metrics: battle win rate in Battle mode
 // (finish_rate also exists there but is always 0 — battles aren't "finished"), else finish rate.
@@ -9000,544 +7485,23 @@ async function loadSelectedAiModel() {
   return selectedAiModelWeights;
 }
 
-function configureHeadlessEpisode(config) {
-  if (config.solo) {
-    game.ais = [];
-    game.totalRacers = 1;
-  }
-  if (config.noItems && game.track) {
-    game.track.coins = [];
-    game.track.itemBoxes = [];
-    game.track.boostPads = [];
-  }
-  if (config.noHazards && game.track) {
-    game.hazards = [];
-    game.track.movingObjects = [];
-    game.track.regulatoryDragon = null;
-  }
-  const targetOpponents = config.opponentCount !== null && config.opponentCount !== undefined
-    ? Math.min(7, Math.max(0, Math.floor(Number(config.opponentCount))))
-    : null;
-  if (targetOpponents !== null && !config.solo && game.ais && game.track) {
-    if (game.ais.length < targetOpponents) {
-      const seg0 = game.track.segments[0];
-      const ang = Math.atan2(seg0.dy, seg0.dx);
-      const sx = seg0.a.x + seg0.dx * 0.04;
-      const sy = seg0.a.y + seg0.dy * 0.04;
-      const fx = Math.cos(ang), fy = Math.sin(ang);
-      const lx = -Math.sin(ang), ly = Math.cos(ang);
-      const aiChars = CHARACTERS.filter((_, idx) => idx !== (game.selectedCharIdx || 0));
-      const baseSkills = [0.95, 0.97, 0.99, 1.01];
-      const diffMult = AI_DIFFICULTIES[aiDifficulty] || 1.0;
-      for (let idx = game.ais.length; idx < targetOpponents; idx++) {
-        const pos = gridSlot(idx + 1);
-        const x = sx + fx * pos.f + lx * pos.l;
-        const y = sy + fy * pos.f + ly * pos.l;
-        game.ais.push(new AIKart(x, y, ang, aiChars[idx % aiChars.length], baseSkills[idx % baseSkills.length] * diffMult));
-      }
-    }
-    if (game.ais.length > targetOpponents) {
-      game.ais = game.ais.slice(0, targetOpponents);
-    }
-    game.totalRacers = 1 + game.ais.length;
-  }
-  if (!config.solo && Array.isArray(config.opponentModels) && config.opponentModels.length && game.ais?.length) {
-    const classicSlots = Math.max(0, Math.floor(Number(config.classicOpponentSlots || 0)));
-    game.ais = game.ais.map((ai, idx) => {
-      if (idx < classicSlots) return ai;
-      const weights = config.opponentModels[(idx - classicSlots) % config.opponentModels.length];
-      if (!weights) return ai;
-      try {
-        validateModelPayload(weights);
-        const char = CHARACTERS.find(c => c.id === ai.charId) || CHARACTERS[(idx + 1) % CHARACTERS.length];
-        const dqn = new TrainedAIKart(ai.x, ai.y, ai.heading, char, weights, ai.skill || 0.96);
-        dqn.lateralOffset = ai.lateralOffset || 0;
-        return dqn;
-      } catch (e) {
-        return ai;
-      }
-    });
-  }
-  game.headlessNoItems = !!config.noItems;
-  game.headlessNoHazards = !!config.noHazards;
-  // Re-init battle lives: the agent kart (and self-play opponents) replaced the karts
-  // that buildRace() originally initialized, leaving their `approvals` undefined.
-  if (isBattleMode()) initBattleKartState();
-}
 
-function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0) {
-  const ranking = rankAll().map((kart, idx) => ({
-    place: idx + 1,
-    name: kart.name,
-    charId: kart.charId,
-    lap: kart.lap,
-    nextCheckpoint: kart.nextCheckpoint,
-    progress: Math.round(progressValue(kart) * 1000) / 1000,
-    finished: !!kart.finished,
-    eliminated: !!kart.eliminated,
-    finishTime: Math.round((kart.finishTime || game.raceTime) * 1000) / 1000,
-  }));
-
-  return {
-    episode: episodeIdx,
-    map: map.id,
-    mapName: map.name,
-    character: CHARACTERS[game.selectedCharIdx || 0].id,
-    frames,
-    simSeconds: Math.round(simSeconds * 1000) / 1000,
-    state: game.state,
-    raceTime: Math.round(game.raceTime * 1000) / 1000,
-    playerFinished: !!game.player?.finished,
-    playerPlace: ranking.find(r => r.charId === game.player?.charId && r.name === game.player?.name)?.place || null,
-    playerLap: game.player?.lap || 0,
-    playerApprovals: game.player?.approvals || 0,
-    playerSteals: game.player?.battleSteals || 0,
-    playerEliminated: !!game.player?.eliminated,
-    reward: Math.round((game.headlessEpisodeReward || 0) * 1000) / 1000,
-    ranking,
-  };
-}
-
-function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinished) {
-  const afterProgress = progressValue(kart);
-  let reward = (afterProgress - beforeProgress) * 10;
-  if ((kart.lap || 0) > beforeLap) reward += 50;
-  if (!beforeFinished && kart.finished) reward += 200;
-  return reward;
-}
-
-// Arena/Battle reward, rebalanced toward the actual objective (win) so dense shaping
-// can't be farmed without winning:
-//   combat:   +1 land a hit, +1 revoke a rival life, -1.5 lose your own life
-//   item loop: +0.3 pick up an item, +0.3 fire one, +0.03 per coin (charges items/ult)
-//   terminal: +20 for winning (last standing / top rank), -8 on elimination
-// There is deliberately NO ult-use bonus: ults earn reward only when they land a hit
-// (registerBattleHit), so the agent must aim them at rivals rather than spam them.
-// Steal/loss/hit counts are accumulated in the game logic and consumed (reset) here.
-function computeHeadlessBattleReward(kart) {
-  const steals = game.rlSteals || 0;
-  const losses = game.rlLosses || 0;
-  const hits = game.rlHits || 0;
-  game.rlSteals = 0;
-  game.rlLosses = 0;
-  game.rlHits = 0;
-  // Aggression-shaped: pops/steals pay far more than passive survival, and every frame
-  // costs a little so running out the clock is never the best policy.
-  let reward = 3.0 * steals - 1.5 * losses + 1.5 * hits;
-  reward -= 0.001; // time pressure: ~-7.2 over a full 120s match
-  const uses = kart.itemUseCount || 0;
-  if (uses > (kart._rlPrevItemUses || 0)) reward += 0.3 * (uses - (kart._rlPrevItemUses || 0));
-  kart._rlPrevItemUses = uses;
-  const hasItem = kart.itemState === "active";
-  if (hasItem && !kart._rlHadItem) reward += 0.3; // picked up a fresh item
-  kart._rlHadItem = hasItem;
-  const coins = kart.coinsCollected || 0;
-  if (coins > (kart._rlPrevCoins || 0)) reward += 0.03 * (coins - (kart._rlPrevCoins || 0));
-  kart._rlPrevCoins = coins;
-  if (kart.eliminated && !kart._rlEliminationCounted) {
-    kart._rlEliminationCounted = true;
-    reward -= 8;
-  }
-  if (game.state === STATE.FINISHED && !kart._rlWinCounted) {
-    kart._rlWinCounted = true;
-    const alive = getActiveKarts().filter(k => k && !k.eliminated);
-    if (!kart.eliminated && (alive.length <= 1 || rankAll()[0] === kart)) reward += 20;
-    else if (!kart.eliminated) reward -= 5; // surviving to a timeout without leading is a soft loss
-  }
-  return reward;
-}
-
-function computeHeadlessStepReward(kart, beforeProgress, beforeLap, beforeFinished) {
-  if (isBattleMode()) return computeHeadlessBattleReward(kart);
-  return computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinished);
-}
-
-function makeHeadlessConfig(overrides = {}) {
-  let mode = String(overrides.mode ?? URL_PARAMS.get("mode") ?? "race").toLowerCase();
-  if (mode === "arena") mode = "battle";
-  const battle = mode === "battle";
-  return {
-    mode,
-    frames: Math.max(1, Math.floor(Number(overrides.frames ?? URL_PARAMS.get("frames") ?? URL_PARAMS.get("headlessFrames") ?? 60 * 120))),
-    episodes: Math.max(1, Math.floor(Number(overrides.episodes ?? URL_PARAMS.get("episodes") ?? 1))),
-    agent: String(overrides.agent ?? URL_PARAMS.get("agent") ?? "waypoint").toLowerCase(),
-    trace: overrides.trace ?? headlessFlag("trace", false),
-    traceEvery: Math.max(1, Math.floor(Number(overrides.traceEvery ?? URL_PARAMS.get("traceEvery") ?? 30))),
-    frameSkip: Math.max(1, Math.floor(Number(overrides.frameSkip ?? URL_PARAMS.get("frameSkip") ?? 4))),
-    // Battle is a free-for-all: force opponents on and items on regardless of race defaults.
-    solo: battle ? false : (overrides.solo ?? headlessFlag("solo", false)),
-    noItems: battle ? false : (overrides.noItems ?? (headlessFlag("noItems", false) || (headlessFlag("items", false) === false && URL_PARAMS.get("items") === "0"))),
-    noHazards: battle ? true : (overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0"))),
-    map: overrides.map ?? URL_PARAMS.get("map") ?? URL_PARAMS.get("headlessMap") ?? (battle ? BATTLE_ARENA_ID : "protocol_amendment_labyrinth"),
-    character: overrides.character ?? URL_PARAMS.get("char") ?? URL_PARAMS.get("character") ?? "anton",
-    opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,
-    classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
-    opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
-  };
-}
-
-function runHeadlessEpisode(config, episodeIdx = 0) {
-  Sound.muted = true;
-  game.multiplayer = false;
-  game.p2pMode = false;
-  game.p2pRole = null;
-  game.mode = config.mode === "battle" ? "battle" : "race";
-  game.rlSteals = 0;
-  game.rlLosses = 0;
-  game.rlHits = 0;
-  selectHeadlessCharacter(config.character);
-  const map = selectHeadlessMap(config.map);
-  hideAll();
-  buildRace();
-  const agent = enableHeadlessAgent(config.agent);
-  configureHeadlessEpisode(config);
-  game.particles = noopParticleSystem();
-  game.skidMarks = [];
-  game.state = STATE.RACING;
-  game.startTime = performance.now();
-  game.raceTime = 0;
-
-  const maxFrames = config.frames;
-  const dt = 1;
-  let simSeconds = 0;
-  let frames = 0;
-  const trace = [];
-  let totalReward = 0;
-
-  for (; frames < maxFrames && game.state !== STATE.FINISHED; frames++) {
-    const beforeProgress = progressValue(game.player);
-    const beforeFinished = !!game.player.finished;
-    const beforeLap = game.player.lap || 0;
-    const beforeObs = config.trace ? getHeadlessObservation(game.player) : null;
-    simSeconds += 1 / 60;
-    game.startTime = performance.now() - simSeconds * 1000;
-    update(dt, simSeconds * 1000);
-    game.skidMarks.length = 0;
-    const afterProgress = progressValue(game.player);
-    const reward = computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
-    totalReward += reward;
-    if (config.trace && frames % config.traceEvery === 0) {
-      trace.push({
-        frame: frames,
-        t: Math.round(simSeconds * 1000) / 1000,
-        obs: beforeObs ? beforeObs.values : [],
-        action: game.player.lastHeadlessAction || null,
-        reward: Math.round(reward * 1000) / 1000,
-        progress: Math.round(afterProgress * 1000) / 1000,
-        lap: game.player.lap,
-        x: Math.round(game.player.x * 10) / 10,
-        y: Math.round(game.player.y * 10) / 10,
-      });
-    }
-    if (areAllHumansDone()) {
-      finishRace();
-    }
-  }
-
-  game.headlessEpisodeReward = totalReward;
-  const result = summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx);
-  result.agent = agent;
-  if (config.trace) {
-    result.observationKeys = headlessObsKeys();
-    result.trace = trace;
-  }
-  return result;
-}
-
-function runHeadlessSimulation() {
-  const config = makeHeadlessConfig();
-  const startedAt = performance.now();
-  const episodes = [];
-  for (let i = 0; i < config.episodes; i++) {
-    episodes.push(runHeadlessEpisode(config, i));
-  }
-  const elapsedMs = performance.now() - startedAt;
-  const last = episodes[episodes.length - 1];
-  const totalFrames = episodes.reduce((sum, e) => sum + e.frames, 0);
-  const totalSimSeconds = episodes.reduce((sum, e) => sum + e.simSeconds, 0);
-  const totalPlayerLaps = episodes.reduce((sum, e) => sum + (e.playerLap || 0), 0);
-  const totalReward = episodes.reduce((sum, e) => sum + (e.reward || 0), 0);
-
-  const result = {
-    mode: "headless",
-    ...last,
-    config,
-    episodes,
-    aggregate: {
-      elapsedMs: Math.round(elapsedMs * 1000) / 1000,
-      totalFrames,
-      totalSimSeconds: Math.round(totalSimSeconds * 1000) / 1000,
-      simSecondsPerRealSecond: Math.round((totalSimSeconds / Math.max(0.001, elapsedMs / 1000)) * 1000) / 1000,
-      totalPlayerLaps,
-      totalReward: Math.round(totalReward * 1000) / 1000,
-      avgReward: Math.round((totalReward / episodes.length) * 1000) / 1000,
-      finishCount: episodes.filter(e => e.playerFinished).length,
-      avgPlayerProgress: Math.round((episodes.reduce((sum, e) => {
-        const player = e.ranking.find(r => r.charId === e.character);
-        return sum + (player ? player.progress : 0);
-      }, 0) / episodes.length) * 1000) / 1000,
-      realMsPerPlayerLap: totalPlayerLaps > 0 ? Math.round((elapsedMs / totalPlayerLaps) * 1000) / 1000 : null,
-    },
-  };
-
-  window.__HEADLESS_RESULT__ = result;
-  document.body.textContent = JSON.stringify(result, null, 2);
-  console.log("HEADLESS_RESULT " + JSON.stringify(result));
-  return result;
-}
-
-async function loadHeadlessPolicyModel() {
-  const modelUrl = URL_PARAMS.get("model") || URL_PARAMS.get("dqnModel") || URL_PARAMS.get("policy");
-  if (!modelUrl) return null;
-  const response = await fetch(modelUrl);
-  if (!response.ok) throw new Error(`Failed to load policy model: ${response.status}`);
-  const model = await response.json();
-  validateModelPayload(model);
-  if (model.type === "dqn" || model.type === "sac") window.HEADLESS_DQN_WEIGHTS = model;
-  else window.HEADLESS_MLP_WEIGHTS = model;
-  return model;
-}
-
-const HEADLESS_EXTERNAL_STATE = {
-  config: null,
-  simSeconds: 0,
-  frames: 0,
-  reward: 0,
-};
-
-
-function headlessExternalTerminal() {
-  const config = HEADLESS_EXTERNAL_STATE.config;
-  if (!config || !game.player) return true;
-  return game.state === STATE.FINISHED
-    || game.player.finished
-    || game.player.eliminated
-    || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
-}
-
-function headlessRlStepOnce(action) {
-  const config = HEADLESS_EXTERNAL_STATE.config || makeHeadlessConfig({ agent: "external" });
-  let actionObj;
-  if (typeof action === "number") {
-    actionObj = HEADLESS_DQN_ACTIONS[Math.max(0, Math.min(HEADLESS_DQN_ACTIONS.length - 1, Math.floor(action)))];
-  } else if (Array.isArray(action)) {
-    actionObj = {
-      steer: action[0] || 0,
-      throttle: action[1] !== undefined ? action[1] : 1,
-      brake: action[2] || 0,
-      drift: (action[3] || 0) > 0.5,
-      item: (action[4] || 0) > 0.5,
-      ultimate: (action[5] || 0) > 0.5,
-    };
-  } else {
-    actionObj = action;
-  }
-  if (game.player instanceof HeadlessExternalKart) game.player.pendingAction = actionObj;
-  let reward = 0;
-  const repeat = Math.max(1, Math.floor(config.frameSkip || 1));
-  for (let i = 0; i < repeat; i++) {
-    if (game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
-    const beforeProgress = progressValue(game.player);
-    const beforeLap = game.player.lap || 0;
-    const beforeFinished = !!game.player.finished;
-    HEADLESS_EXTERNAL_STATE.simSeconds += 1 / 60;
-    HEADLESS_EXTERNAL_STATE.frames++;
-    game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
-    update(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
-    game.skidMarks.length = 0;
-    reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
-    if (areAllHumansDone()) finishRace();
-  }
-  const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
-  const obs = getHeadlessObservation(game.player);
-  window.__lastRlRanking = rankAll().map(k => ({
-    name: k.name,
-    charId: k.charId,
-    finished: !!k.finished,
-    eliminated: !!k.eliminated,
-    progress: progressValue(k),
-  }));
-  return {
-    obs: obs.values,
-    reward,
-    done,
-    info: {
-      frame: HEADLESS_EXTERNAL_STATE.frames,
-      simSeconds: HEADLESS_EXTERNAL_STATE.simSeconds,
-      raceTime: game.raceTime,
-      progress: progressValue(game.player),
-      lap: game.player.lap,
-      finished: !!game.player.finished,
-      totalReward: HEADLESS_EXTERNAL_STATE.reward,
-      coins: game.player.coinsCollected || 0,
-      itemUses: game.player.itemUseCount || 0,
-      ultUses: game.player.ultUseCount || 0,
-      driftBoosts: game.player.driftBoostCount || 0,
-      mode: config.mode,
-      approvals: game.player.approvals || 0,
-      steals: game.player.battleSteals || 0,
-      eliminated: !!game.player.eliminated,
-      survivors: getActiveKarts().filter(k => k && !k.eliminated).length,
-      battleWin: game.state === STATE.FINISHED && !game.player.eliminated,
-    },
-  };
-}
-
-function setupExternalRlApi() {
-  window.rlActions = HEADLESS_DQN_ACTIONS;
-  window.rlObservationKeys = HEADLESS_OBS_KEYS;
-  window.rlReset = (overrides = {}) => {
-    const config = makeHeadlessConfig({ ...overrides, agent: "external" });
-    HEADLESS_EXTERNAL_STATE.config = config;
-    HEADLESS_EXTERNAL_STATE.simSeconds = 0;
-    HEADLESS_EXTERNAL_STATE.frames = 0;
-    HEADLESS_EXTERNAL_STATE.reward = 0;
-    Sound.muted = true;
-    game.multiplayer = false;
-    game.p2pMode = false;
-    game.p2pRole = null;
-    game.mode = config.mode === "battle" ? "battle" : "race";
-    game.rlSteals = 0;
-    game.rlLosses = 0;
-    game.rlHits = 0;
-    selectHeadlessCharacter(config.character);
-    const map = selectHeadlessMap(config.map);
-    hideAll();
-    buildRace();
-    const agent = enableHeadlessAgent("external");
-    configureHeadlessEpisode(config);
-    game.particles = noopParticleSystem();
-    game.skidMarks = [];
-    game.state = STATE.RACING;
-    game.startTime = performance.now();
-    game.raceTime = 0;
-    const obs = getHeadlessObservation(game.player);
-    return {
-      obs: obs.values,
-      obsKeys: obs.keys,
-      actions: HEADLESS_DQN_ACTIONS,
-      done: false,
-      info: {
-        agent,
-        mode: config.mode,
-        map: map.id,
-        mapName: map.name,
-        character: CHARACTERS[game.selectedCharIdx || 0].id,
-        opponentModelsApplied: game.ais ? game.ais.filter(ai => ai instanceof TrainedAIKart).length : 0,
-        opponentCount: game.ais ? game.ais.length : 0,
-      },
-    };
-  };
-  window.rlStep = (action) => {
-    const config = HEADLESS_EXTERNAL_STATE.config || makeHeadlessConfig({ agent: "external" });
-    if (!HEADLESS_EXTERNAL_STATE.config) window.rlReset(config);
-    return headlessRlStepOnce(action);
-  };
-  window.rlSetRolloutPolicy = (policy) => {
-    if (!policy || policy.type !== "dqn") {
-      throw new Error("rlSetRolloutPolicy requires a DQN policy");
-    }
-    const expanded = expandCompactDqnPolicy(policy);
-    validateDqnModelPayload(expanded);
-    window.__ROLLOUT_POLICY__ = expanded;
-    return true;
-  };
-  window.rlRollout = (config) => {
-    const policy = config?.policy || window.__ROLLOUT_POLICY__;
-    if (!policy || policy.type !== "dqn") {
-      throw new Error("rlRollout requires a DQN policy");
-    }
-    if (config?.policy) {
-      validateDqnModelPayload(policy);
-      window.__ROLLOUT_POLICY__ = policy;
-    }
-    if (headlessExternalTerminal()) {
-      return { trajectory: [], stoppedReason: "alreadyDone", count: 0 };
-    }
-    const epsilons = Array.isArray(config.epsilons) ? config.epsilons : [];
-    const maxSteps = Math.max(0, Math.floor(config.maxSteps ?? epsilons.length));
-    const rng = mulberry32((config.seed >>> 0) || 0);
-    const trajectory = [];
-    for (let i = 0; i < maxSteps; i++) {
-      if (headlessExternalTerminal()) break;
-      const epsilon = Math.min(1, Math.max(0, Number(epsilons[i] ?? 0)));
-      const baseObs = getHeadlessObservation(game.player);
-      const decision = runHeadlessDqn(policy, baseObs, game.player);
-      const actionCount = Array.isArray(policy.actions) && policy.actions.length
-        ? policy.actions.length
-        : HEADLESS_DQN_ACTIONS.length;
-      let actionIndex;
-      if (rng() < epsilon) {
-        actionIndex = Math.floor(rng() * actionCount);
-      } else {
-        actionIndex = decision.actionIndex;
-      }
-      const stepResult = headlessRlStepOnce(actionIndex);
-      let qMax = null;
-      let qMean = null;
-      if (Array.isArray(decision.qValues) && decision.qValues.length) {
-        qMax = decision.qValues[0];
-        let sum = 0;
-        for (let qi = 0; qi < decision.qValues.length; qi++) {
-          const v = decision.qValues[qi];
-          if (v > qMax) qMax = v;
-          sum += v;
-        }
-        qMean = sum / decision.qValues.length;
-        if (!Number.isFinite(qMax)) qMax = null;
-        if (!Number.isFinite(qMean)) qMean = null;
-      }
-      trajectory.push({
-        obs: stepResult.obs,
-        action: actionIndex,
-        reward: stepResult.reward,
-        done: stepResult.done,
-        info: stepResult.info,
-        qMax,
-        qMean,
-      });
-      if (stepResult.done) {
-        return { trajectory, stoppedReason: "done", count: trajectory.length };
-      }
-    }
-    return {
-      trajectory,
-      stoppedReason: trajectory.length < maxSteps ? "terminal" : "maxSteps",
-      count: trajectory.length,
-    };
-  };
-  window.__HEADLESS_READY__ = true;
-}
-
-// Test / Playwright helpers (page.evaluate accessible).
-window.game = game;
-window.update = update;
-window.handleP2pData = handleP2pData;
-window.startMergeRequestPull = startMergeRequestPull;
-window.Track = Track;
-window.PlayerKart = PlayerKart;
-window.AIKart = AIKart;
-window.CHARACTERS = CHARACTERS;
-window.isUntimedHumanBattle = isUntimedHumanBattle;
-window.qualifiesApprovalRam = qualifiesApprovalRam;
-window.resolveFreshBattleAttribution = resolveFreshBattleAttribution;
-window.popApproval = popApproval;
-window.tryApprovalRam = tryApprovalRam;
-window.checkBattleEnd = checkBattleEnd;
-window.isKartAirborne = isKartAirborne;
-window.integrateKartVertical = integrateKartVertical;
-window.checkTrackRamps = checkTrackRamps;
-window.constrainArenaKart = constrainArenaKart;
-window.kartVisualZOffset = kartVisualZOffset;
-window.isGroundHazardImmuneWhenAirborne = isGroundHazardImmuneWhenAirborne;
-window.serializeKartCompact = serializeKartCompact;
-window.serializeKartState = serializeKartState;
-window.applyKartState = applyKartState;
-window.isDayMode = isDayMode;
-window.setTimeOfDay = setTimeOfDay;
-window.ellipseNormDist = ellipseNormDist;
 
 // Resume audio context on any user click
+installTestHooks({
+  isUntimedHumanBattle,
+  qualifiesApprovalRam,
+  resolveFreshBattleAttribution,
+  popApproval,
+  tryApprovalRam,
+  checkBattleEnd,
+  isGroundHazardImmuneWhenAirborne,
+  setTimeOfDay,
+  startMergeRequestPull,
+});
+installWindowExports();
+
+
 document.addEventListener("click", () => { Sound.ensure(); Sound.resume(); });
 
 // Kick off the game loop
