@@ -29,9 +29,8 @@ import {
 } from "./core/math.js";
 import {
   COMPASS_VISUAL,
-  MAP_DAY_PALETTES,
   getMapDayPalette,
-  MAP_3D_THEMES,
+  getMap3DTheme,
 } from "./config/themes.js";
 import {
   keysP1,
@@ -9562,20 +9561,9 @@ function apply3DMapTheme() {
   if (!window.THREE || !THREE_STATE.scene || !THREE_STATE.renderer) return;
   const T = window.THREE;
   const mapId = MAPS[game.selectedMapIdx || 0].id;
-  const baseTheme = MAP_3D_THEMES[mapId] || MAP_3D_THEMES.core_mainframe;
   const day = isDayMode();
+  const theme = getMap3DTheme(mapId, day);
   const isArenaDay = day && !!MAPS[game.selectedMapIdx || 0].arena;
-  const theme = {
-    ...baseTheme,
-    sky: day && baseTheme.skyDay ? baseTheme.skyDay : baseTheme.sky,
-    fog: day && baseTheme.fogDay ? baseTheme.fogDay : baseTheme.fog,
-    ground: day && baseTheme.groundDay ? baseTheme.groundDay : baseTheme.ground,
-    groundAccent: day && baseTheme.groundAccentDay ? baseTheme.groundAccentDay : baseTheme.groundAccent,
-    clearColor: day && baseTheme.clearColorDay ? baseTheme.clearColorDay : baseTheme.clearColor,
-    gridColor: day && baseTheme.gridColorDay ? baseTheme.gridColorDay : baseTheme.gridColor,
-    gridSecondary: day && baseTheme.gridSecondaryDay ? baseTheme.gridSecondaryDay : baseTheme.gridSecondary,
-    isDay: day,
-  };
 
   THREE_STATE.renderer.setClearColor(theme.clearColor);
   THREE_STATE.renderer.toneMappingExposure = isArenaDay ? 0.9 : 1.15;
