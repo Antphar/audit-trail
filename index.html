@@ -998,6 +998,11 @@
         <button class="btn toggle-btn" id="view-2d-btn" type="button" style="flex:1;">Top-Down 2D</button>
         <button class="btn toggle-btn" id="view-3d-btn" type="button" style="flex:1;">3D Chase Cam</button>
       </div>
+      <div class="settings-label">Time of Day</div>
+      <div style="display:flex;gap:10px;margin-bottom:14px;">
+        <button class="btn toggle-btn" id="time-day-btn" type="button" style="flex:1;">Day</button>
+        <button class="btn toggle-btn" id="time-night-btn" type="button" style="flex:1;">Night</button>
+      </div>
       <div class="settings-label">Audio Mix</div>
       <div class="volume-controls" id="audio-settings-container">
         <label class="volume-row" for="music-volume-input">
@@ -1111,7 +1116,12 @@
         <button class="btn toggle-btn" data-approvals="4" type="button">4</button>
         <button class="btn toggle-btn" data-approvals="5" type="button">5</button>
       </div>
-      <div class="ai-helper-text" style="text-align:center;margin-top:6px;">Knock rivals out to STEAL their Approvals — Merge Request rips one straight off. Lose all yours and you're REJECTED. Opponent count &amp; difficulty are in Settings.</div>
+      <div class="map-select-title" style="margin-top:12px;">Match Timer</div>
+      <div id="battle-timing-group" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+        <button class="btn toggle-btn" data-battle-timed="1" type="button">Timed — 2:00</button>
+        <button class="btn toggle-btn" data-battle-timed="0" type="button">No Time Limit — Last Kart Standing</button>
+      </div>
+      <div class="ai-helper-text" style="text-align:center;margin-top:6px;">Revoke rivals with items and ults — only a high-speed ram or Merge Request transfers their Approval to you (+1, capped at 5). No-limit battles end when one kart remains. Opponent count &amp; difficulty are in Settings.</div>
     </div>
 
     <div class="ai-select-section" id="ai-select-section">
@@ -1255,6 +1265,8 @@ function saveGameSettings(patch = {}) {
       seriesRaces: typeof seriesRaces === "number" ? seriesRaces : (savedSettings.seriesRaces ?? 1),
       aiCount: typeof aiCount === "number" ? aiCount : (savedSettings.aiCount ?? 4),
       aiDifficulty: typeof aiDifficulty === "string" ? aiDifficulty : (savedSettings.aiDifficulty ?? "normal"),
+      battleUntimed: !!(game?.battleUntimed ?? savedSettings.battleUntimed),
+      timeOfDay: normalizeTimeOfDay(game?.timeOfDay ?? savedSettings.timeOfDay),
       ...patch,
     };
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(next));
@@ -1966,7 +1978,7 @@ function startMergeRequestPull(kart) {
     } else {
       target.lastAttacker = kart;
       target.lastAttackerAt = game.raceTime;
-      popApproval(target);
+      popApproval(target, { explicitTransferSource: kart });
     }
   }
   triggerQuote(kart, "boost");
@@ -2086,8 +2098,8 @@ function drawMergeRequestTethers(ctx, time) {
     ctx.setLineDash([10, 7]);
     ctx.lineDashOffset = -time * 0.12;
     ctx.beginPath();
-    ctx.moveTo(kart.x, kart.y);
-    ctx.lineTo(target.x, target.y);
+    ctx.moveTo(kart.x, kart.y - kartVisualZOffset(kart));
+    ctx.lineTo(target.x, target.y - kartVisualZOffset(target));
     ctx.stroke();
     ctx.restore();
   }
@@ -2438,9 +2450,21 @@ function eliminateKart(kart, label = "ELIMINATED!", x = null, y = null, color = 
 }
 
 // Battle mode: revoke one Approval from a kart that just got hit. Eliminates at zero.
-function popApproval(kart) {
+// Only a qualifying high-speed ram or Merge Request may transfer the popped Approval.
+function popApproval(kart, opts = {}) {
   if (!kart || kart.eliminated) return;
   if ((kart.approvals || 0) <= 0) return;
+
+  const killAttacker = resolveFreshKillAttacker(kart);
+  const pendingTransfer = resolveFreshTransferAttacker(kart);
+  const explicitTransfer = opts.explicitTransferSource
+    && opts.explicitTransferSource !== kart
+    && !opts.explicitTransferSource.eliminated
+    ? opts.explicitTransferSource
+    : null;
+  const transferAttacker = explicitTransfer || pendingTransfer;
+  clearPendingApprovalTransfer(kart);
+
   kart.approvals--;
   if (kart.isPlayer) {
     game.rlLosses = (game.rlLosses || 0) + 1; // headless RL: own life lost this frame
@@ -2456,37 +2480,33 @@ function popApproval(kart) {
       vx: 0, vy: -1.1, life: 50, maxLife: 50, size: 15, color: "#ff3366", drag: 0.98,
     });
   }
-  // Reward whoever caused this hit (esp. the human) with a clear "you stole a life" cue.
-  const attacker = kart.lastAttacker;
-  const creditedAttacker = attacker && attacker !== kart && !attacker.eliminated && (game.raceTime - (kart.lastAttackerAt || 0)) < 2 ? attacker : null;
-  if (creditedAttacker) {
-    creditedAttacker.battleSteals = (creditedAttacker.battleSteals || 0) + 1; // pops scoreboard (all karts)
-    // Steals transfer the popped approval to the attacker, capped at max starting stack.
-    creditedAttacker.approvals = Math.min(5, (creditedAttacker.approvals || 0) + 1);
-    if (creditedAttacker.isPlayer) {
+  if (transferAttacker) {
+    transferAttacker.battleSteals = (transferAttacker.battleSteals || 0) + 1;
+    transferAttacker.approvals = Math.min(5, (transferAttacker.approvals || 0) + 1);
+    if (transferAttacker.isPlayer) {
       game.rlSteals = (game.rlSteals || 0) + 1; // headless RL: player stole a life this frame
       if (Sound.approvalSteal) Sound.approvalSteal();
       game.shake = Math.max(game.shake, 7);
       game.flash = Math.max(game.flash, 4);
-      triggerHitFlash("APPROVAL STOLEN +1", "#a4ff80", 80, creditedAttacker);
+      triggerHitFlash("APPROVAL STOLEN +1", "#a4ff80", 80, transferAttacker);
     }
     if (game.particles) {
       game.particles.add({
-        type: "text", text: creditedAttacker.isPlayer ? "+1 APPROVAL!" : "STOLEN!", x: kart.x, y: kart.y - 50,
+        type: "text", text: transferAttacker.isPlayer ? "+1 APPROVAL!" : "STOLEN!", x: kart.x, y: kart.y - 50,
         vx: 0, vy: -1.2, life: 60, maxLife: 60, size: 17, color: "#a4ff80", drag: 0.98,
       });
       game.particles.add({
-        type: "text", text: "+1", x: creditedAttacker.x, y: creditedAttacker.y - 30,
+        type: "text", text: "+1", x: transferAttacker.x, y: transferAttacker.y - 30,
         vx: 0, vy: -1.0, life: 45, maxLife: 45, size: 14, color: "#a4ff80", drag: 0.98,
       });
     }
   }
   if (kart.approvals <= 0) {
-    if (creditedAttacker && creditedAttacker.isPlayer) {
-      triggerHitFlash("REJECTED THEM!", "#ffd86b", 100, creditedAttacker);
+    if (killAttacker && killAttacker.isPlayer) {
+      triggerHitFlash("REJECTED THEM!", "#ffd86b", 100, killAttacker);
       if (Sound.killConfirm) Sound.killConfirm();
     }
-    eliminateKart(kart, "REJECTED!", kart.x, kart.y, "#ff3366", kart.lastAttacker);
+    eliminateKart(kart, "REJECTED!", kart.x, kart.y, "#ff3366", killAttacker);
   }
 }
 
@@ -2507,6 +2527,8 @@ function initBattleKartState() {
     k.killedBy = null;
     k.lastAttacker = null;
     k.lastAttackerAt = 0;
+    k.pendingApprovalTransferFrom = null;
+    k.pendingApprovalTransferAt = 0;
     k.recoverGraceTimer = 0;
   }
 }
@@ -2538,7 +2560,7 @@ function checkBattleEnd() {
   if (!isBattleMode() || game.state !== STATE.RACING) return;
   const active = getActiveKarts();
   const alive = active.filter((k) => k && !k.eliminated);
-  const timeUp = game.battleTimeLeft <= 0;
+  const timeUp = !isUntimedHumanBattle() && game.battleTimeLeft <= 0;
   // Last-one-standing only counts as a win when there were rivals to begin with.
   const lastStanding = active.length > 1 && alive.length <= 1;
   if (timeUp || lastStanding) {
@@ -2608,9 +2630,10 @@ function absorbFatalHitWithShield(kart, x, y) {
 
 function drawKartNameTag(ctx, kart, time) {
   if (!kart || kart.eliminated) return;
+  const zOff = kartVisualZOffset(kart);
   ctx.save();
   const nx = kart.x;
-  const ny = kart.y + 22;
+  const ny = kart.y + 22 - zOff;
   ctx.font = "bold 8px 'SFMono-Regular', Consolas, monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
@@ -2661,7 +2684,8 @@ function drawApprovalSeals(c, x, y, n, time = 0, r = 8) {
 // Floating Approval seals above a kart in Battle mode (2D world-space).
 function drawApprovals(ctx, kart, time) {
   if (!isBattleMode() || !kart || kart.eliminated) return;
-  drawApprovalSeals(ctx, kart.x, kart.y - 40, kart.approvals || 0, time, 8);
+  const zOff = kartVisualZOffset(kart);
+  drawApprovalSeals(ctx, kart.x, kart.y - 40 - zOff, kart.approvals || 0, time, 8);
 }
 
 // Screen-space Approval overlay for the 3D chase cam (projects kart world pos).
@@ -2673,7 +2697,7 @@ function drawApprovals3DOverlay(c, time) {
     if (!k || k.eliminated) continue;
     const n = k.approvals || 0;
     if (n <= 0) continue;
-    v.set(k.x, 52, k.y);
+    v.set(k.x, 52 + (k.z || 0), k.y);
     v.project(cam);
     if (v.z > 1) continue; // behind the camera
     const sx = (v.x * 0.5 + 0.5) * VIEW_W;
@@ -2686,9 +2710,10 @@ function drawSpeechBubble(ctx, kart) {
   if (!kart.activeQuote || kart.quoteTimer <= 0) return;
 
   ctx.save();
+  const zOff = kartVisualZOffset(kart);
   // Position above kart
   const bx = kart.x;
-  const by = kart.y - 32;
+  const by = kart.y - 32 - zOff;
 
   ctx.font = "bold 11px sans-serif";
   const textWidth = ctx.measureText(kart.activeQuote).width;
@@ -6289,28 +6314,70 @@ const MAPS = [
     id: "battle_arena",
     arena: true,
     musicTrack: 3,
-    worldW: 2600,
-    worldH: 2600,
-    // Wide 12-gon ring: an open arena where laps don't matter — karts roam and brawl.
-    waypoints: [
-      { x: 2250, y: 1300 },
-      { x: 2123, y: 1775 },
-      { x: 1775, y: 2123 },
-      { x: 1300, y: 2250 },
-      { x:  825, y: 2123 },
-      { x:  477, y: 1775 },
-      { x:  350, y: 1300 },
-      { x:  477, y:  825 },
-      { x:  825, y:  477 },
-      { x: 1300, y:  350 },
-      { x: 1775, y:  477 },
-      { x: 2123, y:  825 },
-    ],
-    roadHalfBase: 300,
+    worldW: 2800,
+    worldH: 2800,
+    arenaFloor: { cx: 1400, cy: 1400, rx: 1180, ry: 1180 },
+    reviewPlatformRadius: 300,
+    waypoints: (() => {
+      const c = 1400, r = 1020;
+      const pts = [];
+      for (let i = 0; i < 12; i++) {
+        const a = (i / 12) * TAU - Math.PI / 2;
+        pts.push({ x: c + r * Math.cos(a), y: c + r * Math.sin(a) });
+      }
+      return pts;
+    })(),
+    roadHalfBase: 280,
     segWidth: {},
-    boostPadSegs: [],
+    boostPadSegs: [1, 3, 5, 7, 9, 11],
     itemBoxSegs: [0, 2, 4, 6, 8, 10],
-    desc: "FREE-FOR-ALL BATTLE: Defend your regulatory Approvals. Hit rivals to get their submissions REVOKED. Last coder standing wins."
+    ramps: [
+      { x: 1400, y: 260, ang: Math.PI / 2, w: 130, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.2 },
+      { x: 1400, y: 2540, ang: -Math.PI / 2, w: 130, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.2 },
+      { x: 2540, y: 1400, ang: Math.PI, w: 130, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.2 },
+      { x: 260, y: 1400, ang: 0, w: 130, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.2 },
+      { x: 1400, y: 520, ang: 0, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 1980, y: 820, ang: Math.PI / 4, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 2280, y: 1400, ang: Math.PI / 2, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 1980, y: 1980, ang: (3 * Math.PI) / 4, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 1400, y: 2280, ang: Math.PI, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 820, y: 1980, ang: (-3 * Math.PI) / 4, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 520, y: 1400, ang: -Math.PI / 2, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+      { x: 820, y: 820, ang: -Math.PI / 4, w: 58, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.2 },
+    ],
+    desc: "SYMMETRIC ARENA BATTLE: Wide circular floor, cardinal launch ramps, and a central review platform. Jump over hazards and ram rivals to steal Approvals."
+  },
+  {
+    name: "Open Enforcement Grounds",
+    id: "battle_open_arena",
+    arena: true,
+    musicTrack: 3,
+    worldW: 3600,
+    worldH: 2600,
+    arenaFloor: { cx: 1800, cy: 1300, rx: 1550, ry: 1050 },
+    reviewPlatformRadius: 0,
+    waypoints: (() => {
+      const cx = 1800, cy = 1300, rx = 1280, ry = 820;
+      const pts = [];
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * TAU;
+        pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+      }
+      return pts;
+    })(),
+    roadHalfBase: 220,
+    segWidth: { 0: 1.35, 5: 1.35 },
+    boostPadSegs: [2, 7],
+    itemBoxSegs: [1, 6],
+    ramps: [
+      { x: 320, y: 1300, ang: 0, w: 200, h: 52, kind: "ramp", impulse: 5.8, minSpeed: 4.5 },
+      { x: 3280, y: 1300, ang: Math.PI, w: 200, h: 52, kind: "ramp", impulse: 5.8, minSpeed: 4.5 },
+      { x: 1800, y: 220, ang: Math.PI / 2, w: 140, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.5 },
+      { x: 1800, y: 2380, ang: -Math.PI / 2, w: 140, h: 44, kind: "ramp", impulse: 5.8, minSpeed: 3.5 },
+      { x: 2550, y: 900, ang: Math.PI / 6, w: 62, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.5 },
+      { x: 1050, y: 1700, ang: (-5 * Math.PI) / 6, w: 62, h: 20, kind: "bump", impulse: 2.7, minSpeed: 2.5 },
+    ],
+    desc: "OPEN FIELD BATTLE: Massive east-west run-up lanes for speed rams and long sightlines. Fewer pickups — positioning and jumps decide the brawl."
   }
 ];
 
@@ -6339,6 +6406,170 @@ function getArenaMapIdx() {
   const idx = MAPS.findIndex((m) => m.id === BATTLE_ARENA_ID);
   return idx >= 0 ? idx : 0;
 }
+function isArenaMap(mapOrIdx) {
+  const m = typeof mapOrIdx === "number" ? MAPS[mapOrIdx] : mapOrIdx;
+  return !!(m && m.arena);
+}
+function ensureSelectedMapMatchesMode() {
+  const wantsArena = isBattleMode();
+  const current = MAPS[game.selectedMapIdx];
+  if (current && !!current.arena === wantsArena) return game.selectedMapIdx;
+
+  const fallbackIdx = wantsArena
+    ? getArenaMapIdx()
+    : MAPS.findIndex((map) => !map.arena);
+  game.selectedMapIdx = fallbackIdx >= 0 ? fallbackIdx : 0;
+  return game.selectedMapIdx;
+}
+function normalizeTimeOfDay(v) {
+  return v === "night" ? "night" : "day";
+}
+function isDayMode() {
+  return normalizeTimeOfDay(game?.timeOfDay ?? savedSettings.timeOfDay) === "day";
+}
+
+const VERTICAL_GRAVITY = 0.32;
+const RAMP_IMPULSE = 5.8;
+const BUMP_IMPULSE = 2.7;
+const AIRBORNE_THRESHOLD = 4;
+const KART_MAX_JUMP_Z = 120;
+const RAMP_COOLDOWN_MS = 900;
+const KART_GROUNDED_Z = 0.5;
+
+function ellipseNormDist(x, y, floor) {
+  if (!floor) return Infinity;
+  const nx = (x - floor.cx) / Math.max(1, floor.rx);
+  const ny = (y - floor.cy) / Math.max(1, floor.ry);
+  return Math.hypot(nx, ny);
+}
+
+function isKartAirborne(kart) {
+  return !!(kart && (kart.z || 0) > AIRBORNE_THRESHOLD);
+}
+
+function isKartGrounded(kart) {
+  return !kart || (kart.z || 0) <= KART_GROUNDED_Z;
+}
+
+function kartVisualZOffset(kart) {
+  return (kart?.z || 0) * 0.65;
+}
+
+function integrateKartVertical(kart, dt) {
+  if (!kart) return;
+  let z = kart.z || 0;
+  let vz = kart.vz || 0;
+  if (z <= 0 && vz <= 0) {
+    kart.z = 0;
+    kart.vz = 0;
+    return;
+  }
+  vz -= VERTICAL_GRAVITY * dt;
+  z += vz * dt;
+  if (z <= 0) {
+    const wasAir = (kart.z || 0) > AIRBORNE_THRESHOLD;
+    kart.z = 0;
+    kart.vz = 0;
+    if (wasAir && kart.isPlayer && game.particles) {
+      game.particles.burst(kart.x, kart.y, kart.color || "#ffffff", 6, { type: "spark", spdMin: 0.5, spdMax: 2 });
+      Sound.tone(280, 0.06, "sine", 0.08, 140);
+    }
+  } else {
+    kart.z = Math.min(z, KART_MAX_JUMP_Z);
+    kart.vz = vz;
+  }
+}
+
+function constrainArenaKart(kart, track) {
+  const floor = track?.arenaFloor;
+  if (!floor || !kart) return false;
+  const nd = ellipseNormDist(kart.x, kart.y, floor);
+  const limit = 1.0;
+  const wallPad = 0.015;
+  if (nd <= limit) return false;
+
+  const nx = (kart.x - floor.cx) / Math.max(1, floor.rx);
+  const ny = (kart.y - floor.cy) / Math.max(1, floor.ry);
+  const len = Math.hypot(nx, ny) || 1;
+  const ux = nx / len;
+  const uy = ny / len;
+  kart.x = floor.cx + ux * floor.rx * (limit - wallPad);
+  kart.y = floor.cy + uy * floor.ry * (limit - wallPad);
+
+  const gx = (kart.x - floor.cx) / (floor.rx * floor.rx);
+  const gy = (kart.y - floor.cy) / (floor.ry * floor.ry);
+  const glen = Math.hypot(gx, gy) || 1;
+  const outNx = gx / glen;
+  const outNy = gy / glen;
+
+  const dot = kart.vx * outNx + kart.vy * outNy;
+  if (dot > 0) {
+    kart.vx -= dot * outNx * 2.2;
+    kart.vy -= dot * outNy * 2.2;
+    kart.vx *= 0.78;
+    kart.vy *= 0.78;
+  } else {
+    kart.vx -= outNx * 0.8;
+    kart.vy -= outNy * 0.8;
+  }
+
+  if (performance.now() - (kart.lastBumpAt || -999) > 1100) {
+    triggerQuote(kart, "crash");
+    kart.lastBumpAt = performance.now();
+    if (kart.isPlayer) {
+      Sound.bump();
+      game.shake = Math.max(game.shake, 5);
+    }
+  }
+  return true;
+}
+
+function checkTrackRamps(kart, track) {
+  if (!track?.ramps?.length || !isKartGrounded(kart)) return false;
+  const now = performance.now();
+  for (const ramp of track.ramps) {
+    if (!ramp.cooldown) ramp.cooldown = new Map();
+    const last = ramp.cooldown.get(kart);
+    if (last && (now - last) < RAMP_COOLDOWN_MS) continue;
+
+    const cos = Math.cos(ramp.ang);
+    const sin = Math.sin(ramp.ang);
+    const lx = kart.x - ramp.x;
+    const ly = kart.y - ramp.y;
+    const localX = lx * cos + ly * sin;
+    const localY = -lx * sin + ly * cos;
+    if (Math.abs(localX) > ramp.w * 0.5 || Math.abs(localY) > ramp.h * 0.5) continue;
+
+    const speed = Math.hypot(kart.vx, kart.vy);
+    const minSpeed = ramp.minSpeed ?? (ramp.kind === "bump" ? 2.0 : 3.2);
+    if (speed < minSpeed) continue;
+
+    if (ramp.kind === "ramp") {
+      const along = kart.vx * cos + kart.vy * sin;
+      if (along < minSpeed) continue;
+    }
+
+    ramp.cooldown.set(kart, now);
+    const impulse = ramp.impulse ?? (ramp.kind === "bump" ? BUMP_IMPULSE : RAMP_IMPULSE);
+    kart.vz = Math.max(kart.vz || 0, impulse);
+    if (kart.isPlayer) {
+      if (ramp.kind === "ramp") Sound.boost();
+      else Sound.tone(420, 0.05, "triangle", 0.1, 200);
+    }
+    return true;
+  }
+  return false;
+}
+
+function isGroundHazardImmuneWhenAirborne(h) {
+  return (h instanceof MergeConflict) || (h instanceof PlaceboPill) || (h instanceof DoubleBlindCloud);
+}
+
+function shouldSkipGroundHazardForKart(kart, h) {
+  if (!isKartAirborne(kart)) return false;
+  if (h instanceof DossierProjectile || h instanceof RegulatoryProjectile || h instanceof DragonFire) return false;
+  return isGroundHazardImmuneWhenAirborne(h);
+}
 function isBattleMode() {
   return game.mode === "battle";
 }
@@ -6346,6 +6577,68 @@ function clampApprovals(v) {
   const n = Math.round(Number(v));
   if (!Number.isFinite(n)) return 3;
   return Math.max(3, Math.min(5, n));
+}
+
+// Battle timer: human lobby can pick no-limit; headless / external RL always stay timed.
+function isUntimedHumanBattle() {
+  return isBattleMode() && !!game.battleUntimed && !HEADLESS_MODE;
+}
+
+const BATTLE_ATTRIBUTION_WINDOW = 2;
+// High-speed ram qualification (units/frame; closing velocity along attacker→defender).
+const APPROVAL_RAM_MIN_SPEED = 4.5;
+const APPROVAL_RAM_SPEED_MARGIN = 1.25;
+const APPROVAL_RAM_MIN_CLOSING = 3.0;
+const APPROVAL_RAM_MAX_BEARING_DEG = 50;
+
+function resolveFreshBattleAttribution(victim, attackerField, attackerAtField, windowSec = BATTLE_ATTRIBUTION_WINDOW) {
+  if (!victim) return null;
+  const attacker = victim[attackerField];
+  const at = victim[attackerAtField] || 0;
+  if (!attacker || attacker === victim || attacker.eliminated) return null;
+  if ((game.raceTime - at) >= windowSec) return null;
+  return attacker;
+}
+
+function resolveFreshKillAttacker(victim) {
+  return resolveFreshBattleAttribution(victim, "lastAttacker", "lastAttackerAt");
+}
+
+function resolveFreshTransferAttacker(victim) {
+  return resolveFreshBattleAttribution(victim, "pendingApprovalTransferFrom", "pendingApprovalTransferAt");
+}
+
+function clearPendingApprovalTransfer(victim) {
+  if (!victim) return;
+  victim.pendingApprovalTransferFrom = null;
+  victim.pendingApprovalTransferAt = 0;
+}
+
+function setKillAttribution(victim, attacker) {
+  if (!victim || !attacker) return;
+  victim.lastAttacker = attacker;
+  victim.lastAttackerAt = game.raceTime;
+}
+
+function setTransferAttribution(victim, attacker) {
+  if (!victim || !attacker) return;
+  victim.pendingApprovalTransferFrom = attacker;
+  victim.pendingApprovalTransferAt = game.raceTime;
+}
+
+function qualifiesApprovalRam(att, def, dirx, diry) {
+  if (!att || !def) return false;
+  if (isKartAirborne(att) || isKartAirborne(def)) return false;
+  const attSpeed = att.speed();
+  const defSpeed = def.speed();
+  if (attSpeed < APPROVAL_RAM_MIN_SPEED) return false;
+  if (attSpeed - defSpeed < APPROVAL_RAM_SPEED_MARGIN) return false;
+  const closing = att.vx * dirx + att.vy * diry;
+  if (closing < APPROVAL_RAM_MIN_CLOSING) return false;
+  const targetAngle = Math.atan2(diry, dirx);
+  const attVelAngle = Math.atan2(att.vy, att.vx);
+  if (Math.abs(angleDiff(attVelAngle, targetAngle)) > (APPROVAL_RAM_MAX_BEARING_DEG * Math.PI / 180)) return false;
+  return true;
 }
 
 let TOTAL_LAPS = clampLaps(savedSettings.totalLaps ?? 3);
@@ -6401,6 +6694,23 @@ class Track {
     this.itemBoxes = this._placeItemBoxes(mapConfig.itemBoxSegs || []);
     this.movingObjects = this._placeMovingObjects(mapConfig.movingObjects || []);
     this.regulatoryDragon = this._createRegulatoryDragon(mapConfig.regulatoryDragon);
+    this.arenaFloor = mapConfig.arenaFloor || null;
+    this.reviewPlatformRadius = mapConfig.reviewPlatformRadius || 0;
+    this.ramps = this._normalizeRamps(mapConfig.ramps || []);
+  }
+
+  _normalizeRamps(entries) {
+    return entries.map((r) => ({
+      x: r.x,
+      y: r.y,
+      ang: r.ang,
+      w: r.w || 70,
+      h: r.h || 36,
+      kind: r.kind || "ramp",
+      impulse: r.impulse ?? (r.kind === "bump" ? BUMP_IMPULSE : RAMP_IMPULSE),
+      minSpeed: r.minSpeed ?? (r.kind === "bump" ? 2.0 : 3.2),
+      cooldown: new Map(),
+    }));
   }
 
   _buildCheckpointGroups(groups) {
@@ -6478,6 +6788,9 @@ class Track {
 
   // Is point on the road surface?
   isOnRoad(x, y) {
+    if (this.arenaFloor) {
+      return ellipseNormDist(x, y, this.arenaFloor) <= 1.0;
+    }
     const c = this.closestSegment(x, y);
     return c.dist <= this.segments[c.idx].halfW;
   }
@@ -6491,6 +6804,12 @@ class Track {
 
   // Returns the over-edge distance (>0 if outside the road) on this segment
   offRoadDepth(x, y) {
+    if (this.arenaFloor) {
+      const nd = ellipseNormDist(x, y, this.arenaFloor);
+      if (nd <= 1) return 0;
+      const scale = Math.min(this.arenaFloor.rx, this.arenaFloor.ry);
+      return (nd - 1) * scale;
+    }
     const c = this.closestSegment(x, y);
     const seg = this.segments[c.idx];
     return c.dist - seg.halfW;
@@ -6976,6 +7295,15 @@ class Track {
   }
 
   draw(ctx, time) {
+    if (this.arenaFloor) {
+      this._drawArenaFloor(ctx, time);
+      this._drawArenaLane(ctx, time);
+      this.drawRamps(ctx, time);
+      if (!this.isOpen && !isBattleMode()) this._drawStartLine(ctx);
+      this._drawDecor(ctx);
+      return;
+    }
+
     // Grass background tile
     this._drawGrass(ctx);
 
@@ -7168,6 +7496,195 @@ class Track {
     }
   }
 
+  _drawArenaFloor(ctx, time) {
+    const floor = this.arenaFloor;
+    if (!floor) return;
+    const day = isDayMode();
+    const cx = floor.cx;
+    const cy = floor.cy;
+    const rx = floor.rx;
+    const ry = floor.ry;
+
+    // Sky / backdrop
+    const skyGrad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+    if (day) {
+      skyGrad.addColorStop(0, "#5eb8ff");
+      skyGrad.addColorStop(0.45, "#9ed4ff");
+      skyGrad.addColorStop(1, "#d8ecff");
+    } else {
+      skyGrad.addColorStop(0, "#060514");
+      skyGrad.addColorStop(1, "#0c0a24");
+    }
+    ctx.fillStyle = skyGrad;
+    ctx.fillRect(-500, -500, WORLD_W + 1000, WORLD_H + 1000);
+
+    // Arena floor ellipse
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, ry / rx);
+    const floorGrad = ctx.createRadialGradient(0, 0, rx * 0.1, 0, 0, rx);
+    if (day) {
+      floorGrad.addColorStop(0, "#c8e6b8");
+      floorGrad.addColorStop(0.55, "#9ecf8a");
+      floorGrad.addColorStop(1, "#7ab86c");
+    } else {
+      floorGrad.addColorStop(0, "#142818");
+      floorGrad.addColorStop(0.55, "#0e2014");
+      floorGrad.addColorStop(1, "#08140c");
+    }
+    ctx.fillStyle = floorGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    // Grid accents
+    ctx.strokeStyle = day ? "rgba(123, 117, 255, 0.14)" : "rgba(123, 117, 255, 0.08)";
+    ctx.lineWidth = 1;
+    const gridStep = 120;
+    for (let gx = cx - rx; gx <= cx + rx; gx += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(gx, cy - ry);
+      ctx.lineTo(gx, cy + ry);
+      ctx.stroke();
+    }
+    for (let gy = cy - ry; gy <= cy + ry; gy += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(cx - rx, gy);
+      ctx.lineTo(cx + rx, gy);
+      ctx.stroke();
+    }
+
+    // Central review platform (visual only)
+    if (this.reviewPlatformRadius > 0) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      const pr = this.reviewPlatformRadius;
+      ctx.fillStyle = day ? "rgba(255, 255, 255, 0.55)" : "rgba(123, 117, 255, 0.12)";
+      ctx.strokeStyle = day ? "rgba(87, 242, 255, 0.65)" : "rgba(87, 242, 255, 0.35)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, pr, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([18, 14]);
+      ctx.strokeStyle = day ? "rgba(253, 153, 39, 0.55)" : "rgba(253, 153, 39, 0.35)";
+      ctx.beginPath();
+      ctx.arc(0, 0, pr * 0.72, 0, TAU);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = day ? "rgba(10, 8, 28, 0.55)" : "rgba(10, 8, 28, 0.75)";
+      ctx.font = "bold 11px monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("REVIEW PLATFORM", 0, 0);
+      ctx.restore();
+    }
+
+    // Boundary ring / barrier
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, ry / rx);
+    ctx.strokeStyle = day ? "rgba(255, 77, 109, 0.75)" : "rgba(255, 77, 109, 0.55)";
+    ctx.lineWidth = 10;
+    ctx.setLineDash([36, 22]);
+    ctx.lineDashOffset = -((time * 0.05) % 58);
+    ctx.beginPath();
+    ctx.arc(0, 0, rx - 6, 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = day ? "rgba(87, 242, 255, 0.85)" : "rgba(87, 242, 255, 0.55)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawArenaLane(ctx, time) {
+    if (this.n < 2) return;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    const day = isDayMode();
+
+    ctx.strokeStyle = day ? "rgba(13, 11, 33, 0.25)" : "rgba(123, 117, 255, 0.15)";
+    ctx.lineWidth = (this.halfWidth + 16) * 2;
+    ctx.shadowColor = "#7b75ff";
+    ctx.shadowBlur = day ? 6 : 10;
+    this.drawPath(ctx);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.strokeStyle = day ? "#1a1738" : "#0d0b21";
+    ctx.lineWidth = this.halfWidth * 2;
+    this.drawPath(ctx);
+    ctx.stroke();
+
+    ctx.strokeStyle = day ? "rgba(87, 242, 255, 0.35)" : "rgba(0, 229, 255, 0.15)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([12, 48]);
+    ctx.lineDashOffset = -((time * 0.08) % 60);
+    this.drawPath(ctx);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = day ? "rgba(123, 117, 255, 0.65)" : "rgba(123, 117, 255, 0.5)";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([24, 32]);
+    this.drawPath(ctx);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  drawRamps(ctx, time) {
+    if (!this.ramps?.length) return;
+    const day = isDayMode();
+    for (const ramp of this.ramps) {
+      ctx.save();
+      ctx.translate(ramp.x, ramp.y);
+      ctx.rotate(ramp.ang);
+      if (ramp.kind === "bump") {
+        ctx.fillStyle = day ? "rgba(253, 153, 39, 0.55)" : "rgba(253, 153, 39, 0.35)";
+        ctx.strokeStyle = day ? "#fd9927" : "rgba(253, 153, 39, 0.8)";
+        ctx.lineWidth = 2;
+        roundRect(ctx, -ramp.w * 0.5, -ramp.h * 0.5, ramp.w, ramp.h, 4);
+        ctx.fill();
+        ctx.stroke();
+        ctx.strokeStyle = day ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.45)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([8, 6]);
+        ctx.beginPath();
+        ctx.moveTo(-ramp.w * 0.4, 0);
+        ctx.lineTo(ramp.w * 0.4, 0);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else {
+        const hw = ramp.w * 0.5;
+        const hh = ramp.h * 0.5;
+        ctx.fillStyle = day ? "rgba(87, 242, 255, 0.35)" : "rgba(87, 242, 255, 0.22)";
+        ctx.strokeStyle = day ? "#57f2ff" : "rgba(87, 242, 255, 0.75)";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(-hw, hh);
+        ctx.lineTo(hw, hh);
+        ctx.lineTo(hw * 0.55, -hh);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = day ? "rgba(255,255,255,0.75)" : "rgba(255,255,255,0.5)";
+        for (let i = -2; i <= 2; i++) {
+          const cx = i * (hw * 0.28);
+          ctx.beginPath();
+          ctx.moveTo(cx - 8, hh * 0.15);
+          ctx.lineTo(cx, -hh * 0.35);
+          ctx.lineTo(cx + 8, hh * 0.15);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
   _drawGrass(ctx) {
     const mapId = MAPS[game.selectedMapIdx || 0].id;
     const isDragon = mapId === "dragon_escape";
@@ -7237,15 +7754,22 @@ class Track {
       ctx.fillStyle = glow;
       ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
     } else {
-      // Cyberpunk canvas
+      const day = isDayMode();
+      // Cyberpunk canvas (night) or bright daylight arena palette
       const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
-      grad.addColorStop(0, "#060514");
-      grad.addColorStop(1, "#0c0a24");
+      if (day) {
+        grad.addColorStop(0, "#6eb5ff");
+        grad.addColorStop(0.5, "#b8d9f0");
+        grad.addColorStop(1, "#8ec49a");
+      } else {
+        grad.addColorStop(0, "#060514");
+        grad.addColorStop(1, "#0c0a24");
+      }
       ctx.fillStyle = grad;
       ctx.fillRect(-500, -500, WORLD_W + 1000, WORLD_H + 1000);
 
       // Dynamic gridlines
-      ctx.strokeStyle = "rgba(123, 117, 255, 0.08)";
+      ctx.strokeStyle = day ? "rgba(123, 117, 255, 0.12)" : "rgba(123, 117, 255, 0.08)";
       ctx.lineWidth = 1;
       for (let y = 0; y < WORLD_H; y += 80) {
         ctx.beginPath();
@@ -8016,6 +8540,7 @@ class Kart {
     this.x = x; this.y = y;
     this.heading = heading;        // facing direction (radians)
     this.vx = 0; this.vy = 0;       // velocity vector
+    this.z = 0; this.vz = 0;        // vertical jump state (same dt units as vx/vy)
     this.charId = char.id;
     this.color = char.color;
     this.name = char.name;
@@ -8065,6 +8590,8 @@ class Kart {
     this.killedBy = null;
     this.lastAttacker = null;
     this.lastAttackerAt = 0;
+    this.pendingApprovalTransferFrom = null;
+    this.pendingApprovalTransferAt = 0;
     this.recoverGraceTimer = 0;
 
     // Race progress
@@ -8225,13 +8752,6 @@ class Kart {
         this.recoverGraceTimer = Math.max(this.recoverGraceTimer || 0, 48);
       }
 
-      this.vx *= Math.pow(0.92, dt);
-      this.vy *= Math.pow(0.92, dt);
-
-      this.x += this.vx * dt;
-      this.y += this.vy * dt;
-
-      // Decay timers
       if (this.boostTimer > 0) this.boostTimer -= dt;
       if (this.citationBoostTimer > 0) this.citationBoostTimer -= dt;
       if (this.shieldTimer > 0) this.shieldTimer -= dt;
@@ -8243,20 +8763,35 @@ class Kart {
       if (this.invuln > 0) this.invuln -= dt;
       if (this.draftBoostTimer > 0) this.draftBoostTimer -= dt;
 
-      // World boundary clip while spinning
-      const c = track.closestSegment(this.x, this.y);
-      const seg = track.segments[c.idx];
-      const wallLimit = seg.halfW + 70;
-      if (c.dist > wallLimit) {
-        const proj = c.proj;
-        const nx = (this.x - proj.x) / Math.max(0.001, c.dist);
-        const ny = (this.y - proj.y) / Math.max(0.001, c.dist);
-        const push = c.dist - wallLimit;
-        this.x -= nx * push;
-        this.y -= ny * push;
+      this.vx *= Math.pow(0.92, dt);
+      this.vy *= Math.pow(0.92, dt);
+
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+
+      if (track.arenaFloor) {
+        this.x = clamp(this.x, 30, WORLD_W - 30);
+        this.y = clamp(this.y, 30, WORLD_H - 30);
+        integrateKartVertical(this, dt);
+        checkTrackRamps(this, track);
+        constrainArenaKart(this, track);
+      } else {
+        const c = track.closestSegment(this.x, this.y);
+        const seg = track.segments[c.idx];
+        const wallLimit = seg.halfW + 70;
+        if (c.dist > wallLimit) {
+          const proj = c.proj;
+          const nx = (this.x - proj.x) / Math.max(0.001, c.dist);
+          const ny = (this.y - proj.y) / Math.max(0.001, c.dist);
+          const push = c.dist - wallLimit;
+          this.x -= nx * push;
+          this.y -= ny * push;
+        }
+        integrateKartVertical(this, dt);
+        checkTrackRamps(this, track);
+        this.x = clamp(this.x, 30, WORLD_W - 30);
+        this.y = clamp(this.y, 30, WORLD_H - 30);
       }
-      this.x = clamp(this.x, 30, WORLD_W - 30);
-      this.y = clamp(this.y, 30, WORLD_H - 30);
 
       return { drifting: false, onSurface };
     }
@@ -8447,39 +8982,46 @@ class Kart {
     this.x = clamp(this.x, 30, WORLD_W - 30);
     this.y = clamp(this.y, 30, WORLD_H - 30);
 
-    // Wall (deep off-road) collision: clamp position back toward road
-    const c = track.closestSegment(this.x, this.y);
-    const seg = track.segments[c.idx];
-    const wallLimit = seg.halfW + 70;       // hard wall offset
-    if (c.dist > wallLimit) {
-      const proj = c.proj;
-      const nx = (this.x - proj.x) / Math.max(0.001, c.dist);
-      const ny = (this.y - proj.y) / Math.max(0.001, c.dist);
-      const push = c.dist - wallLimit;
-      this.x -= nx * push;
-      this.y -= ny * push;
+    integrateKartVertical(this, dt);
+    checkTrackRamps(this, track);
 
-      // Bounce / recoil: elastic bounce off the wall normal
-      const dot = this.vx * nx + this.vy * ny;
-      if (dot > 0) {
-        // Reflect velocity with 2.5x elasticity coefficient
-        this.vx -= dot * nx * 2.5;
-        this.vy -= dot * ny * 2.5;
-        // Dampen non-normal velocity slightly to prevent sliding along wall
-        this.vx *= 0.75;
-        this.vy *= 0.75;
-      } else {
-        // Extra kick back onto track
-        this.vx -= nx * 0.8 * dt;
-        this.vy -= ny * 0.8 * dt;
-      }
+    // Wall (deep off-road) collision: clamp position back toward road / arena boundary
+    if (track.arenaFloor) {
+      constrainArenaKart(this, track);
+    } else {
+      const c = track.closestSegment(this.x, this.y);
+      const seg = track.segments[c.idx];
+      const wallLimit = seg.halfW + 70;       // hard wall offset
+      if (c.dist > wallLimit) {
+        const proj = c.proj;
+        const nx = (this.x - proj.x) / Math.max(0.001, c.dist);
+        const ny = (this.y - proj.y) / Math.max(0.001, c.dist);
+        const push = c.dist - wallLimit;
+        this.x -= nx * push;
+        this.y -= ny * push;
 
-      if (performance.now() - this.lastBumpAt > 1100) {
-        triggerQuote(this, "crash");
-        this.lastBumpAt = performance.now();
-        if (this.isPlayer) {
-          Sound.bump();
-          game.shake = Math.max(game.shake, 5);
+        // Bounce / recoil: elastic bounce off the wall normal
+        const dot = this.vx * nx + this.vy * ny;
+        if (dot > 0) {
+          // Reflect velocity with 2.5x elasticity coefficient
+          this.vx -= dot * nx * 2.5;
+          this.vy -= dot * ny * 2.5;
+          // Dampen non-normal velocity slightly to prevent sliding along wall
+          this.vx *= 0.75;
+          this.vy *= 0.75;
+        } else {
+          // Extra kick back onto track
+          this.vx -= nx * 0.8 * dt;
+          this.vy -= ny * 0.8 * dt;
+        }
+
+        if (performance.now() - this.lastBumpAt > 1100) {
+          triggerQuote(this, "crash");
+          this.lastBumpAt = performance.now();
+          if (this.isPlayer) {
+            Sound.bump();
+            game.shake = Math.max(game.shake, 5);
+          }
         }
       }
     }
@@ -8641,15 +9183,24 @@ class Kart {
   }
 
   draw(ctx, time) {
-    ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.heading);
+    const z = this.z || 0;
+    const zOff = kartVisualZOffset(this);
+    const airScale = 1 + Math.min(z * 0.004, 0.12);
+    const shadowScale = 1 - Math.min(z / 80, 0.45);
+    const shadowAlpha = 0.35 * (1 - Math.min(z / 50, 0.7));
 
-    // Shadow
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    // Shadow stays at ground x/y
+    ctx.save();
+    ctx.fillStyle = `rgba(0,0,0,${shadowAlpha})`;
     ctx.beginPath();
-    ctx.ellipse(2, 4, 18, 10, 0, 0, TAU);
+    ctx.ellipse(this.x + 2, this.y + 4, 18 * shadowScale, 10 * shadowScale, 0, 0, TAU);
     ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(this.x, this.y - zOff);
+    ctx.rotate(this.heading);
+    if (airScale !== 1) ctx.scale(airScale, airScale);
 
     // Wheels (rear/front pairs)
     ctx.fillStyle = "#0a0a0a";
@@ -9422,6 +9973,7 @@ const game = {
   rocketStartP1: { holdStart: 0, holding: false, result: null },
   rocketStartP2: { holdStart: 0, holding: false, result: null },
   viewMode: savedSettings.viewMode === "3d" ? "3d" : "2d",
+  timeOfDay: normalizeTimeOfDay(savedSettings.timeOfDay),
   shake: 0,
   flash: 0,
   cam: { x: 0, y: 0, scale: 1 },
@@ -9439,6 +9991,7 @@ const game = {
   mapRecordCache: null,
   mode: "race",
   battleApprovals: 3,
+  battleUntimed: !!savedSettings.battleUntimed,
   battleDuration: 120,
   battleTimeLeft: 0,
   spectateTarget: null,
@@ -10092,6 +10645,7 @@ function updateSelectionHighlight() {
 
 function showSelectScreen() {
   if (Sound.ctx && !Sound.titleThemeActive && !Sound.isPlayingMusic) Sound.playVocoderTitle();
+  ensureSelectedMapMatchesMode();
   hideAll();
   selectScreen.classList.remove("hidden");
   game.state = STATE.SELECT;
@@ -10139,15 +10693,23 @@ function showSelectScreen() {
   const battleSection = document.getElementById("battle-select-section");
   const mapSection = document.getElementById("map-select-section");
   if (isBattleMode()) {
-    if (mapSection) mapSection.style.display = "none";
-    if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none"; // model picker hidden while trained AIs are disabled
+    if (mapSection) {
+      mapSection.style.display = "";
+      const mapTitle = document.getElementById("map-select-title");
+      if (mapTitle) mapTitle.innerText = "Select Arena Map";
+    }
+    if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none";
     if (battleSection) battleSection.style.display = "flex";
     document.getElementById("lobby-subtitle").innerText = "Battle Arena: Choose Your Coder";
     document.getElementById("lobby-hint").innerText = "Press Space or Enter to Battle!";
     driveBtn.textContent = "Battle!";
     renderApprovalsSelect();
   } else {
-    if (mapSection) mapSection.style.display = "";
+    if (mapSection) {
+      mapSection.style.display = "";
+      const mapTitle = document.getElementById("map-select-title");
+      if (mapTitle) mapTitle.innerText = "Select Circuit Track";
+    }
     if (battleSection) battleSection.style.display = "none";
   }
 
@@ -10162,11 +10724,16 @@ function renderApprovalsSelect() {
   document.querySelectorAll("#approvals-group [data-approvals]").forEach((b) => {
     b.classList.toggle("active", Number(b.dataset.approvals) === game.battleApprovals);
   });
+  document.querySelectorAll("#battle-timing-group [data-battle-timed]").forEach((b) => {
+    const timed = b.dataset.battleTimed === "1";
+    b.classList.toggle("active", timed ? !game.battleUntimed : !!game.battleUntimed);
+  });
 }
 
 function renderMapSelect() {
   const container = document.getElementById("maps-container");
   if (!container) return;
+  ensureSelectedMapMatchesMode();
   container.innerHTML = "";
 
   const isP2pGuest = (game.p2pMode && game.p2pRole === "guest");
@@ -10410,6 +10977,7 @@ function gridSlot(i) {
 }
 
 function buildRace() {
+  ensureSelectedMapMatchesMode();
   game.track = new Track();
   game.particles = new ParticleSystem();
   game.skidMarks = [];
@@ -10970,6 +11538,7 @@ function checkProgress(kart) {
    ITEMS — collisions & rewards
    ============================================================ */
 function checkItems(kart) {
+  if (!isKartGrounded(kart)) return;
   // Coins
   for (let i = 0; i < game.track.coins.length; i++) {
     const c = game.track.coins[i];
@@ -11135,28 +11704,39 @@ function applyP2pPickupState(data) {
 /* ============================================================
    KART vs KART COLLISION
    ============================================================ */
-// Battle mechanic: a boosted kart charging into a rival spins them out, which costs the
+// Battle mechanic: a high-speed kart charging into a slower rival spins them out, which costs the
 // victim one Approval (life) via updateBattleApprovals() on the spinout rising edge.
 // A shield blocks the ram instead. Returns true if the ram connected.
-function tryBoostRam(att, def, dirx, diry) {
+function tryApprovalRam(att, def, dirx, diry) {
   if (!isBattleMode()) return false;
-  if (att.boostTimer <= 0 || def.boostTimer > 0) return false; // attacker must be boosted, victim not
+  if (isKartAirborne(att) || isKartAirborne(def)) return false;
   if (def.eliminated || def.finished || def.spinoutTimer > 0 || def.invuln > 0 || (def.recoverGraceTimer || 0) > 0) return false;
-  const closing = att.vx * dirx + att.vy * diry; // must actually be driving into the victim
-  if (closing < 3) return false;
-  def.lastAttacker = att; def.lastAttackerAt = game.raceTime; // for the follow-your-killer spectator chain
+  if (!qualifiesApprovalRam(att, def, dirx, diry)) return false;
   if (def.shieldTimer > 0) {
     def.shieldTimer = 0;
     if (def.isPlayer || att.isPlayer) Sound.tone(600, 0.1, "square", 0.1, 300);
+    if (game.particles) {
+      game.particles.add({
+        type: "text", text: "BLOCKED", x: def.x, y: def.y - 28,
+        vx: 0, vy: -0.9, life: 40, maxLife: 40, size: 15, color: "#78dcff", drag: 0.98,
+      });
+    }
     game.particles.burst(def.x, def.y, "#78dcff", 15, { type: "spark", spdMin: 1.5, spdMax: 4 });
     return true;
   }
+  setKillAttribution(def, att);
+  setTransferAttribution(def, att);
   def.spinoutTimer = TUNING.SPINOUT_TIME; def.spinAngle = 0; def.vx = 0; def.vy = 0;
   registerBattleHit(att);
-  att.boostTimer = Math.max(att.boostTimer, 10); // keep plowing through the wreck
   if (def.isPlayer || att.isPlayer) { Sound.crash(); game.shake = Math.max(game.shake, 8); }
-  if (def.isPlayer) triggerHitFlash("REVOKED!", "#ff3366", 80, def);
+  if (def.isPlayer) triggerHitFlash("RAMMED!", "#ff3366", 80, def);
   game.particles.burst(def.x, def.y, "#ff3366", 22, { type: "spark", spdMin: 2, spdMax: 6 });
+  if (game.particles) {
+    game.particles.add({
+      type: "text", text: "RAMMED!", x: def.x, y: def.y - 34,
+      vx: 0, vy: -1.1, life: 50, maxLife: 50, size: 15, color: "#ff3366", drag: 0.98,
+    });
+  }
   triggerQuote(def, "crash");
   return true; // the actual life loss + attacker reward is handled in popApproval()
 }
@@ -11167,6 +11747,7 @@ function kartCollisions() {
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
       const a = all[i], b = all[j];
+      if (isKartAirborne(a) || isKartAirborne(b)) continue;
       const dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.hypot(dx, dy);
       if (d < r * 2 && d > 0.001) {
@@ -11222,10 +11803,10 @@ function kartCollisions() {
           game.particles.burst(a.x, a.y, "#ff8a3b", 18, { type: "spark", spdMin: 2, spdMax: 5 });
         }
 
-        // Boosted ram: whoever is charging (boosted) into the other spins them out (steals a life in Battle).
+        // High-speed ram: whoever is charging into the other spins them out (transfer in Battle).
         const arturUlt = (a.charId === "artur" && a.ultActiveTimer > 0) || (b.charId === "artur" && b.ultActiveTimer > 0);
         if (!arturUlt) {
-          if (!tryBoostRam(a, b, nx, ny)) tryBoostRam(b, a, -nx, -ny);
+          if (!tryApprovalRam(a, b, nx, ny)) tryApprovalRam(b, a, -nx, -ny);
         }
 
         // Trigger collision quotes — with rivalry awareness
@@ -11569,7 +12150,11 @@ function update(dt, time) {
     game.raceTime = (performance.now() - game.startTime) / 1000;
 
     if (isBattleMode()) {
-      game.battleTimeLeft = Math.max(0, game.battleDuration - game.raceTime);
+      if (isUntimedHumanBattle()) {
+        game.battleTimeLeft = game.battleDuration;
+      } else {
+        game.battleTimeLeft = Math.max(0, game.battleDuration - game.raceTime);
+      }
       updateBattleApprovals();
       updateSpectate();
       checkBattleEnd();
@@ -11603,15 +12188,18 @@ function update(dt, time) {
     }
 
     if (game.p2pMode) {
-      const allRemote = [
+      const allRemote = new Set([
         ...(game.remotePlayers || []),
         ...(game.p2pRole === "guest" ? game.ais : []),
-      ];
-      if (game.p2pRole === "guest" && game.player2) allRemote.push(game.player2);
+      ]);
+      if (game.player2) allRemote.add(game.player2);
       for (const rk of allRemote) {
         if (rk._lastSyncAt && !rk.finished && !rk.eliminated) {
           rk.x += rk.vx * dt;
           rk.y += rk.vy * dt;
+          if ((rk.z || 0) > 0 || (rk.vz || 0) !== 0) {
+            integrateKartVertical(rk, dt);
+          }
         }
       }
     }
@@ -11644,6 +12232,7 @@ function update(dt, time) {
       if (!game.p2pMode || game.p2pRole === "host") {
         for (const kart of activeKarts) {
           if (!kart || kart.finished || kart.eliminated) continue;
+          if (isKartAirborne(kart)) continue;
           const d = dist(kart.x, kart.y, dragon.x, dragon.y);
           if (d < dragon.r + 24) {
             if (!absorbFatalHitWithShield(kart, kart.x, kart.y)) {
@@ -11679,6 +12268,7 @@ function update(dt, time) {
           }
 
           if (!kart.eliminated && kart.spinoutTimer <= 0 && (kart.recoverGraceTimer || 0) <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24)) {
+            if (shouldSkipGroundHazardForKart(kart, h)) continue;
             game.hazards.splice(i, 1);
             const isDossier = (h instanceof DossierProjectile);
             const isRegulatory = (h instanceof RegulatoryProjectile);
@@ -11835,6 +12425,7 @@ function update(dt, time) {
         for (const obj of game.track.movingObjects) {
           for (const kart of activeKarts) {
             if (kart.spinoutTimer > 0 || kart.finished) continue;
+            if (isKartAirborne(kart)) continue;
             if (dist(kart.x, kart.y, obj.x, obj.y) < obj.r + 17) {
               const now = performance.now();
               const lastHit = obj.cooldown?.get(kart) || 0;
@@ -12488,6 +13079,8 @@ const hudCanvas = document.getElementById("hud-overlay");
 const hudCtx = hudCanvas ? hudCanvas.getContext("2d") : null;
 const view2dBtn = document.getElementById("view-2d-btn");
 const view3dBtn = document.getElementById("view-3d-btn");
+const timeDayBtn = document.getElementById("time-day-btn");
+const timeNightBtn = document.getElementById("time-night-btn");
 
 const MAP_3D_THEMES = {
   core_mainframe: {
@@ -12560,16 +13153,85 @@ const MAP_3D_THEMES = {
     clearColor: 0x1a0c0c,
     scenery: "japanese",
   },
+  battle_arena: {
+    sky: ["#060514", "#0e0630", "#180a40", "#0d1a28", "#060514"],
+    skyDay: ["#4da8ff", "#7ec8ff", "#a8dcff", "#c8e8ff", "#d8ecff"],
+    fog: [0x060514, 0.00035],
+    fogDay: [0xb8d9f0, 0.00012],
+    ground: "#0e2014",
+    groundDay: "#9ecf8a",
+    groundAccent: "#142818",
+    groundAccentDay: "#c8e6b8",
+    gridColor: 0x7b75ff,
+    gridSecondary: 0x1a1040,
+    clearColor: 0x060514,
+    clearColorDay: 0xb8d9f0,
+    scenery: "cyber",
+  },
+  battle_open_arena: {
+    sky: ["#080614", "#100a20", "#1a1038", "#141030", "#080614"],
+    skyDay: ["#5eb0ff", "#8ecfff", "#b5ddff", "#d0eaff", "#e0f2ff"],
+    fog: [0x080614, 0.0003],
+    fogDay: [0xc5ddf5, 0.0001],
+    ground: "#0c1420",
+    groundDay: "#a8c88e",
+    groundAccent: "#101a28",
+    groundAccentDay: "#d0e4b8",
+    gridColor: 0x57f2ff,
+    gridSecondary: 0x101828,
+    clearColor: 0x080614,
+    clearColorDay: 0xc5ddf5,
+    scenery: "cyber",
+  },
 };
 
 function apply3DMapTheme() {
   if (!window.THREE || !THREE_STATE.scene || !THREE_STATE.renderer) return;
   const T = window.THREE;
   const mapId = MAPS[game.selectedMapIdx || 0].id;
-  const theme = MAP_3D_THEMES[mapId] || MAP_3D_THEMES.core_mainframe;
+  const baseTheme = MAP_3D_THEMES[mapId] || MAP_3D_THEMES.core_mainframe;
+  const day = isDayMode();
+  const theme = {
+    ...baseTheme,
+    sky: day && baseTheme.skyDay ? baseTheme.skyDay : baseTheme.sky,
+    fog: day && baseTheme.fogDay ? baseTheme.fogDay : baseTheme.fog,
+    ground: day && baseTheme.groundDay ? baseTheme.groundDay : baseTheme.ground,
+    groundAccent: day && baseTheme.groundAccentDay ? baseTheme.groundAccentDay : baseTheme.groundAccent,
+    clearColor: day && baseTheme.clearColorDay ? baseTheme.clearColorDay : baseTheme.clearColor,
+  };
 
   THREE_STATE.renderer.setClearColor(theme.clearColor);
   THREE_STATE.scene.fog = new T.FogExp2(theme.fog[0], theme.fog[1]);
+
+  if (THREE_STATE.starField) THREE_STATE.starField.visible = !day;
+
+  // Daylight lighting tweaks
+  if (THREE_STATE.dirLight) {
+    if (day) {
+      THREE_STATE.dirLight.color.setHex(0xfff0d0);
+      THREE_STATE.dirLight.intensity = 1.35;
+    } else {
+      THREE_STATE.dirLight.color.setHex(0x9999ff);
+      THREE_STATE.dirLight.intensity = 0.9;
+    }
+  }
+  THREE_STATE.scene.traverse((child) => {
+    if (child.isHemisphereLight) {
+      if (day) {
+        child.color.setHex(0xb8d4ff);
+        child.groundColor.setHex(0x8ab878);
+        child.intensity = 1.1;
+      } else {
+        child.color.setHex(0x2a1860);
+        child.groundColor.setHex(0x0a2f12);
+        child.intensity = 0.8;
+      }
+    }
+    if (child.isAmbientLight) {
+      child.intensity = day ? 0.55 : 0.35;
+      child.color.setHex(day ? 0xf0f4ff : 0x1a1040);
+    }
+  });
 
   // Update sky dome texture
   THREE_STATE.scene.traverse(child => {
@@ -12746,6 +13408,8 @@ function setViewMode(mode) {
 
 if (view2dBtn) view2dBtn.addEventListener("click", () => setViewMode("2d"));
 if (view3dBtn) view3dBtn.addEventListener("click", () => { loadThreeJS(() => setViewMode("3d")); });
+if (timeDayBtn) timeDayBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); setTimeOfDay("day"); Sound.tone(520, 0.06, "sine", 0.1); });
+if (timeNightBtn) timeNightBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); setTimeOfDay("night"); Sound.tone(320, 0.06, "sine", 0.1); });
 
 function init3DScene() {
   if (!window.THREE || THREE_STATE.renderer) return;
@@ -12952,6 +13616,106 @@ function get3DRoadEdges(track) {
   return edges;
 }
 
+function build3DArenaFloor(group, track) {
+  if (!window.THREE || !track?.arenaFloor) return;
+  const T = window.THREE;
+  const floor = track.arenaFloor;
+  const day = isDayMode();
+  const floorGeo = new T.CircleGeometry(floor.rx, 72);
+  floorGeo.scale(1, 1, floor.ry / floor.rx);
+  const floorMat = new T.MeshStandardMaterial({
+    color: day ? 0x9ecf8a : 0x142818,
+    roughness: 0.82,
+    metalness: 0.08,
+    emissive: day ? 0x224418 : 0x081408,
+    emissiveIntensity: day ? 0.08 : 0.15,
+  });
+  const floorMesh = new T.Mesh(floorGeo, floorMat);
+  floorMesh.rotation.x = -Math.PI / 2;
+  floorMesh.position.set(floor.cx, 0.5, floor.cy);
+  floorMesh.receiveShadow = true;
+  group.add(floorMesh);
+  THREE_STATE.arenaFloorMesh = floorMesh;
+
+  const ringGeo = new T.RingGeometry(floor.rx - 8, floor.rx + 2, 96);
+  ringGeo.scale(1, 1, floor.ry / floor.rx);
+  const ringMat = new T.MeshStandardMaterial({
+    color: day ? 0x57f2ff : 0x7b75ff,
+    emissive: day ? 0x224466 : 0x111133,
+    emissiveIntensity: 0.45,
+    transparent: true,
+    opacity: 0.85,
+    side: T.DoubleSide,
+  });
+  const ringMesh = new T.Mesh(ringGeo, ringMat);
+  ringMesh.rotation.x = -Math.PI / 2;
+  ringMesh.position.set(floor.cx, 0.65, floor.cy);
+  group.add(ringMesh);
+
+  if (track.reviewPlatformRadius > 0) {
+    const platGeo = new T.CylinderGeometry(track.reviewPlatformRadius, track.reviewPlatformRadius, 1.5, 48);
+    const platMat = new T.MeshStandardMaterial({
+      color: day ? 0xe8f4e8 : 0x1a2840,
+      emissive: day ? 0x446644 : 0x223355,
+      emissiveIntensity: 0.25,
+      roughness: 0.5,
+      metalness: 0.35,
+    });
+    const plat = new T.Mesh(platGeo, platMat);
+    plat.position.set(floor.cx, 0.75, floor.cy);
+    plat.receiveShadow = true;
+    group.add(plat);
+    THREE_STATE.reviewPlatformMesh = plat;
+  }
+}
+
+function build3DRamps(group, track) {
+  if (!window.THREE || !track?.ramps?.length) return;
+  const T = window.THREE;
+  const day = isDayMode();
+  for (const ramp of track.ramps) {
+    let mesh;
+    if (ramp.kind === "bump") {
+      const geo = new T.BoxGeometry(ramp.w, 3, ramp.h);
+      const mat = new T.MeshStandardMaterial({
+        color: day ? 0xfd9927 : 0x8a5518,
+        emissive: 0x442208,
+        emissiveIntensity: 0.35,
+        roughness: 0.65,
+        metalness: 0.2,
+      });
+      mesh = new T.Mesh(geo, mat);
+      mesh.position.set(ramp.x, 1.5, ramp.y);
+      mesh.rotation.y = -ramp.ang + Math.PI / 2;
+    } else {
+      const shape = new T.Shape();
+      const hw = ramp.w * 0.5;
+      const hh = ramp.h * 0.5;
+      shape.moveTo(-hw, -hh);
+      shape.lineTo(hw, -hh);
+      shape.lineTo(hw * 0.55, hh);
+      shape.closePath();
+      const geo = new T.ExtrudeGeometry(shape, { depth: 6, bevelEnabled: false });
+      geo.rotateX(-Math.PI / 2);
+      const mat = new T.MeshStandardMaterial({
+        color: day ? 0x57f2ff : 0x224466,
+        emissive: day ? 0x113344 : 0x081828,
+        emissiveIntensity: 0.4,
+        roughness: 0.45,
+        metalness: 0.35,
+        transparent: true,
+        opacity: 0.9,
+      });
+      mesh = new T.Mesh(geo, mat);
+      mesh.position.set(ramp.x, 0.5, ramp.y);
+      mesh.rotation.y = -ramp.ang + Math.PI / 2;
+    }
+    mesh.userData.rampKind = ramp.kind;
+    group.add(mesh);
+    THREE_STATE.rampMeshes.push(mesh);
+  }
+}
+
 function rebuild3DTrack() {
   if (!window.THREE || !THREE_STATE.scene || !game.track) return;
   const T = window.THREE;
@@ -12964,6 +13728,9 @@ function rebuild3DTrack() {
     THREE_STATE.trackGroup = null;
   }
   THREE_STATE.trackMesh = null;
+  THREE_STATE.arenaFloorMesh = null;
+  THREE_STATE.reviewPlatformMesh = null;
+  THREE_STATE.rampMeshes = [];
   // Remove old kart models
   THREE_STATE.kartModels.forEach(m => sc.remove(m));
   THREE_STATE.kartModels.clear();
@@ -12987,6 +13754,12 @@ function rebuild3DTrack() {
   const group = new T.Group();
   THREE_STATE.trackGroup = group;
   sc.add(group);
+  THREE_STATE.rampMeshes = [];
+
+  if (game.track.arenaFloor) {
+    build3DArenaFloor(group, game.track);
+    build3DRamps(group, game.track);
+  }
 
   // Build track ribbon from waypoints
   const wp = game.track.waypoints;
@@ -14243,7 +15016,7 @@ function sync3DScene(time) {
 
   // Sync kart positions
   for (const [kart, model] of THREE_STATE.kartModels) {
-    model.position.set(kart.x, 0, kart.y);
+    model.position.set(kart.x, kart.z || 0, kart.y);
     model.rotation.y = -kart.heading + Math.PI / 2;
 
     // Wheel spin based on speed
@@ -14382,7 +15155,10 @@ function sync3DScene(time) {
       if (!kart || !kart.mergePullTimer || kart.mergePullTimer <= 0) continue;
       const target = kart.mergePullTarget || (kart.mergePullTargetId ? getKartById(kart.mergePullTargetId) : null);
       if (!target) continue;
-      const pts = [new T.Vector3(kart.x, 12, kart.y), new T.Vector3(target.x, 12, target.y)];
+      const pts = [
+        new T.Vector3(kart.x, 12 + (kart.z || 0), kart.y),
+        new T.Vector3(target.x, 12 + (target.z || 0), target.y),
+      ];
       const lineGeo = new T.BufferGeometry().setFromPoints(pts);
       const lineMat = new T.LineBasicMaterial({ color: 0x39ff14, linewidth: 2 });
       const line = new T.Line(lineGeo, lineMat);
@@ -14735,7 +15511,7 @@ function setCameraForKart(kart, time) {
   const targetCamHeight = camHeight;
   const lookX = kart.x + fx * lookAhead;
   const lookZ = kart.y + fy * lookAhead;
-  const lookY = isDragonChaseView ? 15 : 12;
+  const lookY = (isDragonChaseView ? 15 : 12) + Math.min(kart.z || 0, 40) * 0.35;
 
   const cs = THREE_STATE.camSmooth;
   const sm = 0.06;
@@ -15677,13 +16453,14 @@ function drawHUD(time) {
         ctx.fillText("REJECTED", 18, 28);
       }
 
-      const tl = Math.max(0, game.battleTimeLeft || 0);
-      ctx.fillStyle = tl < 15 ? "#ff4d6d" : "#a8acd0";
+      const untimed = isUntimedHumanBattle();
+      const tl = untimed ? game.battleDuration : Math.max(0, game.battleTimeLeft || 0);
+      ctx.fillStyle = !untimed && tl < 15 ? "#ff4d6d" : "#a8acd0";
       ctx.font = "11px sans-serif";
       ctx.fillText("TIME LEFT", 130, 14);
-      ctx.fillStyle = tl < 15 ? "#ff4d6d" : "#fff";
+      ctx.fillStyle = !untimed && tl < 15 ? "#ff4d6d" : "#fff";
       ctx.font = "bold 22px 'SFMono-Regular', Consolas, monospace";
-      ctx.fillText(formatTime(tl), 130, 32);
+      ctx.fillText(untimed ? "∞" : formatTime(tl), 130, 32);
 
       const aliveCount = getActiveKarts().filter((k) => k && !k.eliminated).length;
       ctx.fillStyle = "#a8acd0";
@@ -16928,9 +17705,26 @@ function showSettingsScreen() {
   hideAll();
   renderAudioSettings();
   renderRaceSetupSettings();
+  renderTimeOfDaySettings();
   if (view2dBtn) view2dBtn.classList.toggle("active", game.viewMode !== "3d");
   if (view3dBtn) view3dBtn.classList.toggle("active", game.viewMode === "3d");
   settingsScreen.classList.remove("hidden");
+}
+
+function renderTimeOfDaySettings() {
+  const day = isDayMode();
+  if (timeDayBtn) timeDayBtn.classList.toggle("active", day);
+  if (timeNightBtn) timeNightBtn.classList.toggle("active", !day);
+}
+
+function setTimeOfDay(mode) {
+  game.timeOfDay = normalizeTimeOfDay(mode);
+  saveGameSettings({ timeOfDay: game.timeOfDay });
+  renderTimeOfDaySettings();
+  if (game.viewMode === "3d" && THREE_STATE.loaded) {
+    if (THREE_STATE.renderer && game.track) rebuild3DTrack();
+    else apply3DMapTheme();
+  }
 }
 
 async function startSelectedRace() {
@@ -17106,6 +17900,19 @@ if (approvalsGroup) {
   });
 }
 
+const battleTimingGroup = document.getElementById("battle-timing-group");
+if (battleTimingGroup) {
+  battleTimingGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-battle-timed]");
+    if (!btn) return;
+    Sound.ensure(); Sound.resume();
+    game.battleUntimed = btn.dataset.battleTimed !== "1";
+    saveGameSettings({ battleUntimed: game.battleUntimed });
+    Sound.tone(700, 0.07, "square", 0.1);
+    renderApprovalsSelect();
+  });
+}
+
 if (aiModelSelect) {
   aiModelSelect.addEventListener("change", () => {
     selectedAiModelId = aiModelSelect.value || "classic";
@@ -17168,7 +17975,7 @@ if (startBattleBtn) {
     game.tournament = null;
     game.mode = "battle";
     game.multiplayer = false;
-    game.selectedMapIdx = getArenaMapIdx();
+    ensureSelectedMapMatchesMode();
     // Default to the classic waypoint AI; the select screen lists battle-trained models to pick from.
     selectedAiModelId = "classic";
     selectedAiModelWeights = null;
@@ -17626,7 +18433,9 @@ function serializeKartState(kart) {
     ultCharge: kart.ultCharge || 0,
     ultReady: !!kart.ultReady,
     ultActiveTimer: kart.ultActiveTimer || 0,
-    ultTier: kart.ultTier || 0
+    ultTier: kart.ultTier || 0,
+    z: kart.z || 0,
+    vz: kart.vz || 0,
   };
 }
 
@@ -17663,6 +18472,9 @@ function applyKartState(kart, p, opts = {}) {
 
   kart.vx = pvx;
   kart.vy = pvy;
+  // Compact packets omit z/vz when grounded; old peers never send them.
+  kart.z = Number.isFinite(p.z) ? p.z : 0;
+  kart.vz = Number.isFinite(p.vz) ? p.vz : 0;
   kart._lastSyncAt = performance.now();
 
   kart.boostTimer = p.boostTimer ?? p.bt ?? 0;
@@ -17798,6 +18610,8 @@ function serializeKartCompact(k) {
     nc: k.nextCheckpoint,
     cl: k.checkpointsThisLap,
     ft: k.finishTime || undefined,
+    z: (k.z > 0.05) ? Math.round(k.z * 10) / 10 : undefined,
+    vz: (k.vz && Math.abs(k.vz) > 0.05) ? Math.round(k.vz * 100) / 100 : undefined,
   };
 }
 
@@ -18501,9 +19315,15 @@ function getHeadlessBattleTail(kart) {
     .filter(k => k !== kart)
     .map(k => ({ k, d: dist(kart.x, kart.y, k.x, k.y), bearing: angleDiff(kart.heading, Math.atan2(k.y - kart.y, k.x - kart.x)) }))
     .sort((a, b) => a.d - b.d);
-  // Ram opportunity: boosted and the nearest rival is close and roughly ahead.
+  // Ram opportunity: high-speed closing window on the nearest rival ahead.
   let ram = 0;
-  if (kart.boostTimer > 0 && rivals.length && Math.abs(rivals[0].bearing) < 0.5 && rivals[0].d < 260) ram = 1;
+  if (rivals.length && rivals[0].d < 260) {
+    const def = rivals[0].k;
+    const inv = Math.max(0.001, rivals[0].d);
+    const dirx = (def.x - kart.x) / inv;
+    const diry = (def.y - kart.y) / inv;
+    if (qualifiesApprovalRam(kart, def, dirx, diry)) ram = 1;
+  }
   const values = [clamp((kart.approvals || 0) / 5, 0, 1), survivors, timeLeft, ram];
   for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
     const r = rivals[i];
@@ -18751,7 +19571,8 @@ function validateDqnModelPayload(payload) {
   function _checkLayer(label, layer, expectedIn) {
     const w = layer.weights || layer.w;
     const b = layer.biases || layer.b;
-    if (!Array.isArray(w) || !Array.isArray(b) || b.length === 0) throw new Error(`${label} missing weights/biases`);
+    const isNumericArray = value => Array.isArray(value) || ArrayBuffer.isView(value);
+    if (!isNumericArray(w) || !isNumericArray(b) || b.length === 0) throw new Error(`${label} missing weights/biases`);
     if (expectedIn !== null && w.length !== expectedIn * b.length) throw new Error(`${label} shape mismatch`);
     return b.length;
   }
@@ -18766,6 +19587,59 @@ function validateDqnModelPayload(payload) {
     if (inputSize !== payload.actions.length) throw new Error("Model output size must match its action count");
   }
   return payload;
+}
+
+function expandCompactDqnPolicy(payload) {
+  if (payload?.format !== "turbo-kart-headless-dqn-compact-v1") return payload;
+  if (payload.encoding !== "base64-f32le" || typeof payload.weightsBase64 !== "string") {
+    throw new Error("Compact DQN policy has unsupported encoding");
+  }
+  const binary = atob(payload.weightsBase64);
+  if (binary.length % 4 !== 0) throw new Error("Compact DQN byte length is not float32 aligned");
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const floats = new Float32Array(bytes.buffer);
+  if (floats.length !== Number(payload.floatCount)) {
+    throw new Error("Compact DQN float count mismatch");
+  }
+  const view = descriptor => {
+    const offset = Number(descriptor?.offset);
+    const length = Number(descriptor?.length);
+    if (!Number.isInteger(offset) || !Number.isInteger(length) || offset < 0 || length < 0
+        || offset + length > floats.length) {
+      throw new Error("Compact DQN tensor descriptor is out of bounds");
+    }
+    return floats.subarray(offset, offset + length);
+  };
+  const expandLayer = layer => {
+    const expanded = {
+      weights: view(layer.weights),
+      biases: view(layer.biases),
+      activation: layer.activation,
+    };
+    if (layer.layernorm) {
+      expanded.layernorm = {
+        weight: view(layer.layernorm.weight),
+        bias: view(layer.layernorm.bias),
+        eps: layer.layernorm.eps,
+      };
+    }
+    return expanded;
+  };
+  return {
+    type: "dqn",
+    format: payload.format,
+    architecture: "dueling",
+    observationKeys: payload.observationKeys,
+    actions: payload.actions,
+    trunk: payload.trunk.map(expandLayer),
+    value_head: expandLayer(payload.value_head),
+    advantage_head: expandLayer(payload.advantage_head),
+    advantageCentering: payload.advantageCentering,
+    meanExpansionK: payload.meanExpansionK,
+    meta: payload.meta || {},
+    _compactWeights: floats,
+  };
 }
 
 class HeadlessRandomKart extends Kart {
@@ -19133,8 +20007,30 @@ function configureHeadlessEpisode(config) {
     game.track.movingObjects = [];
     game.track.regulatoryDragon = null;
   }
-  if (config.opponentCount !== null && game.ais && game.ais.length > config.opponentCount) {
-    game.ais = game.ais.slice(0, config.opponentCount);
+  const targetOpponents = config.opponentCount !== null && config.opponentCount !== undefined
+    ? Math.min(7, Math.max(0, Math.floor(Number(config.opponentCount))))
+    : null;
+  if (targetOpponents !== null && !config.solo && game.ais && game.track) {
+    if (game.ais.length < targetOpponents) {
+      const seg0 = game.track.segments[0];
+      const ang = Math.atan2(seg0.dy, seg0.dx);
+      const sx = seg0.a.x + seg0.dx * 0.04;
+      const sy = seg0.a.y + seg0.dy * 0.04;
+      const fx = Math.cos(ang), fy = Math.sin(ang);
+      const lx = -Math.sin(ang), ly = Math.cos(ang);
+      const aiChars = CHARACTERS.filter((_, idx) => idx !== (game.selectedCharIdx || 0));
+      const baseSkills = [0.95, 0.97, 0.99, 1.01];
+      const diffMult = AI_DIFFICULTIES[aiDifficulty] || 1.0;
+      for (let idx = game.ais.length; idx < targetOpponents; idx++) {
+        const pos = gridSlot(idx + 1);
+        const x = sx + fx * pos.f + lx * pos.l;
+        const y = sy + fy * pos.f + ly * pos.l;
+        game.ais.push(new AIKart(x, y, ang, aiChars[idx % aiChars.length], baseSkills[idx % baseSkills.length] * diffMult));
+      }
+    }
+    if (game.ais.length > targetOpponents) {
+      game.ais = game.ais.slice(0, targetOpponents);
+    }
     game.totalRacers = 1 + game.ais.length;
   }
   if (!config.solo && Array.isArray(config.opponentModels) && config.opponentModels.length && game.ais?.length) {
@@ -19268,7 +20164,7 @@ function makeHeadlessConfig(overrides = {}) {
     character: overrides.character ?? URL_PARAMS.get("char") ?? URL_PARAMS.get("character") ?? "anton",
     opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,
     classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
-    opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.max(0, Math.floor(Number(overrides.opponentCount))) : null,
+    opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
   };
 }
 
@@ -19401,6 +20297,94 @@ const HEADLESS_EXTERNAL_STATE = {
   reward: 0,
 };
 
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function() {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function headlessExternalTerminal() {
+  const config = HEADLESS_EXTERNAL_STATE.config;
+  if (!config || !game.player) return true;
+  return game.state === STATE.FINISHED
+    || game.player.finished
+    || game.player.eliminated
+    || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
+}
+
+function headlessRlStepOnce(action) {
+  const config = HEADLESS_EXTERNAL_STATE.config || makeHeadlessConfig({ agent: "external" });
+  let actionObj;
+  if (typeof action === "number") {
+    actionObj = HEADLESS_DQN_ACTIONS[Math.max(0, Math.min(HEADLESS_DQN_ACTIONS.length - 1, Math.floor(action)))];
+  } else if (Array.isArray(action)) {
+    actionObj = {
+      steer: action[0] || 0,
+      throttle: action[1] !== undefined ? action[1] : 1,
+      brake: action[2] || 0,
+      drift: (action[3] || 0) > 0.5,
+      item: (action[4] || 0) > 0.5,
+      ultimate: (action[5] || 0) > 0.5,
+    };
+  } else {
+    actionObj = action;
+  }
+  if (game.player instanceof HeadlessExternalKart) game.player.pendingAction = actionObj;
+  let reward = 0;
+  const repeat = Math.max(1, Math.floor(config.frameSkip || 1));
+  for (let i = 0; i < repeat; i++) {
+    if (game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
+    const beforeProgress = progressValue(game.player);
+    const beforeLap = game.player.lap || 0;
+    const beforeFinished = !!game.player.finished;
+    HEADLESS_EXTERNAL_STATE.simSeconds += 1 / 60;
+    HEADLESS_EXTERNAL_STATE.frames++;
+    game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
+    update(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
+    game.skidMarks.length = 0;
+    reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
+    if (areAllHumansDone()) finishRace();
+  }
+  const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
+  const obs = getHeadlessObservation(game.player);
+  window.__lastRlRanking = rankAll().map(k => ({
+    name: k.name,
+    charId: k.charId,
+    finished: !!k.finished,
+    eliminated: !!k.eliminated,
+    progress: progressValue(k),
+  }));
+  return {
+    obs: obs.values,
+    reward,
+    done,
+    info: {
+      frame: HEADLESS_EXTERNAL_STATE.frames,
+      simSeconds: HEADLESS_EXTERNAL_STATE.simSeconds,
+      raceTime: game.raceTime,
+      progress: progressValue(game.player),
+      lap: game.player.lap,
+      finished: !!game.player.finished,
+      totalReward: HEADLESS_EXTERNAL_STATE.reward,
+      coins: game.player.coinsCollected || 0,
+      itemUses: game.player.itemUseCount || 0,
+      ultUses: game.player.ultUseCount || 0,
+      driftBoosts: game.player.driftBoostCount || 0,
+      mode: config.mode,
+      approvals: game.player.approvals || 0,
+      steals: game.player.battleSteals || 0,
+      eliminated: !!game.player.eliminated,
+      survivors: getActiveKarts().filter(k => k && !k.eliminated).length,
+      battleWin: game.state === STATE.FINISHED && !game.player.eliminated,
+    },
+  };
+}
+
 function setupExternalRlApi() {
   window.rlActions = HEADLESS_DQN_ACTIONS;
   window.rlObservationKeys = HEADLESS_OBS_KEYS;
@@ -19449,75 +20433,102 @@ function setupExternalRlApi() {
   window.rlStep = (action) => {
     const config = HEADLESS_EXTERNAL_STATE.config || makeHeadlessConfig({ agent: "external" });
     if (!HEADLESS_EXTERNAL_STATE.config) window.rlReset(config);
-    let actionObj;
-    if (typeof action === "number") {
-      actionObj = HEADLESS_DQN_ACTIONS[Math.max(0, Math.min(HEADLESS_DQN_ACTIONS.length - 1, Math.floor(action)))];
-    } else if (Array.isArray(action)) {
-      actionObj = {
-        steer: action[0] || 0,
-        throttle: action[1] !== undefined ? action[1] : 1,
-        brake: action[2] || 0,
-        drift: (action[3] || 0) > 0.5,
-        item: (action[4] || 0) > 0.5,
-        ultimate: (action[5] || 0) > 0.5,
-      };
-    } else {
-      actionObj = action;
+    return headlessRlStepOnce(action);
+  };
+  window.rlSetRolloutPolicy = (policy) => {
+    if (!policy || policy.type !== "dqn") {
+      throw new Error("rlSetRolloutPolicy requires a DQN policy");
     }
-    if (game.player instanceof HeadlessExternalKart) game.player.pendingAction = actionObj;
-    let reward = 0;
-    const repeat = Math.max(1, Math.floor(config.frameSkip || 1));
-    for (let i = 0; i < repeat; i++) {
-      // Stop frame-skipping once the agent can no longer act (finished a race or eliminated in battle).
-      if (game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
-      const beforeProgress = progressValue(game.player);
-      const beforeLap = game.player.lap || 0;
-      const beforeFinished = !!game.player.finished;
-      HEADLESS_EXTERNAL_STATE.simSeconds += 1 / 60;
-      HEADLESS_EXTERNAL_STATE.frames++;
-      game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
-      update(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
-      game.skidMarks.length = 0;
-      reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
-      if (areAllHumansDone()) finishRace();
+    const expanded = expandCompactDqnPolicy(policy);
+    validateDqnModelPayload(expanded);
+    window.__ROLLOUT_POLICY__ = expanded;
+    return true;
+  };
+  window.rlRollout = (config) => {
+    const policy = config?.policy || window.__ROLLOUT_POLICY__;
+    if (!policy || policy.type !== "dqn") {
+      throw new Error("rlRollout requires a DQN policy");
     }
-    const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
-    const obs = getHeadlessObservation(game.player);
-    window.__lastRlRanking = rankAll().map(k => ({
-      name: k.name,
-      charId: k.charId,
-      finished: !!k.finished,
-      eliminated: !!k.eliminated,
-      progress: progressValue(k),
-    }));
+    if (config?.policy) {
+      validateDqnModelPayload(policy);
+      window.__ROLLOUT_POLICY__ = policy;
+    }
+    if (headlessExternalTerminal()) {
+      return { trajectory: [], stoppedReason: "alreadyDone", count: 0 };
+    }
+    const epsilons = Array.isArray(config.epsilons) ? config.epsilons : [];
+    const maxSteps = Math.max(0, Math.floor(config.maxSteps ?? epsilons.length));
+    const rng = mulberry32((config.seed >>> 0) || 0);
+    const trajectory = [];
+    for (let i = 0; i < maxSteps; i++) {
+      if (headlessExternalTerminal()) break;
+      const epsilon = Math.min(1, Math.max(0, Number(epsilons[i] ?? 0)));
+      const baseObs = getHeadlessObservation(game.player);
+      const decision = runHeadlessDqn(policy, baseObs, game.player);
+      const actionCount = Array.isArray(policy.actions) && policy.actions.length
+        ? policy.actions.length
+        : HEADLESS_DQN_ACTIONS.length;
+      let actionIndex;
+      if (rng() < epsilon) {
+        actionIndex = Math.floor(rng() * actionCount);
+      } else {
+        actionIndex = decision.actionIndex;
+      }
+      const stepResult = headlessRlStepOnce(actionIndex);
+      let qMax = null;
+      let qMean = null;
+      if (Array.isArray(decision.qValues) && decision.qValues.length) {
+        qMax = decision.qValues[0];
+        let sum = 0;
+        for (let qi = 0; qi < decision.qValues.length; qi++) {
+          const v = decision.qValues[qi];
+          if (v > qMax) qMax = v;
+          sum += v;
+        }
+        qMean = sum / decision.qValues.length;
+        if (!Number.isFinite(qMax)) qMax = null;
+        if (!Number.isFinite(qMean)) qMean = null;
+      }
+      trajectory.push({
+        obs: stepResult.obs,
+        action: actionIndex,
+        reward: stepResult.reward,
+        done: stepResult.done,
+        info: stepResult.info,
+        qMax,
+        qMean,
+      });
+      if (stepResult.done) {
+        return { trajectory, stoppedReason: "done", count: trajectory.length };
+      }
+    }
     return {
-      obs: obs.values,
-      reward,
-      done,
-      info: {
-        frame: HEADLESS_EXTERNAL_STATE.frames,
-        simSeconds: HEADLESS_EXTERNAL_STATE.simSeconds,
-        raceTime: game.raceTime,
-        progress: progressValue(game.player),
-        lap: game.player.lap,
-        finished: !!game.player.finished,
-        totalReward: HEADLESS_EXTERNAL_STATE.reward,
-        coins: game.player.coinsCollected || 0,
-        itemUses: game.player.itemUseCount || 0,
-        ultUses: game.player.ultUseCount || 0,
-        driftBoosts: game.player.driftBoostCount || 0,
-        // Battle-mode fields (meaningless in race but cheap to always include):
-        mode: config.mode,
-        approvals: game.player.approvals || 0,
-        steals: game.player.battleSteals || 0,
-        eliminated: !!game.player.eliminated,
-        survivors: getActiveKarts().filter(k => k && !k.eliminated).length,
-        battleWin: game.state === STATE.FINISHED && !game.player.eliminated,
-      },
+      trajectory,
+      stoppedReason: trajectory.length < maxSteps ? "terminal" : "maxSteps",
+      count: trajectory.length,
     };
   };
   window.__HEADLESS_READY__ = true;
 }
+
+// Test / Playwright helpers (page.evaluate accessible).
+window.isUntimedHumanBattle = isUntimedHumanBattle;
+window.qualifiesApprovalRam = qualifiesApprovalRam;
+window.resolveFreshBattleAttribution = resolveFreshBattleAttribution;
+window.popApproval = popApproval;
+window.tryApprovalRam = tryApprovalRam;
+window.checkBattleEnd = checkBattleEnd;
+window.isKartAirborne = isKartAirborne;
+window.integrateKartVertical = integrateKartVertical;
+window.checkTrackRamps = checkTrackRamps;
+window.constrainArenaKart = constrainArenaKart;
+window.kartVisualZOffset = kartVisualZOffset;
+window.isGroundHazardImmuneWhenAirborne = isGroundHazardImmuneWhenAirborne;
+window.serializeKartCompact = serializeKartCompact;
+window.applyKartState = applyKartState;
+window.isDayMode = isDayMode;
+window.setTimeOfDay = setTimeOfDay;
+window.ellipseNormDist = ellipseNormDist;
 
 // Resume audio context on any user click
 document.addEventListener("click", () => { Sound.ensure(); Sound.resume(); });

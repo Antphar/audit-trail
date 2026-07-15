@@ -17,6 +17,7 @@ The exported JSON loads in-browser and is used by DqnAIKart for AI opponents.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import random
@@ -444,29 +445,27 @@ def launch_chromium(playwright: Any, auto_install: bool) -> Any:
         return playwright.chromium.launch(headless=True)
 
 
-def export_dqn_json(
+def _serialize_linear(layer: torch.nn.Linear) -> dict[str, Any]:
+    return {
+        "weights": layer.weight.detach().cpu().numpy().astype(float).reshape(-1).tolist(),
+        "biases": layer.bias.detach().cpu().numpy().astype(float).reshape(-1).tolist(),
+    }
+
+
+def _serialize_layernorm(layer: torch.nn.LayerNorm) -> dict[str, Any]:
+    return {
+        "weight": layer.weight.detach().cpu().numpy().astype(float).tolist(),
+        "bias": layer.bias.detach().cpu().numpy().astype(float).tolist(),
+        "eps": layer.eps,
+    }
+
+
+def build_dqn_payload(
     model: DQN,
     obs_keys: list[str],
     actions: list[dict[str, Any]],
-    out_path: Path,
-    meta: dict[str, Any],
-    manifest_path: Path | None = None,
-) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    def _serialize_linear(layer: torch.nn.Linear) -> dict[str, Any]:
-        return {
-            "weights": layer.weight.detach().cpu().numpy().astype(float).reshape(-1).tolist(),
-            "biases": layer.bias.detach().cpu().numpy().astype(float).reshape(-1).tolist(),
-        }
-
-    def _serialize_layernorm(layer: torch.nn.LayerNorm) -> dict[str, Any]:
-        return {
-            "weight": layer.weight.detach().cpu().numpy().astype(float).tolist(),
-            "bias": layer.bias.detach().cpu().numpy().astype(float).tolist(),
-            "eps": layer.eps,
-        }
-
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     trunk_layers: list[dict[str, Any]] = []
     i = 0
     modules = list(model.trunk)
@@ -493,7 +492,7 @@ def export_dqn_json(
             trunk_layers.append(d)
         i += 1
 
-    payload = {
+    return {
         "type": "dqn",
         "format": "turbo-kart-headless-dqn-v2",
         "architecture": "dueling",
@@ -504,11 +503,125 @@ def export_dqn_json(
         "advantage_head": {**_serialize_linear(model.advantage_head), "activation": "linear"},
         "advantageCentering": model.advantage_centering,
         "meanExpansionK": model.mean_expansion_k,
-        "meta": meta,
+        "meta": meta or {},
     }
+
+
+def build_compact_dqn_policy(
+    model: DQN,
+    obs_keys: list[str],
+    actions: list[dict[str, Any]],
+    meta: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Serialize DQN parameters as one little-endian float32 base64 buffer."""
+    arrays: list[np.ndarray] = []
+    offset = 0
+
+    def _append_tensor(tensor: torch.Tensor) -> dict[str, Any]:
+        nonlocal offset
+        values = np.asarray(
+            tensor.detach().cpu().numpy(),
+            dtype=np.dtype("<f4"),
+        ).reshape(-1)
+        descriptor = {
+            "offset": offset,
+            "length": int(values.size),
+            "shape": list(tensor.shape),
+        }
+        arrays.append(values)
+        offset += int(values.size)
+        return descriptor
+
+    def _linear_descriptor(layer: torch.nn.Linear) -> dict[str, Any]:
+        return {
+            "weights": _append_tensor(layer.weight),
+            "biases": _append_tensor(layer.bias),
+        }
+
+    trunk_layers: list[dict[str, Any]] = []
+    modules = list(model.trunk)
+    i = 0
+    while i < len(modules):
+        module = modules[i]
+        if not isinstance(module, torch.nn.Linear):
+            i += 1
+            continue
+        descriptor = _linear_descriptor(module)
+        if i + 1 < len(modules) and isinstance(modules[i + 1], torch.nn.LayerNorm):
+            layernorm = modules[i + 1]
+            descriptor["layernorm"] = {
+                "weight": _append_tensor(layernorm.weight),
+                "bias": _append_tensor(layernorm.bias),
+                "eps": layernorm.eps,
+            }
+            i += 1
+        if i + 1 < len(modules):
+            activation = modules[i + 1]
+            if isinstance(activation, torch.nn.GELU):
+                descriptor["activation"] = "gelu"
+            elif isinstance(activation, torch.nn.ReLU):
+                descriptor["activation"] = "relu"
+            else:
+                descriptor["activation"] = "tanh"
+            i += 1
+        else:
+            descriptor["activation"] = "linear"
+        trunk_layers.append(descriptor)
+        i += 1
+
+    value_head = {**_linear_descriptor(model.value_head), "activation": "linear"}
+    advantage_head = {
+        **_linear_descriptor(model.advantage_head),
+        "activation": "linear",
+    }
+    flat = np.concatenate(arrays).astype("<f4", copy=False) if arrays else np.empty(0, dtype="<f4")
+    return {
+        "type": "dqn",
+        "format": "turbo-kart-headless-dqn-compact-v1",
+        "architecture": "dueling",
+        "encoding": "base64-f32le",
+        "floatCount": int(flat.size),
+        "weightsBase64": base64.b64encode(flat.tobytes()).decode("ascii"),
+        "observationKeys": obs_keys,
+        "actions": actions,
+        "trunk": trunk_layers,
+        "value_head": value_head,
+        "advantage_head": advantage_head,
+        "advantageCentering": model.advantage_centering,
+        "meanExpansionK": model.mean_expansion_k,
+        "meta": meta or {},
+    }
+
+
+def record_replay_transition(
+    buffer: common.FrameReplayBuffer,
+    base_obs: np.ndarray,
+    action: int,
+    reward: float,
+    done: bool,
+) -> None:
+    """Store the explicit post-step base frame for one transition."""
+    buffer.add(base_obs, action, reward, done)
+
+
+def export_dqn_json(
+    model: DQN,
+    obs_keys: list[str],
+    actions: list[dict[str, Any]],
+    out_path: Path,
+    meta: dict[str, Any],
+    manifest_path: Path | None = None,
+) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_dqn_payload(model, obs_keys, actions, meta=meta)
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     if manifest_path is not None:
         common.update_model_manifest(manifest_path, out_path, payload)
+
+
+def rollout_seed(base_seed: int, batch_start_step: int) -> int:
+    """Deterministic rollout PRNG seed from base seed and global batch-start step."""
+    return (int(base_seed) & 0xFFFFFFFF) ^ ((int(batch_start_step) * 2654435761) & 0xFFFFFFFF)
 
 
 def update_model_manifest(manifest_path: Path, model_path: Path, payload: dict[str, Any]) -> None:
@@ -645,16 +758,113 @@ def resolve_training_opponents(
     league: list[dict[str, Any]],
     anchors: list[dict[str, Any]],
     checkpoint_pool: list[dict[str, Any]],
+    total_slots: int = 4,
+    rng: random.Random | None = None,
 ) -> tuple[list[dict[str, Any]], int | None]:
     if is_battle and args.self_play:
         opponent_models, classic_slots = common.sample_battle_opponents(
             anchors,
             checkpoint_pool,
+            total_slots=total_slots,
             classic_prob=args.train_classic_prob,
             anchor_prob=args.train_anchor_prob,
+            rng=rng,
         )
         return opponent_models, classic_slots
     return common.sample_league_opponents(args, league), None
+
+
+def battle_training_opponent_count(
+    args: argparse.Namespace,
+    step: int,
+    curriculum_rng: random.Random,
+) -> int | None:
+    if args.mode != "battle" or not args.self_play:
+        return None
+    if args.battle_opponents is not None:
+        return args.battle_opponents
+    return common.resolve_battle_opponent_count(
+        args.battle_opponent_curriculum_parsed,
+        step,
+        args.steps,
+        curriculum_rng,
+    )
+
+
+def build_training_checkpoint_meta(
+    args: argparse.Namespace,
+    step: int,
+    *,
+    metrics: dict[str, Any] | None = None,
+    eval_report: dict[str, Any] | None = None,
+    reference_metrics: dict[str, Any] | None = None,
+    attribution: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {
+        "id": f"{args.model_id}-step-{step}",
+        "name": f"{args.model_name} step {step}",
+        "step": step,
+        "mode": args.mode,
+        "map": args.map,
+        "character": args.character,
+        "frameStack": args.frame_stack,
+        "frameSkip": args.frame_skip,
+        "nStep": args.n_step,
+        "activation": args.activation,
+        "layerNorm": args.layer_norm,
+        "orthogonalInit": args.orthogonal_init,
+        "meanExpansionK": args.mean_expansion_k,
+        "rdq": args.rdq,
+        "rdqBeta": args.rdq_beta if args.rdq else 0.0,
+        "advantageCentering": not args.rdq,
+        "battleOpponentCurriculum": args.battle_opponent_curriculum,
+        "battleOpponentsFixed": args.battle_opponents,
+        "rolloutBatchSize": args.rollout_batch_size,
+        "rolloutPolicySyncSteps": args.rollout_policy_sync_steps,
+    }
+    if metrics is not None:
+        meta["metrics"] = metrics
+    if eval_report is not None:
+        meta["eval"] = eval_report
+    if reference_metrics is not None:
+        meta["reference"] = reference_metrics
+    if attribution:
+        meta["attribution"] = attribution
+    return meta
+
+
+def export_training_checkpoint(
+    q: DQN,
+    env: Any,
+    args: argparse.Namespace,
+    step: int,
+    checkpoint_pool: list[dict[str, Any]],
+    *,
+    checkpoints_exported: set[int],
+    meta_overrides: dict[str, Any] | None = None,
+) -> Path | None:
+    if step in checkpoints_exported:
+        return Path(args.checkpoint_dir) / f"{args.model_id}-step-{step}.json"
+    checkpoint_path = Path(args.checkpoint_dir) / f"{args.model_id}-step-{step}.json"
+    meta = build_training_checkpoint_meta(args, step)
+    if meta_overrides:
+        meta.update(meta_overrides)
+    export_dqn_json(
+        q,
+        env.obs_keys,
+        env.actions,
+        checkpoint_path,
+        meta,
+        None,
+    )
+    checkpoints_exported.add(step)
+    try:
+        ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        checkpoint_pool.append({"name": f"ckpt-{step}", "payload": ckpt_payload})
+        checkpoint_pool[:] = checkpoint_pool[-args.checkpoint_pool_size :]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return checkpoint_path
 
 
 @torch.no_grad()
@@ -1104,6 +1314,16 @@ def train(args: argparse.Namespace) -> None:
         if args.out == "models/dqn-latest.json":
             args.out = "models/dqn-arena.json"
 
+    if args.rollout_batch_size > 1 and args.l2_norm:
+        raise ValueError(
+            "JS rollout inference does not support --l2-norm. "
+            "Use --rollout-batch-size 1 for legacy per-step Python action selection."
+        )
+    if args.rollout_batch_size < 1:
+        raise ValueError("--rollout-batch-size must be >= 1")
+    if args.rollout_policy_sync_steps < 1:
+        raise ValueError("--rollout-policy-sync-steps must be >= 1")
+
     index_path = Path(args.index).resolve()
     if not index_path.exists():
         raise FileNotFoundError(index_path)
@@ -1134,22 +1354,44 @@ def train(args: argparse.Namespace) -> None:
         checkpoint_pool: list[dict[str, Any]] = []
         elo_store = common.load_elo_store(Path(args.checkpoint_dir) / f"elo-{args.model_id}.json")
         self_play_checked = False
-        init_opponents, init_classic = resolve_training_opponents(
-            args,
-            is_battle=is_battle,
-            league=league,
-            anchors=anchors,
-            checkpoint_pool=checkpoint_pool,
-        )
-        reset_kwargs: dict[str, Any] = {
-            "map_id": common.sample_map(args),
-            "character": common.sample_character(args),
-            "opponent_models": init_opponents,
-        }
-        if init_classic is not None:
-            reset_kwargs["classic_opponent_slots"] = init_classic
+        curriculum_rng = random.Random(args.seed ^ common.CURRICULUM_RNG_SALT)
+        opponent_sample_rng = random.Random(args.seed ^ 0x0B10A11)
+        recent_opponent_counts: deque[int] = deque(maxlen=50)
+        checkpoints_exported: set[int] = set()
+        eval_event_count = 0
+        latest_eval_report: dict[str, Any] | None = None
+        latest_eval_metrics: dict[str, Any] | None = None
+        latest_attribution: dict[str, float] | None = None
+
+        def training_reset_kwargs(step: int) -> dict[str, Any]:
+            opp_count = battle_training_opponent_count(args, step, curriculum_rng)
+            total_slots = opp_count if opp_count is not None else 4
+            opponents, classic_slots = resolve_training_opponents(
+                args,
+                is_battle=is_battle,
+                league=league,
+                anchors=anchors,
+                checkpoint_pool=checkpoint_pool,
+                total_slots=total_slots,
+                rng=opponent_sample_rng,
+            )
+            kwargs: dict[str, Any] = {
+                "map_id": common.sample_map(args),
+                "character": common.sample_character(args),
+                "opponent_models": opponents,
+            }
+            if classic_slots is not None:
+                kwargs["classic_opponent_slots"] = classic_slots
+            if opp_count is not None:
+                kwargs["opponent_count"] = opp_count
+                recent_opponent_counts.append(opp_count)
+            return kwargs
+
+        reset_kwargs = training_reset_kwargs(0)
         obs = env.reset_with(**reset_kwargs)
-        self_play_checked = check_self_play_applied(env, args, console, self_play_checked, len(init_opponents))
+        self_play_checked = check_self_play_applied(
+            env, args, console, self_play_checked, len(reset_kwargs["opponent_models"])
+        )
         eval_page = browser.new_page()
         eval_env = common.TurboKartEnv(
             page=eval_page,
@@ -1203,6 +1445,8 @@ def train(args: argparse.Namespace) -> None:
             stack_mask=getattr(env, "_stack_mask", None),
             dtype=args.replay_dtype,
             alpha=args.per_alpha if args.prioritized_replay else None,
+            n_step=args.n_step,
+            gamma=args.gamma,
         )
         buffer.start_episode(env.last_base_obs)
 
@@ -1246,44 +1490,76 @@ def train(args: argparse.Namespace) -> None:
             "mean_expansion_k": args.mean_expansion_k,
             "rdq": args.rdq,
             "rdq_beta": args.rdq_beta if args.rdq else 0.0,
+            "checkpoint_every": args.checkpoint_every,
+            "eval_every": args.eval_every,
+            "elo_every": args.elo_every,
+            "smoothgrad_every": args.smoothgrad_every,
+            "battle_opponent_curriculum": args.battle_opponent_curriculum,
+            "battle_opponents_fixed": args.battle_opponents,
+            "rollout_batch_size": args.rollout_batch_size,
+            "rollout_policy_sync_steps": args.rollout_policy_sync_steps,
         }
         if args.json_logs:
             emit_json(start_payload)
             progress = None
             task_id = None
         else:
+            panel_lines = [
+                f"[bold]Map[/bold]: {args.map}",
+                f"[bold]Base character[/bold]: {args.character}",
+                "[bold]Training characters[/bold]: "
+                f"{args.characters if args.random_character else args.character}",
+                f"[bold]Observations[/bold]: {obs_dim}",
+                f"[bold]Actions[/bold]: {action_dim}",
+                f"[bold]Steps[/bold]: {args.steps}",
+                f"[bold]Eval maps[/bold]: {args.eval_maps}",
+                f"[bold]Training maps[/bold]: {args.maps if args.random_map else args.map}",
+                f"[bold]Random map[/bold]: {args.random_map}",
+                f"[bold]Random character[/bold]: {args.random_character}",
+                f"[bold]Frame stack[/bold]: {args.frame_stack}",
+                f"[bold]Frame skip[/bold]: {args.frame_skip}",
+                f"[bold]Activation[/bold]: {args.activation}",
+                f"[bold]LayerNorm[/bold]: {args.layer_norm}",
+                f"[bold]L2 Norm[/bold]: {args.l2_norm}",
+                f"[bold]Orthogonal init[/bold]: {args.orthogonal_init}",
+                f"[bold]Weight norm[/bold]: {args.weight_norm}",
+                f"[bold]Mean expansion k[/bold]: {args.mean_expansion_k}",
+                f"[bold]RDQ[/bold]: {args.rdq} (β={args.rdq_beta if args.rdq else 0.0})",
+                f"[bold]PER[/bold]: {args.prioritized_replay}"
+                + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
+                f"[bold]N-step[/bold]: {args.n_step} (γ={args.gamma})",
+                f"[bold]Rollout batch[/bold]: {args.rollout_batch_size}"
+                + (
+                    f" (policy sync every {args.rollout_policy_sync_steps} steps; "
+                    f"≤{args.rollout_policy_sync_steps - 1} updates stale)"
+                    if args.rollout_batch_size > 1
+                    else " (legacy per-step Python)"
+                ),
+                f"[bold]Replay dtype[/bold]: {args.replay_dtype} "
+                f"({buffer.memory_bytes / 1024 / 1024:.2f} MiB buffer)",
+                f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)"
+                + (f", {len(anchors)} anchors" if anchors else ""),
+                f"[bold]Checkpoint every[/bold]: {args.checkpoint_every}",
+                f"[bold]Eval every[/bold]: {args.eval_every}",
+                f"[bold]Elo every[/bold]: {args.elo_every}",
+                f"[bold]SmoothGrad every[/bold]: {args.smoothgrad_every} eval(s)"
+                + (
+                    ""
+                    if args.smoothgrad_every == 0
+                    else f" ({args.smoothgrad_samples} samples, noise={args.smoothgrad_noise})"
+                ),
+            ]
+            if is_battle and args.self_play:
+                if args.battle_opponents is not None:
+                    panel_lines.append(f"[bold]Battle opponents[/bold]: fixed {args.battle_opponents}")
+                else:
+                    panel_lines.append(
+                        "[bold]Battle curriculum[/bold]: "
+                        f"{args.battle_opponent_curriculum_parsed.summary()}"
+                    )
             console.print(
                 Panel.fit(
-                    "\n".join(
-                        [
-                            f"[bold]Map[/bold]: {args.map}",
-                            f"[bold]Base character[/bold]: {args.character}",
-                            "[bold]Training characters[/bold]: "
-                            f"{args.characters if args.random_character else args.character}",
-                            f"[bold]Observations[/bold]: {obs_dim}",
-                            f"[bold]Actions[/bold]: {action_dim}",
-                            f"[bold]Steps[/bold]: {args.steps}",
-                            f"[bold]Eval maps[/bold]: {args.eval_maps}",
-                            f"[bold]Training maps[/bold]: {args.maps if args.random_map else args.map}",
-                            f"[bold]Random map[/bold]: {args.random_map}",
-                            f"[bold]Random character[/bold]: {args.random_character}",
-                            f"[bold]Frame stack[/bold]: {args.frame_stack}",
-                            f"[bold]Frame skip[/bold]: {args.frame_skip}",
-                            f"[bold]Activation[/bold]: {args.activation}",
-                            f"[bold]LayerNorm[/bold]: {args.layer_norm}",
-                            f"[bold]L2 Norm[/bold]: {args.l2_norm}",
-                            f"[bold]Orthogonal init[/bold]: {args.orthogonal_init}",
-                            f"[bold]Weight norm[/bold]: {args.weight_norm}",
-                            f"[bold]Mean expansion k[/bold]: {args.mean_expansion_k}",
-                            f"[bold]RDQ[/bold]: {args.rdq} (β={args.rdq_beta if args.rdq else 0.0})",
-                            f"[bold]PER[/bold]: {args.prioritized_replay}"
-                            + (f" (α={args.per_alpha}, β={args.per_beta_start}→{args.per_beta_end})" if args.prioritized_replay else ""),
-                            f"[bold]Replay dtype[/bold]: {args.replay_dtype} "
-                            f"({buffer.memory_bytes / 1024 / 1024:.2f} MiB buffer)",
-                            f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)"
-                            + (f", {len(anchors)} anchors" if anchors else ""),
-                        ]
-                    ),
+                    "\n".join(panel_lines),
                     title="TurboKart DQN Training",
                     border_style="cyan",
                 )
@@ -1309,22 +1585,31 @@ def train(args: argparse.Namespace) -> None:
                 episodes="0",
             )
 
-        for step in range(1, args.steps + 1):
-            eps = epsilon_by_step(step, args.eps_start, args.eps_end, args.eps_decay)
-            if random.random() < eps:
-                action = random.randrange(action_dim)
-            else:
-                with torch.no_grad():
-                    q_values = q(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
-                    recent_q_max.append(float(torch.max(q_values).detach().cpu().item()))
-                    recent_q_mean.append(float(torch.mean(q_values).detach().cpu().item()))
-                    action = int(torch.argmax(q_values, dim=1).item())
+        def process_transition(
+            step: int,
+            eps: float,
+            action: int,
+            stacked_obs: np.ndarray,
+            base_obs: np.ndarray,
+            reward: float,
+            done: bool,
+            info: dict[str, Any],
+            *,
+            q_max: float | None = None,
+            q_mean: float | None = None,
+        ) -> bool:
+            """Apply one environment transition and training hooks. Returns True if episode ended."""
+            nonlocal obs, episode_reward, episode_count, last_loss, league, self_play_checked
+
             action_counts[action] += 1
             recent_action_counts[action] += 1
+            if q_max is not None:
+                recent_q_max.append(q_max)
+            if q_mean is not None:
+                recent_q_mean.append(q_mean)
 
-            next_obs, reward, done, info = env.step(action)
-            buffer.add(env.last_base_obs, action, reward, done)
-            obs = next_obs
+            record_replay_transition(buffer, base_obs, action, reward, done)
+            obs = stacked_obs
             episode_reward += reward
 
             if done:
@@ -1340,14 +1625,19 @@ def train(args: argparse.Namespace) -> None:
                         "finished": info.get("finished"),
                         "progress": round(float(info.get("progress", 0)), 3),
                     }
+                    if is_battle and args.self_play:
+                        episode_payload["battle_opponents"] = env.last_reset_info.get("opponentCount")
                     if args.json_logs:
                         emit_json(episode_payload)
                     else:
+                        opp_note = ""
+                        if is_battle and args.self_play:
+                            opp_note = f" opponents={env.last_reset_info.get('opponentCount')}"
                         console.print(
                             "[magenta]episode[/magenta] "
                             f"#{episode_count} step={step} reward={episode_payload['episode_reward']} "
                             f"lap={info.get('lap')} finished={info.get('finished')} "
-                            f"progress={episode_payload['progress']}"
+                            f"progress={episode_payload['progress']}{opp_note}"
                         )
                 recent_rewards.append(episode_reward)
                 recent_laps.append(float(info.get("lap", 0)))
@@ -1356,24 +1646,20 @@ def train(args: argparse.Namespace) -> None:
                 recent_chars.append(env.character)
                 if args.self_play and not is_battle:
                     league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
-                ep_opponents, ep_classic = resolve_training_opponents(
-                    args,
-                    is_battle=is_battle,
-                    league=league,
-                    anchors=anchors,
-                    checkpoint_pool=checkpoint_pool,
-                )
-                ep_reset_kwargs: dict[str, Any] = {
-                    "map_id": common.sample_map(args),
-                    "character": common.sample_character(args),
-                    "opponent_models": ep_opponents,
-                }
-                if ep_classic is not None:
-                    ep_reset_kwargs["classic_opponent_slots"] = ep_classic
+                ep_reset_kwargs = training_reset_kwargs(step)
                 obs = env.reset_with(**ep_reset_kwargs)
                 buffer.start_episode(env.last_base_obs)
-                self_play_checked = check_self_play_applied(env, args, console, self_play_checked, len(ep_opponents))
+                self_play_checked = check_self_play_applied(
+                    env, args, console, self_play_checked, len(ep_reset_kwargs["opponent_models"])
+                )
                 episode_reward = 0.0
+                return True
+
+            return False
+
+        def after_transition_hooks(step: int, eps: float) -> None:
+            nonlocal last_loss, eval_event_count, latest_eval_report, latest_eval_metrics
+            nonlocal latest_attribution, best_eval_reward, elo_store
 
             if len(buffer) >= args.batch_size and step >= args.learning_starts:
                 per_beta = (
@@ -1390,7 +1676,7 @@ def train(args: argparse.Namespace) -> None:
                 with torch.no_grad():
                     best_actions = q(b_next_obs).argmax(dim=1, keepdim=True)
                     next_q = target_q(b_next_obs).gather(1, best_actions).squeeze(1)
-                    target = b_rewards + args.gamma * (1.0 - b_dones) * next_q
+                    target = b_rewards + (args.gamma ** args.n_step) * (1.0 - b_dones) * next_q
                 q_values, baselines, residuals = q.forward_components(b_obs)
                 pred = q_values.gather(1, b_actions).squeeze(1)
                 td_errors = pred - target
@@ -1438,6 +1724,10 @@ def train(args: argparse.Namespace) -> None:
                     "recent_maps": dict(sorted({m: recent_maps.count(m) for m in set(recent_maps)}.items())),
                     "recent_chars": dict(sorted({c: recent_chars.count(c) for c in set(recent_chars)}.items())),
                 }
+                if recent_opponent_counts:
+                    progress_payload["recent_battle_opponents"] = dict(
+                        sorted({c: recent_opponent_counts.count(c) for c in set(recent_opponent_counts)}.items())
+                    )
                 if args.replay_dtype == "int8" and buffer.clip_events > 0:
                     progress_payload["replay_clip_events"] = buffer.clip_events
                 recent_action_counts[:] = 0
@@ -1457,13 +1747,56 @@ def train(args: argparse.Namespace) -> None:
                             f"[yellow]warning[/yellow] replay int8 clip events: {buffer.clip_events}"
                         )
 
-            if step % args.eval_every == 0:
+            run_checkpoint = common.should_run_interval(step, args.checkpoint_every)
+            run_eval = common.should_run_interval(step, args.eval_every)
+            run_elo = is_battle and args.self_play and common.should_run_interval(step, args.elo_every)
+
+            if run_checkpoint or run_elo:
+                meta_overrides: dict[str, Any] = {}
+                if latest_eval_metrics is not None:
+                    meta_overrides["metrics"] = latest_eval_metrics
+                if latest_eval_report is not None:
+                    meta_overrides["eval"] = latest_eval_report
+                if reference_metrics:
+                    meta_overrides["reference"] = reference_metrics
+                if latest_attribution:
+                    meta_overrides["attribution"] = latest_attribution
+                export_training_checkpoint(
+                    q,
+                    env,
+                    args,
+                    step,
+                    checkpoint_pool,
+                    checkpoints_exported=checkpoints_exported,
+                    meta_overrides=meta_overrides or None,
+                )
+
+            if run_eval:
+                eval_event_count += 1
                 eval_report = evaluate_tracks(eval_env, q, args)
                 track_report = eval_report["tracks"].get(args.map) or next(iter(eval_report["tracks"].values()))
                 metrics = track_report[primary_key]
-                attribution = common.smoothgrad_attribution(q, buffer, env.obs_keys) if len(buffer) >= 200 else {}
+                latest_eval_report = eval_report
+                latest_eval_metrics = metrics
+                do_smoothgrad = (
+                    args.smoothgrad_every > 0
+                    and eval_event_count % args.smoothgrad_every == 0
+                    and len(buffer) >= args.smoothgrad_samples
+                )
+                attribution = (
+                    common.smoothgrad_attribution(
+                        q,
+                        buffer,
+                        env.obs_keys,
+                        n_samples=args.smoothgrad_samples,
+                        n_smooth=args.smoothgrad_noise,
+                    )
+                    if do_smoothgrad
+                    else {}
+                )
                 if attribution:
                     eval_report["attribution"] = attribution
+                    latest_attribution = attribution
                 if args.json_logs:
                     emit_json({"event": "eval", "eval_step": step, **eval_report, "reference": reference_metrics})
                 elif is_battle:
@@ -1486,60 +1819,115 @@ def train(args: argparse.Namespace) -> None:
                         action_counts,
                         [a["name"] for a in env.actions],
                     )
-                checkpoint_path = Path(args.checkpoint_dir) / f"{args.model_id}-step-{step}.json"
-                export_dqn_json(
-                    q,
-                    env.obs_keys,
-                    env.actions,
-                    checkpoint_path,
-                    {
-                        "id": f"{args.model_id}-step-{step}",
-                        "name": f"{args.model_name} step {step}",
-                        "step": step,
-                        "mode": args.mode,
-                        "map": args.map,
-                        "character": args.character,
-                        "frameStack": args.frame_stack,
-                        "frameSkip": args.frame_skip,
-                        "activation": args.activation,
-                        "layerNorm": args.layer_norm,
-                        "orthogonalInit": args.orthogonal_init,
-                        "meanExpansionK": args.mean_expansion_k,
-                        "rdq": args.rdq,
-                        "rdqBeta": args.rdq_beta if args.rdq else 0.0,
-                        "advantageCentering": not args.rdq,
-                        "metrics": metrics,
-                        "eval": eval_report,
-                        "reference": reference_metrics,
-                        "attribution": attribution,
-                    },
-                    # Checkpoints stay local and ignored; only final models update the public manifest.
-                    None,
-                )
                 if eval_report["avg_reward"] > best_eval_reward:
                     best_eval_reward = eval_report["avg_reward"]
 
-                try:
-                    ckpt_payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-                    checkpoint_pool.append({"name": f"ckpt-{step}", "payload": ckpt_payload})
-                    checkpoint_pool = checkpoint_pool[-args.checkpoint_pool_size :]
-                except (OSError, json.JSONDecodeError):
-                    pass
+            if run_elo:
+                elo_path = Path(args.checkpoint_dir) / f"elo-{args.model_id}.json"
+                elo_store = run_elo_rating_round(
+                    eval_env,
+                    q,
+                    args,
+                    step=step,
+                    checkpoint_name=f"ckpt-{step}",
+                    anchors=anchors,
+                    checkpoint_pool=checkpoint_pool,
+                    elo_store=elo_store,
+                    console=console,
+                )
+                common.save_elo_store(elo_path, elo_store)
 
-                if is_battle and args.self_play:
-                    elo_path = Path(args.checkpoint_dir) / f"elo-{args.model_id}.json"
-                    elo_store = run_elo_rating_round(
-                        eval_env,
-                        q,
-                        args,
-                        step=step,
-                        checkpoint_name=f"ckpt-{step}",
-                        anchors=anchors,
-                        checkpoint_pool=checkpoint_pool,
-                        elo_store=elo_store,
-                        console=console,
+        step = 0
+        last_policy_sync_step: int | None = None
+        while step < args.steps:
+            if args.rollout_batch_size == 1:
+                step += 1
+                eps = epsilon_by_step(step, args.eps_start, args.eps_end, args.eps_decay)
+                q_max = None
+                q_mean = None
+                if random.random() < eps:
+                    action = random.randrange(action_dim)
+                else:
+                    with torch.no_grad():
+                        q_values = q(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+                        q_max = float(torch.max(q_values).detach().cpu().item())
+                        q_mean = float(torch.mean(q_values).detach().cpu().item())
+                        action = int(torch.argmax(q_values, dim=1).item())
+                next_obs, reward, done, info = env.step(action)
+                process_transition(
+                    step,
+                    eps,
+                    action,
+                    next_obs,
+                    env.last_base_obs,
+                    reward,
+                    done,
+                    info,
+                    q_max=q_max,
+                    q_mean=q_mean,
+                )
+                after_transition_hooks(step, eps)
+            else:
+                batch_start = step + 1
+                if (
+                    last_policy_sync_step is None
+                    or step - last_policy_sync_step >= args.rollout_policy_sync_steps
+                ):
+                    policy_meta = {
+                        "frameStack": args.frame_stack,
+                        "frameSkip": args.frame_skip,
+                        "mode": args.mode,
+                    }
+                    env.set_rollout_policy(
+                        build_compact_dqn_policy(q, env.obs_keys, env.actions, meta=policy_meta)
                     )
-                    common.save_elo_store(elo_path, elo_store)
+                    last_policy_sync_step = step
+                transitions_until_sync = (
+                    args.rollout_policy_sync_steps - (step - last_policy_sync_step)
+                )
+                batch_k = min(
+                    args.rollout_batch_size,
+                    args.steps - step,
+                    transitions_until_sync,
+                )
+                epsilons = [
+                    epsilon_by_step(batch_start + i, args.eps_start, args.eps_end, args.eps_decay)
+                    for i in range(batch_k)
+                ]
+                rollout_result = env.rollout(
+                    None,
+                    epsilons,
+                    rollout_seed(args.seed, batch_start),
+                    max_steps=batch_k,
+                    reuse_cached_policy=True,
+                )
+                if rollout_result.stopped_reason == "alreadyDone":
+                    ep_reset_kwargs = training_reset_kwargs(step)
+                    obs = env.reset_with(**ep_reset_kwargs)
+                    buffer.start_episode(env.last_base_obs)
+                    self_play_checked = check_self_play_applied(
+                        env, args, console, self_play_checked, len(ep_reset_kwargs["opponent_models"])
+                    )
+                    continue
+
+                for i, entry in enumerate(rollout_result.entries):
+                    step += 1
+                    eps = epsilons[i]
+                    process_transition(
+                        step,
+                        eps,
+                        entry.action,
+                        entry.stacked_obs,
+                        entry.base_obs,
+                        entry.reward,
+                        entry.done,
+                        entry.info,
+                        q_max=entry.q_max,
+                        q_mean=entry.q_mean,
+                    )
+                    after_transition_hooks(step, eps)
+                    if entry.done:
+                        break
 
         ckpt_history = [
             (h["step"], h["rating"])
@@ -1552,7 +1940,17 @@ def train(args: argparse.Namespace) -> None:
             iter(final_eval_report["tracks"].values())
         )
         final_metrics = final_track_report[primary_key]
-        final_attribution = common.smoothgrad_attribution(q, buffer, env.obs_keys) if len(buffer) >= 200 else {}
+        final_attribution = (
+            common.smoothgrad_attribution(
+                q,
+                buffer,
+                env.obs_keys,
+                n_samples=args.smoothgrad_samples,
+                n_smooth=args.smoothgrad_noise,
+            )
+            if len(buffer) >= args.smoothgrad_samples
+            else {}
+        )
         if final_attribution:
             final_eval_report["attribution"] = final_attribution
         export_dqn_json(
@@ -1569,6 +1967,7 @@ def train(args: argparse.Namespace) -> None:
                 "character": args.character,
                 "frameStack": args.frame_stack,
                 "frameSkip": args.frame_skip,
+                "nStep": args.n_step,
                 "activation": args.activation,
                 "layerNorm": args.layer_norm,
                 "orthogonalInit": args.orthogonal_init,
@@ -1576,6 +1975,10 @@ def train(args: argparse.Namespace) -> None:
                 "rdq": args.rdq,
                 "rdqBeta": args.rdq_beta if args.rdq else 0.0,
                 "advantageCentering": not args.rdq,
+                "battleOpponentCurriculum": args.battle_opponent_curriculum,
+                "battleOpponentsFixed": args.battle_opponents,
+                "rolloutBatchSize": args.rollout_batch_size,
+                "rolloutPolicySyncSteps": args.rollout_policy_sync_steps,
                 "metrics": final_metrics,
                 "eval": final_eval_report,
                 "reference": reference_metrics,
@@ -1698,18 +2101,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--buffer-size", type=int, default=100_000)
     parser.add_argument("--learning-starts", type=int, default=2_000)
     parser.add_argument("--target-update", type=int, default=1_000)
-    parser.add_argument("--eval-every", type=int, default=25_000)
-    parser.add_argument("--episodes-eval", type=int, default=3)
+    parser.add_argument("--checkpoint-every", type=int, default=25_000)
+    parser.add_argument("--eval-every", type=int, default=100_000)
+    parser.add_argument("--episodes-eval", type=int, default=1)
+    parser.add_argument("--elo-every", type=int, default=100_000, help="Interim Elo interval; 0 disables.")
+    parser.add_argument(
+        "--smoothgrad-every",
+        type=int,
+        default=0,
+        help="Run SmoothGrad every N evaluation events; 0 disables interim SmoothGrad.",
+    )
+    parser.add_argument("--smoothgrad-samples", type=int, default=200)
+    parser.add_argument(
+        "--smoothgrad-noise",
+        type=int,
+        default=30,
+        help="SmoothGrad smoothing iterations (n_smooth).",
+    )
     parser.add_argument("--reference-episodes", type=int, default=2)
     parser.add_argument("--log-every-episodes", type=int, default=10)
     parser.add_argument("--log-every-steps", type=int, default=1_000)
     parser.add_argument("--json-logs", action="store_true", help="Emit JSON lines instead of Rich progress output")
     parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--n-step", type=int, default=1, help="N-step return horizon for replay sampling.")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--grad-clip", type=float, default=10.0)
     parser.add_argument("--eps-start", type=float, default=1.0)
     parser.add_argument("--eps-end", type=float, default=0.05)
     parser.add_argument("--eps-decay", type=int, default=30_000)
+    parser.add_argument(
+        "--rollout-batch-size",
+        type=int,
+        default=8,
+        help="Steps per JS rollout batch (default 8) using cached compact JS policy "
+        "inference. Use 1 for exact legacy per-step Python epsilon-greedy + rlStep.",
+    )
+    parser.add_argument(
+        "--rollout-policy-sync-steps",
+        type=int,
+        default=32,
+        help="For batch mode, sync compact policy weights to JS every N completed "
+        "transitions (default 32; max policy staleness N-1 optimizer updates). "
+        "Has no effect with --rollout-batch-size 1.",
+    )
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--solo", action="store_true", default=True)
     parser.add_argument("--with-opponents", dest="solo", action="store_false")
@@ -1737,13 +2171,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rating-episodes",
         type=int,
-        default=3,
+        default=1,
         help="Duel episodes per rated opponent at each checkpoint (battle only).",
     )
     parser.add_argument(
         "--rating-recent-checkpoints",
         type=int,
-        default=2,
+        default=1,
         help="How many most-recent previous checkpoints join the Elo rating set.",
     )
     parser.add_argument("--elo-k", type=float, default=32.0, help="Elo K-factor for checkpoint rating duels.")
@@ -1761,6 +2195,17 @@ def parse_args() -> argparse.Namespace:
         help="Probability a training episode includes one anchor model (battle self-play). "
         "0 = never train against anchors; they remain Elo eval opponents only.",
     )
+    parser.add_argument(
+        "--battle-opponent-curriculum",
+        default=common.BATTLE_OPPONENT_CURRICULUM_DEFAULT,
+        help="Comma-separated phase schedule <fraction>:<count> for battle self-play opponent counts.",
+    )
+    parser.add_argument(
+        "--battle-opponents",
+        type=int,
+        default=None,
+        help="Fixed battle opponent count (1..7); bypasses curriculum when set.",
+    )
     parser.add_argument("--no-auto-install-browser", dest="auto_install_browser", action="store_false")
     parser.add_argument("--install-browser-only", action="store_true")
     parser.set_defaults(auto_install_browser=True, orthogonal_init=True)
@@ -1769,6 +2214,10 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     parsed_args = parse_args()
+    parsed_args.battle_opponents = common.validate_battle_opponents_fixed(parsed_args.battle_opponents)
+    parsed_args.battle_opponent_curriculum_parsed = common.parse_battle_opponent_curriculum(
+        parsed_args.battle_opponent_curriculum
+    )
     if parsed_args.install_browser_only:
         subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
     else:

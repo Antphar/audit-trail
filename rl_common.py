@@ -116,22 +116,100 @@ class PrioritizedReplayBuffer:
             self._max_priority = max(self._max_priority, float(p))
 
 
+def _next_power_of_two(n: int) -> int:
+    p = 1
+    while p < n:
+        p <<= 1
+    return p
+
+
+class _SumTree:
+    """Fixed-capacity sum tree for O(log N) prioritized replay sampling.
+
+    Leaves are keyed by ring-buffer slot indices ``0 .. capacity-1``.  Slots with
+    zero mass are never sampled.  Stratified prefix-sum sampling draws one index
+    per equal-mass segment of ``[0, total)`` **with replacement** (standard
+    stratified PER); this differs from without-replacement ``np.random.choice``.
+    """
+
+    def __init__(self, capacity: int):
+        self._capacity = capacity
+        self._tree_size = _next_power_of_two(capacity)
+        self._leaf_offset = self._tree_size - 1
+        self.tree = np.zeros(2 * self._tree_size - 1, dtype=np.float64)
+
+    @property
+    def nbytes(self) -> int:
+        return self.tree.nbytes
+
+    def set(self, index: int, value: float) -> None:
+        if not 0 <= index < self._capacity:
+            raise IndexError(f"slot {index} out of range [0, {self._capacity})")
+        leaf = self._leaf_offset + index
+        change = value - self.tree[leaf]
+        self.tree[leaf] = value
+        while leaf > 0:
+            parent = (leaf - 1) // 2
+            self.tree[parent] += change
+            leaf = parent
+
+    def total(self) -> float:
+        return float(self.tree[0])
+
+    def get(self, index: int) -> float:
+        if not 0 <= index < self._capacity:
+            raise IndexError(f"slot {index} out of range [0, {self._capacity})")
+        return float(self.tree[self._leaf_offset + index])
+
+    def _retrieve(self, cum: float) -> int:
+        total = self.total()
+        if not 0.0 <= cum < total:
+            raise ValueError(f"prefix sum must be in [0, {total}), got {cum}")
+        idx = 0
+        while idx < self._leaf_offset:
+            left = 2 * idx + 1
+            if cum < self.tree[left]:
+                idx = left
+            else:
+                cum -= self.tree[left]
+                idx = left + 1
+        index = idx - self._leaf_offset
+        if index >= self._capacity:
+            raise RuntimeError(f"sum tree returned padded leaf {index}")
+        return index
+
+    def stratified_sample(self, batch_size: int) -> np.ndarray:
+        total = self.total()
+        if total <= 0.0:
+            raise ValueError("Cannot sample from empty sum tree")
+        segment = total / batch_size
+        indices = np.empty(batch_size, dtype=np.intp)
+        for i in range(batch_size):
+            cum = segment * (i + random.random())
+            indices[i] = self._retrieve(cum)
+        return indices
+
+
 class FrameReplayBuffer:
     """Stores single base frames at reduced precision; reconstructs frame stacks on sample.
 
     Memory layout:
-      frames:   np.ndarray (capacity, base_dim) dtype float16 (or int8, scaled by 127 over [-1,1])
-      episodes: np.ndarray (capacity,) uint32   — episode id per frame
-      actions:  np.ndarray (capacity,) int16
-      rewards:  np.ndarray (capacity,) float32
-      dones:    np.ndarray (capacity,) bool
-      valid:    np.ndarray (capacity,) bool     — slot holds a *transition* (frame i has action/reward
-                                                and frame i+1 exists in same episode)
+      frames:     np.ndarray (capacity, base_dim) dtype float16 (or int8, scaled by 127 over [-1,1])
+      episodes:   np.ndarray (capacity,) uint32   — episode id per frame
+      frame_ids:  np.ndarray (capacity,) uint64   — unique chronological id per frame
+      actions:    np.ndarray (capacity,) int16
+      rewards:    np.ndarray (capacity,) float32
+      dones:      np.ndarray (capacity,) bool
+      valid:      np.ndarray (capacity,) bool     — slot holds a one-step transition record
+      sampleable: np.ndarray (capacity,) bool     — slot is an n-step (or terminal-truncated) anchor
 
-    Ring invalidation: overwriting slot *p* clears ``valid[p]``.  A transition at slot *p−1*
-    references next-frame *p*; if that next frame is overwritten, ``valid[p−1]`` is also cleared.
-    Stale lookbacks at sample time are rejected by the episode-id check (substitute earliest
-    in-episode frame, matching reset padding in ``_stack_obs``).
+    ``__len__`` returns the count of *sampleable* anchors (gates training/sampling).
+
+    Ring invalidation: overwriting slot *p* clears ``valid[p]`` and ``sampleable[p]`` and zeros
+    the sum-tree leaf.  When *p* is overwritten without a matching ``add()`` (e.g.
+    ``start_episode``), ``valid[p-1]`` / ``sampleable[p-1]`` are cleared too because that
+    transition's next frame lived at *p*.  During ``add()``, the next frame write at *p*
+    intentionally completes the transition at *p-1*, so *p-1* is preserved.
     """
 
     def __init__(
@@ -142,7 +220,13 @@ class FrameReplayBuffer:
         stack_mask: np.ndarray | None,
         dtype: str = "float16",
         alpha: float | None = None,
+        n_step: int = 1,
+        gamma: float = 0.99,
     ):
+        if n_step < 1:
+            raise ValueError(f"n_step must be >= 1, got {n_step}")
+        if not 0.0 <= gamma <= 1.0:
+            raise ValueError(f"gamma must be in [0, 1], got {gamma}")
         self._capacity = capacity
         self._base_dim = base_dim
         self._frame_stack = max(1, int(frame_stack))
@@ -150,6 +234,8 @@ class FrameReplayBuffer:
         self._stacked_dim = int(stack_mask.shape[0]) if stack_mask is not None else base_dim * self._frame_stack
         self._dtype_name = dtype
         self._alpha = alpha
+        self._n_step = int(n_step)
+        self._gamma = float(gamma)
         self._int8 = dtype == "int8"
         if dtype == "int8":
             self.frames = np.zeros((capacity, base_dim), dtype=np.int8)
@@ -158,17 +244,21 @@ class FrameReplayBuffer:
         else:
             self.frames = np.zeros((capacity, base_dim), dtype=np.float16)
         self.episodes = np.zeros(capacity, dtype=np.uint32)
+        self.frame_ids = np.zeros(capacity, dtype=np.uint64)
         self.actions = np.zeros(capacity, dtype=np.int16)
         self.rewards = np.zeros(capacity, dtype=np.float32)
         self.dones = np.zeros(capacity, dtype=bool)
         self.valid = np.zeros(capacity, dtype=bool)
-        self._priorities = np.zeros(capacity, dtype=np.float64) if alpha is not None else None
+        self.sampleable = np.zeros(capacity, dtype=bool)
+        self._sum_tree = _SumTree(capacity) if alpha is not None else None
         self._max_priority = 1.0
         self._write_pos = 0
         self._size = 0
         self._n_valid = 0
+        self._n_sampleable = 0
         self._episode_id = 0
         self._current_episode = 0
+        self._next_frame_id = 0
         self.clip_events = 0
 
     @property
@@ -176,17 +266,19 @@ class FrameReplayBuffer:
         total = (
             self.frames.nbytes
             + self.episodes.nbytes
+            + self.frame_ids.nbytes
             + self.actions.nbytes
             + self.rewards.nbytes
             + self.dones.nbytes
             + self.valid.nbytes
+            + self.sampleable.nbytes
         )
-        if self._priorities is not None:
-            total += self._priorities.nbytes
+        if self._sum_tree is not None:
+            total += self._sum_tree.nbytes
         return total
 
     def __len__(self) -> int:
-        return self._n_valid
+        return self._n_sampleable
 
     def _encode(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
@@ -204,20 +296,82 @@ class FrameReplayBuffer:
             return arr.astype(np.float32) / 127.0
         return arr.astype(np.float32)
 
-    def _invalidate_slot(self, p: int) -> None:
-        # Writes are sequential, so the transition at p-1 (if any) was overwritten on the
-        # previous write and its replacement's next-frame is the new content of p. Only the
-        # transition anchored at p itself loses its obs frame here.
+    def _invalidate_slot(self, p: int, *, invalidate_prev: bool = True) -> None:
         if self.valid[p]:
             self.valid[p] = False
             self._n_valid -= 1
+        if self.sampleable[p]:
+            self.sampleable[p] = False
+            self._n_sampleable -= 1
+            if self._sum_tree is not None:
+                self._sum_tree.set(p, 0.0)
+        if invalidate_prev:
+            prev = (p - 1) % self._capacity
+            if self.valid[prev]:
+                self.valid[prev] = False
+                self._n_valid -= 1
+            if self.sampleable[prev]:
+                self.sampleable[prev] = False
+                self._n_sampleable -= 1
+                if self._sum_tree is not None:
+                    self._sum_tree.set(prev, 0.0)
+        self._refresh_anchors_near(p)
 
-    def _write_frame(self, base_obs: np.ndarray, episode_id: int) -> None:
+    def _set_sampleable(self, anchor: int, sampleable: bool) -> None:
+        if sampleable and not self.sampleable[anchor]:
+            self.sampleable[anchor] = True
+            self._n_sampleable += 1
+            if self._sum_tree is not None:
+                self._sum_tree.set(anchor, self._max_priority**self._alpha)
+        elif not sampleable and self.sampleable[anchor]:
+            self.sampleable[anchor] = False
+            self._n_sampleable -= 1
+            if self._sum_tree is not None:
+                self._sum_tree.set(anchor, 0.0)
+
+    def _evaluate_anchor(self, anchor: int) -> tuple[bool, float, bool, int]:
+        episode_id = int(self.episodes[anchor])
+        anchor_frame_id = int(self.frame_ids[anchor])
+        total_reward = 0.0
+        gamma_pow = 1.0
+        for step in range(self._n_step):
+            slot = (anchor + step) % self._capacity
+            if not self.valid[slot]:
+                return False, 0.0, False, 0
+            if int(self.episodes[slot]) != episode_id:
+                return False, 0.0, False, 0
+            if int(self.frame_ids[slot]) != anchor_frame_id + step:
+                return False, 0.0, False, 0
+            total_reward += gamma_pow * float(self.rewards[slot])
+            if self.dones[slot]:
+                next_anchor = (slot + 1) % self._capacity
+                if int(self.episodes[next_anchor]) != episode_id:
+                    return False, 0.0, False, 0
+                if int(self.frame_ids[next_anchor]) != anchor_frame_id + step + 1:
+                    return False, 0.0, False, 0
+                return True, total_reward, True, next_anchor
+            gamma_pow *= self._gamma
+        next_anchor = (anchor + self._n_step) % self._capacity
+        if int(self.episodes[next_anchor]) != episode_id:
+            return False, 0.0, False, 0
+        if int(self.frame_ids[next_anchor]) != anchor_frame_id + self._n_step:
+            return False, 0.0, False, 0
+        return True, total_reward, False, next_anchor
+
+    def _refresh_anchors_near(self, end_slot: int) -> None:
+        for offset in range(self._n_step):
+            anchor = (end_slot - offset) % self._capacity
+            ok, _, _, _ = self._evaluate_anchor(anchor)
+            self._set_sampleable(anchor, ok)
+
+    def _write_frame(self, base_obs: np.ndarray, episode_id: int, *, invalidate_prev: bool = False) -> None:
         p = self._write_pos
         if self._size == self._capacity:
-            self._invalidate_slot(p)
+            self._invalidate_slot(p, invalidate_prev=invalidate_prev)
         self.frames[p] = self._encode(base_obs)
         self.episodes[p] = episode_id
+        self.frame_ids[p] = self._next_frame_id
+        self._next_frame_id += 1
         self.valid[p] = False
         self._write_pos = (p + 1) % self._capacity
         self._size = min(self._size + 1, self._capacity)
@@ -225,7 +379,7 @@ class FrameReplayBuffer:
     def start_episode(self, base_obs: np.ndarray) -> None:
         self._episode_id += 1
         self._current_episode = self._episode_id
-        self._write_frame(base_obs, self._current_episode)
+        self._write_frame(base_obs, self._current_episode, invalidate_prev=True)
 
     def add(self, base_obs_next: np.ndarray, action: int, reward: float, done: bool) -> None:
         prev = (self._write_pos - 1) % self._capacity
@@ -235,17 +389,18 @@ class FrameReplayBuffer:
         if not self.valid[prev]:
             self.valid[prev] = True
             self._n_valid += 1
-            if self._priorities is not None:
-                self._priorities[prev] = self._max_priority**self._alpha
         self._write_frame(base_obs_next, self._current_episode)
+        self._refresh_anchors_near(prev)
 
-    def _valid_indices(self) -> np.ndarray:
-        return np.flatnonzero(self.valid)
+    def _sampleable_indices(self) -> np.ndarray:
+        return np.flatnonzero(self.sampleable)
 
     def _stack_index_matrix(self, anchors: np.ndarray, episode_ids: np.ndarray) -> np.ndarray:
         cap = self._capacity
         batch = anchors.shape[0]
         idx_matrix = np.empty((batch, self._frame_stack), dtype=np.intp)
+        anchor_frame_ids = self.frame_ids[anchors]
+        contiguous = np.ones(batch, dtype=bool)
         for lag in range(self._frame_stack):
             raw_idx = (anchors - lag) % cap
             if lag == 0:
@@ -253,19 +408,30 @@ class FrameReplayBuffer:
                 earliest = raw_idx.copy()
             else:
                 same_ep = self.episodes[raw_idx] == episode_ids
-                earliest = np.where(same_ep, raw_idx, earliest)
+                has_history = anchor_frame_ids >= lag
+                expected_ids = np.zeros(batch, dtype=np.uint64)
+                expected_ids[has_history] = anchor_frame_ids[has_history] - lag
+                contiguous &= (
+                    has_history
+                    & same_ep
+                    & (self.frame_ids[raw_idx] == expected_ids)
+                )
+                earliest = np.where(contiguous, raw_idx, earliest)
                 idx_matrix[:, lag] = earliest
         return idx_matrix
 
-    def _reconstruct_stacks(self, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        episode_ids = self.episodes[indices]
-        obs_idx = self._stack_index_matrix(indices, episode_ids)
-        next_anchors = (indices + 1) % self._capacity
+    def _reconstruct_stacks(
+        self, anchors: np.ndarray, next_anchors: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        episode_ids = self.episodes[anchors]
+        obs_idx = self._stack_index_matrix(anchors, episode_ids)
+        if next_anchors is None:
+            next_anchors = (anchors + 1) % self._capacity
         next_idx = self._stack_index_matrix(next_anchors, episode_ids)
 
         obs_raw = self.frames[obs_idx]
         next_raw = self.frames[next_idx]
-        batch = indices.shape[0]
+        batch = anchors.shape[0]
         obs_full = obs_raw.reshape(batch, self._frame_stack * self._base_dim)
         next_full = next_raw.reshape(batch, self._frame_stack * self._base_dim)
         if self._stack_mask is not None:
@@ -273,48 +439,86 @@ class FrameReplayBuffer:
             next_full = next_full[:, self._stack_mask]
         return self._dequantize(obs_full), self._dequantize(next_full)
 
+    def _batch_chain_info(self, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        batch = indices.shape[0]
+        rewards = np.empty(batch, dtype=np.float32)
+        dones = np.empty(batch, dtype=bool)
+        next_anchors = np.empty(batch, dtype=np.intp)
+        for i, anchor in enumerate(indices):
+            ok, total_reward, done, next_anchor = self._evaluate_anchor(int(anchor))
+            if not ok:
+                raise ValueError(f"sampled non-sampleable anchor {anchor}")
+            rewards[i] = total_reward
+            dones[i] = done
+            next_anchors[i] = next_anchor
+        return rewards, dones, next_anchors
+
     def sample(self, batch_size: int, beta: float = 0.4) -> tuple[torch.Tensor, ...]:
-        valid_idx = self._valid_indices()
-        if valid_idx.shape[0] < batch_size:
-            raise ValueError(f"Not enough valid transitions: {valid_idx.shape[0]} < {batch_size}")
-        if self._priorities is not None:
-            priorities = self._priorities[valid_idx]
-            probs = priorities / priorities.sum()
-            choice = np.random.choice(valid_idx.shape[0], size=batch_size, replace=False, p=probs)
-            indices = valid_idx[choice]
-            total = valid_idx.shape[0]
-            weights = (total * probs[choice]) ** (-beta)
+        if self._n_sampleable < batch_size:
+            raise ValueError(
+                f"Not enough sampleable transitions: {self._n_sampleable} < {batch_size}"
+            )
+        if self._sum_tree is not None:
+            indices = self._sum_tree.stratified_sample(batch_size)
+            total = self._n_sampleable
+            probs = np.array([self._sum_tree.get(int(i)) for i in indices], dtype=np.float64)
+            probs /= self._sum_tree.total()
+            weights = (total * probs) ** (-beta)
             weights /= weights.max()
             weights_t = torch.tensor(weights, dtype=torch.float32)
         else:
-            indices = np.random.choice(valid_idx, size=batch_size, replace=False)
+            sampleable_idx = self._sampleable_indices()
+            indices = np.random.choice(sampleable_idx, size=batch_size, replace=False)
             weights_t = None
 
-        obs, next_obs = self._reconstruct_stacks(indices)
+        rewards, dones, next_anchors = self._batch_chain_info(indices)
+        obs, next_obs = self._reconstruct_stacks(indices, next_anchors)
         actions = torch.tensor(self.actions[indices], dtype=torch.int64).unsqueeze(1)
-        rewards = torch.tensor(self.rewards[indices], dtype=torch.float32)
-        dones = torch.tensor(self.dones[indices], dtype=torch.float32)
+        rewards_t = torch.tensor(rewards, dtype=torch.float32)
+        dones_t = torch.tensor(dones, dtype=torch.float32)
         obs_t = torch.tensor(obs, dtype=torch.float32)
         next_obs_t = torch.tensor(next_obs, dtype=torch.float32)
         if weights_t is not None:
-            return obs_t, actions, rewards, next_obs_t, dones, weights_t, indices
-        return obs_t, actions, rewards, next_obs_t, dones
+            return obs_t, actions, rewards_t, next_obs_t, dones_t, weights_t, indices
+        return obs_t, actions, rewards_t, next_obs_t, dones_t
 
     def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
-        if self._priorities is None or self._alpha is None:
+        if self._sum_tree is None or self._alpha is None:
             return
-        priorities = (np.abs(td_errors) + 1e-6) ** self._alpha
-        for idx, p in zip(indices, priorities):
-            self._priorities[idx] = p
-            self._max_priority = max(self._max_priority, float(p))
+        raw = np.abs(td_errors) + 1e-6
+        for idx, priority in zip(indices, raw):
+            slot = int(idx)
+            self._max_priority = max(self._max_priority, float(priority))
+            self._sum_tree.set(slot, float(priority) ** self._alpha)
 
     def sample_obs(self, n: int) -> np.ndarray:
-        valid_idx = self._valid_indices()
-        if valid_idx.shape[0] < n:
-            raise ValueError(f"Not enough valid transitions: {valid_idx.shape[0]} < {n}")
-        indices = np.random.choice(valid_idx, size=n, replace=False)
+        if self._n_sampleable < n:
+            raise ValueError(
+                f"Not enough sampleable transitions: {self._n_sampleable} < {n}"
+            )
+        sampleable_idx = self._sampleable_indices()
+        indices = np.random.choice(sampleable_idx, size=n, replace=False)
         obs, _ = self._reconstruct_stacks(indices)
         return obs
+
+
+@dataclass
+class RolloutEntry:
+    base_obs: np.ndarray
+    stacked_obs: np.ndarray
+    action: int
+    reward: float
+    done: bool
+    info: dict[str, Any]
+    q_max: float | None
+    q_mean: float | None
+
+
+@dataclass
+class RolloutResult:
+    entries: list[RolloutEntry]
+    stopped_reason: str
+    count: int
 
 
 class TurboKartEnv:
@@ -477,6 +681,60 @@ class TurboKartEnv:
         done = bool(result["done"])
         info = dict(result["info"])
         return obs, reward, done, info
+
+    def set_rollout_policy(self, policy: dict[str, Any]) -> None:
+        self.page.evaluate("""(p) => window.rlSetRolloutPolicy(p)""", policy)
+
+    def rollout(
+        self,
+        policy: dict[str, Any] | None,
+        epsilons: list[float],
+        seed: int,
+        *,
+        max_steps: int | None = None,
+        reuse_cached_policy: bool = False,
+    ) -> RolloutResult:
+        if not reuse_cached_policy:
+            if policy is None:
+                raise ValueError("policy is required unless reuse_cached_policy=True")
+            self.set_rollout_policy(policy)
+        config = {
+            "epsilons": [float(e) for e in epsilons],
+            "seed": int(seed) & 0xFFFFFFFF,
+            "maxSteps": int(max_steps if max_steps is not None else len(epsilons)),
+        }
+        result = self.page.evaluate("""(cfg) => window.rlRollout(cfg)""", config)
+        stopped_reason = str(result.get("stoppedReason", ""))
+        if stopped_reason == "alreadyDone":
+            return RolloutResult(entries=[], stopped_reason="alreadyDone", count=0)
+
+        trajectory = result.get("trajectory") or []
+        if not trajectory:
+            raise RuntimeError(f"Unexpected empty rollout (stoppedReason={stopped_reason!r})")
+
+        entries: list[RolloutEntry] = []
+        for item in trajectory:
+            raw_obs = np.asarray(item["obs"], dtype=np.float32)
+            stacked_obs = self._stack_obs(raw_obs)
+            q_max = item.get("qMax")
+            q_mean = item.get("qMean")
+            entries.append(
+                RolloutEntry(
+                    base_obs=raw_obs.copy(),
+                    stacked_obs=stacked_obs,
+                    action=int(item["action"]),
+                    reward=float(item["reward"]),
+                    done=bool(item["done"]),
+                    info=dict(item.get("info", {})),
+                    q_max=float(q_max) if q_max is not None and math.isfinite(q_max) else None,
+                    q_mean=float(q_mean) if q_mean is not None and math.isfinite(q_mean) else None,
+                )
+            )
+        return RolloutResult(
+            entries=entries,
+            stopped_reason=stopped_reason,
+            count=int(result.get("count", len(entries))),
+        )
 
 
 def smoothgrad_attribution(
@@ -820,6 +1078,118 @@ def sample_battle_opponents(
         else:
             classic_slots += 1
     return opponents, classic_slots
+
+
+# --- Battle opponent curriculum -----------------------------------------------
+
+BATTLE_OPPONENT_CURRICULUM_DEFAULT = (
+    "0.00:1,0.10:2,0.20:3,0.35:4,0.50:5,0.65:6,0.80:7,0.90:5|7"
+)
+CURRICULUM_RNG_SALT = 0xC0FFEE01
+
+
+@dataclass(frozen=True)
+class BattleOpponentCurriculumPhase:
+    threshold: float
+    choices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class BattleOpponentCurriculum:
+    phases: tuple[BattleOpponentCurriculumPhase, ...]
+
+    def summary(self) -> str:
+        parts = []
+        for phase in self.phases:
+            if len(phase.choices) == 1:
+                parts.append(f"{phase.threshold:.2f}→{phase.choices[0]}")
+            else:
+                parts.append(f"{phase.threshold:.2f}→{'|'.join(str(c) for c in phase.choices)}")
+        return ", ".join(parts)
+
+
+def _parse_curriculum_choice(raw: str) -> tuple[int, ...]:
+    text = raw.strip()
+    if not text:
+        raise ValueError("empty opponent choice")
+    if "|" in text:
+        parts = [p.strip() for p in text.split("|") if p.strip()]
+        if len(parts) < 2:
+            raise ValueError(f"expected multiple '|'-separated choices, got {raw!r}")
+        choices = tuple(int(p) for p in parts)
+    else:
+        choices = (int(text),)
+    for choice in choices:
+        if not 1 <= choice <= 7:
+            raise ValueError(f"opponent count out of range 1..7: {choice}")
+    return choices
+
+
+def parse_battle_opponent_curriculum(spec: str) -> BattleOpponentCurriculum:
+    """Parse a comma-separated curriculum ``<fraction>:<choice>`` schedule."""
+    text = (spec or "").strip()
+    if not text:
+        raise ValueError("empty battle opponent curriculum")
+    phases: list[BattleOpponentCurriculumPhase] = []
+    prev_threshold: float | None = None
+    for part in text.split(","):
+        piece = part.strip()
+        if not piece or ":" not in piece:
+            raise ValueError(f"malformed curriculum phase: {part!r}")
+        threshold_raw, choice_raw = piece.split(":", 1)
+        try:
+            threshold = float(threshold_raw.strip())
+        except ValueError as exc:
+            raise ValueError(f"invalid curriculum threshold: {threshold_raw!r}") from exc
+        if not 0.0 <= threshold < 1.0:
+            raise ValueError(f"curriculum threshold must be in [0, 1): {threshold}")
+        if prev_threshold is None:
+            if abs(threshold) > 1e-9:
+                raise ValueError("curriculum must begin at threshold 0.00")
+        elif threshold <= prev_threshold:
+            raise ValueError("curriculum thresholds must be strictly increasing")
+        choices = _parse_curriculum_choice(choice_raw)
+        phases.append(BattleOpponentCurriculumPhase(threshold=threshold, choices=choices))
+        prev_threshold = threshold
+    if not phases:
+        raise ValueError("empty battle opponent curriculum")
+    return BattleOpponentCurriculum(phases=tuple(phases))
+
+
+def resolve_battle_opponent_count(
+    schedule: BattleOpponentCurriculum,
+    step: int,
+    total_steps: int,
+    rng: random.Random,
+) -> int:
+    """Resolve opponent count for ``step`` using the greatest threshold <= progress."""
+    if total_steps <= 0:
+        progress = 0.0
+    else:
+        progress = min(1.0, max(0.0, step / total_steps))
+    active = schedule.phases[0]
+    for phase in schedule.phases:
+        if phase.threshold <= progress + 1e-12:
+            active = phase
+        else:
+            break
+    if len(active.choices) == 1:
+        return active.choices[0]
+    return int(rng.choice(active.choices))
+
+
+def should_run_interval(step: int, interval: int) -> bool:
+    """True when ``interval > 0`` and ``step`` is a positive multiple of ``interval``."""
+    return interval > 0 and step > 0 and step % interval == 0
+
+
+def validate_battle_opponents_fixed(value: int | None) -> int | None:
+    if value is None:
+        return None
+    iv = int(value)
+    if not 1 <= iv <= 7:
+        raise ValueError(f"--battle-opponents must be between 1 and 7, got {iv}")
+    return iv
 
 
 # --- Elo rating helpers -------------------------------------------------------
