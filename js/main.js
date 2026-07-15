@@ -51,6 +51,10 @@ import {
 } from "./config/maps.js";
 import { bus } from "./core/events.js";
 import { Sound, registerSoundListeners } from "./audio/sound.js";
+import {
+  serializeKart,
+  applyKartSync,
+} from "./net/sync-schema.js";
 
 /* ============================================================
    AUDIT TRAIL — single-file arcade kart racer
@@ -15402,118 +15406,17 @@ function sendP2pMessage(data) {
 }
 
 function serializeKartState(kart) {
-  if (!kart) return null;
-  return {
-    x: kart.x,
-    y: kart.y,
-    heading: kart.heading,
-    vx: kart.vx,
-    vy: kart.vy,
-    boostTimer: kart.boostTimer,
-    citationBoostTimer: kart.citationBoostTimer || 0,
-    shieldTimer: kart.shieldTimer,
-    doubleBlindTimer: kart.doubleBlindTimer || 0,
-    placeboSlowTimer: kart.placeboSlowTimer || 0,
-    throttleLockTimer: kart.throttleLockTimer || 0,
-    amendmentTimer: kart.amendmentTimer || 0,
-    itemSlot: kart.itemSlot,
-    itemState: kart.itemState,
-    finished: kart.finished,
-    eliminated: !!kart.eliminated,
-    lap: kart.lap,
-    nextCheckpoint: kart.nextCheckpoint,
-    checkpointsThisLap: kart.checkpointsThisLap,
-    finishTime: kart.finishTime,
-    activeQuote: kart.activeQuote,
-    quoteTimer: kart.quoteTimer,
-    spinoutTimer: kart.spinoutTimer,
-    coinsCollected: kart.coinsCollected,
-    mergePullTimer: kart.mergePullTimer || 0,
-    mergePullTargetId: kart.mergePullTargetId || null,
-    ultCharge: kart.ultCharge || 0,
-    ultReady: !!kart.ultReady,
-    ultActiveTimer: kart.ultActiveTimer || 0,
-    ultTier: kart.ultTier || 0,
-    z: kart.z || 0,
-    vz: kart.vz || 0,
-  };
+  return serializeKart(kart, { battle: isBattleMode(), getKartId }, { compact: false });
 }
 
 function applyKartState(kart, p, opts = {}) {
-  if (!kart || !p) return;
-
-  const px = p.x !== undefined ? p.x : p.x;
-  const py = p.y !== undefined ? p.y : p.y;
-  const ph = p.heading !== undefined ? p.heading : p.h;
-  const pvx = p.vx !== undefined ? p.vx : 0;
-  const pvy = p.vy !== undefined ? p.vy : 0;
-  const pFinished = p.finished !== undefined ? p.finished : p.fin;
-  const pElim = p.eliminated !== undefined ? p.eliminated : p.elim;
-
-  const preserveBattleAuthority = !!opts.preserveBattleAuthority;
-  const effectiveFinished = preserveBattleAuthority ? kart.finished : pFinished;
-  const effectiveEliminated = preserveBattleAuthority ? kart.eliminated : pElim;
-  const smooth = !!opts.smooth && !effectiveFinished && !effectiveEliminated;
-  if (smooth && Number.isFinite(kart.x) && Number.isFinite(kart.y)) {
-    const targetX = px + pvx * TUNING.P2P_REMOTE_VELOCITY_LEAD;
-    const targetY = py + pvy * TUNING.P2P_REMOTE_VELOCITY_LEAD;
-    const delta = dist(kart.x, kart.y, targetX, targetY);
-    if (delta > TUNING.P2P_REMOTE_SNAP_DIST) {
-      kart.x = px;
-      kart.y = py;
-      kart.heading = ph;
-    } else {
-      kart.x = lerp(kart.x, targetX, TUNING.P2P_REMOTE_INTERP);
-      kart.y = lerp(kart.y, targetY, TUNING.P2P_REMOTE_INTERP);
-      kart.heading += angleDiff(kart.heading, ph) * TUNING.P2P_REMOTE_INTERP;
-    }
-  } else {
-    kart.x = px;
-    kart.y = py;
-    kart.heading = ph;
-  }
-
-  kart.vx = pvx;
-  kart.vy = pvy;
-  // Compact packets omit z/vz when grounded; old peers never send them.
-  kart.z = Number.isFinite(p.z) ? p.z : 0;
-  kart.vz = Number.isFinite(p.vz) ? p.vz : 0;
-  kart._lastSyncAt = performance.now();
-
-  kart.boostTimer = p.boostTimer ?? p.bt ?? 0;
-  kart.citationBoostTimer = p.citationBoostTimer ?? p.cbt ?? 0;
-  kart.shieldTimer = p.shieldTimer ?? p.st ?? 0;
-  kart.doubleBlindTimer = p.doubleBlindTimer ?? p.dbt ?? 0;
-  kart.placeboSlowTimer = p.placeboSlowTimer ?? p.pst ?? 0;
-  kart.throttleLockTimer = p.throttleLockTimer ?? p.tlt ?? 0;
-  kart.amendmentTimer = p.amendmentTimer ?? p.amt ?? 0;
-  kart.itemSlot = p.itemSlot ?? p.it ?? null;
-  kart.itemState = p.itemState ?? p.is ?? "empty";
-  if (!preserveBattleAuthority) {
-    kart.finished = pFinished || false;
-    if (pElim !== undefined) kart.eliminated = !!pElim;
-  }
-  kart.lap = p.lap;
-  if ((p.nextCheckpoint ?? p.nc) !== undefined) kart.nextCheckpoint = p.nextCheckpoint ?? p.nc;
-  if ((p.checkpointsThisLap ?? p.cl) !== undefined) kart.checkpointsThisLap = p.checkpointsThisLap ?? p.cl;
-  if ((p.finishTime ?? p.ft) !== undefined) kart.finishTime = p.finishTime ?? p.ft;
-  kart.activeQuote = p.activeQuote ?? p.aq ?? null;
-  kart.quoteTimer = p.quoteTimer ?? p.qt ?? 0;
-  const incomingSpinout = p.spinoutTimer ?? p.sp ?? 0;
-  kart.spinoutTimer = preserveBattleAuthority
-    ? Math.max(kart.spinoutTimer || 0, incomingSpinout)
-    : incomingSpinout;
-  kart.coinsCollected = p.coinsCollected ?? p.cc ?? 0;
-  if (!preserveBattleAuthority) {
-    kart.mergePullTimer = p.mergePullTimer ?? p.mp ?? 0;
-    kart.mergePullTargetId = p.mergePullTargetId ?? p.mt ?? null;
-    kart.mergePullTarget = getKartById(kart.mergePullTargetId);
-  }
-  if ((p.ultCharge ?? p.uc) !== undefined) kart.ultCharge = p.ultCharge ?? p.uc ?? 0;
-  if ((p.ultReady ?? p.ur) !== undefined) kart.ultReady = !!(p.ultReady ?? p.ur);
-  if ((p.ultActiveTimer ?? p.ua) !== undefined) kart.ultActiveTimer = p.ultActiveTimer ?? p.ua ?? 0;
-  if ((p.ultTier ?? p.ut) !== undefined) kart.ultTier = p.ultTier ?? p.ut ?? 0;
-  applyBattleCompactFields(kart, p);
+  applyKartSync(kart, p, {
+    ...opts,
+    velocityLead: TUNING.P2P_REMOTE_VELOCITY_LEAD,
+    snapDist: TUNING.P2P_REMOTE_SNAP_DIST,
+    interp: TUNING.P2P_REMOTE_INTERP,
+    resolveKartById: getKartById,
+  });
 }
 
 function applyLocalAuthoritativeEffects(kart, p) {
@@ -15639,50 +15542,7 @@ function applyDragonObjectState(dragon, state) {
 }
 
 function serializeKartCompact(k) {
-  if (!k) return null;
-  const out = {
-    x: Math.round(k.x * 10) / 10,
-    y: Math.round(k.y * 10) / 10,
-    h: Math.round(k.heading * 1000) / 1000,
-    vx: Math.round(k.vx * 100) / 100,
-    vy: Math.round(k.vy * 100) / 100,
-    bt: k.boostTimer > 0 ? k.boostTimer : undefined,
-    st: k.shieldTimer > 0 ? k.shieldTimer : undefined,
-    sp: k.spinoutTimer > 0 ? k.spinoutTimer : undefined,
-    it: k.itemSlot || undefined,
-    is: k.itemState !== "empty" ? k.itemState : undefined,
-    fin: k.finished || undefined,
-    elim: k.eliminated || undefined,
-    lap: k.lap,
-    aq: k.activeQuote || undefined,
-    qt: k.quoteTimer > 0 ? k.quoteTimer : undefined,
-    cc: k.coinsCollected || undefined,
-    mp: k.mergePullTimer > 0 ? k.mergePullTimer : undefined,
-    mt: k.mergePullTargetId || undefined,
-    uc: k.ultCharge > 0 ? Math.round(k.ultCharge) : undefined,
-    ur: k.ultReady || undefined,
-    ua: k.ultActiveTimer > 0 ? k.ultActiveTimer : undefined,
-    ut: k.ultTier > 0 ? k.ultTier : undefined,
-    cbt: k.citationBoostTimer > 0 ? k.citationBoostTimer : undefined,
-    dbt: k.doubleBlindTimer > 0 ? k.doubleBlindTimer : undefined,
-    pst: k.placeboSlowTimer > 0 ? k.placeboSlowTimer : undefined,
-    tlt: k.throttleLockTimer > 0 ? k.throttleLockTimer : undefined,
-    amt: k.amendmentTimer > 0 ? k.amendmentTimer : undefined,
-    nc: k.nextCheckpoint,
-    cl: k.checkpointsThisLap,
-    ft: k.finishTime || undefined,
-    z: (k.z > 0.05) ? Math.round(k.z * 10) / 10 : undefined,
-    vz: (k.vz && Math.abs(k.vz) > 0.05) ? Math.round(k.vz * 100) / 100 : undefined,
-  };
-  if (isBattleMode() || k.approvals !== undefined) {
-    out.ap = k.approvals ?? 0;
-    out.bs = k.battleSteals || 0;
-    out.rg = k.recoverGraceTimer || 0;
-    out.kb = k.killedBy ? getKartId(k.killedBy) : null;
-    out.mp = k.mergePullTimer || 0;
-    out.mt = k.mergePullTargetId || null;
-  }
-  return out;
+  return serializeKart(k, { battle: isBattleMode(), getKartId }, { compact: true });
 }
 
 function serializeHazardCompact(h) {
@@ -17647,6 +17507,7 @@ window.constrainArenaKart = constrainArenaKart;
 window.kartVisualZOffset = kartVisualZOffset;
 window.isGroundHazardImmuneWhenAirborne = isGroundHazardImmuneWhenAirborne;
 window.serializeKartCompact = serializeKartCompact;
+window.serializeKartState = serializeKartState;
 window.applyKartState = applyKartState;
 window.isDayMode = isDayMode;
 window.setTimeOfDay = setTimeOfDay;
