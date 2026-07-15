@@ -1,3 +1,4 @@
+import { screens } from "./ui/screens.js";
 import {
   SETTINGS_STORAGE_KEY,
   RECORDS_STORAGE_KEY,
@@ -112,6 +113,13 @@ const p2pJoinInput = document.getElementById("p2p-join-input");
 const p2pJoinBtn = document.getElementById("p2p-join-btn");
 const p2pJoinStatus = document.getElementById("p2p-join-status");
 const p2pBackBtn = document.getElementById("p2p-back-btn");
+
+screens.register("title", titleScreen);
+screens.register("settings", settingsScreen);
+screens.register("select", selectScreen);
+screens.register("pause", pauseScreen);
+screens.register("finish", finishScreen);
+screens.register("p2p", p2pScreen);
 
 let peer = null;
 let p2pConnections = new Map();
@@ -6875,7 +6883,7 @@ function showSelectScreen() {
     game.tournament = null;
   }
   hideAll();
-  selectScreen.classList.remove("hidden");
+  screens.show("select");
   game.state = STATE.SELECT;
   game.selectedCharIdx = game.selectedCharIdx || 0;
 
@@ -6965,11 +6973,41 @@ function renderApprovalsSelect() {
   });
 }
 
-function buildGrandPrixMapCard({ disabled = false, onSelect } = {}) {
-  const gpCard = document.createElement("div");
-  gpCard.className = "map-card grand-prix-card" + (isGrandPrixSelection() ? " selected" : "");
-  if (disabled) gpCard.classList.add("disabled");
+function buildMapCard({
+  classes = "map-card",
+  preview = "",
+  title,
+  chipsHtml,
+  desc,
+  stat,
+  badge = "",
+  selected = false,
+  disabled = false,
+  onSelect,
+} = {}) {
+  const card = document.createElement("div");
+  card.className = classes + (selected ? " selected" : "");
+  if (disabled) card.classList.add("disabled");
 
+  card.innerHTML = `
+    ${badge}
+    <div class="map-preview">${preview}</div>
+    <div class="map-name">${title}</div>
+    <div class="map-feature-chips">${chipsHtml}</div>
+    <div class="map-desc">${desc}</div>
+    <div class="map-stat">${stat}</div>
+  `;
+
+  if (!disabled && onSelect) {
+    card.addEventListener("click", () => {
+      if (game.p1Locked) return;
+      onSelect();
+    });
+  }
+  return card;
+}
+
+function buildGrandPrixMapCard({ disabled = false, onSelect } = {}) {
   let hostLabelHTML = "";
   if (game.p2pMode && isGrandPrixSelection()) {
     hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
@@ -6981,32 +7019,25 @@ function buildGrandPrixMapCard({ disabled = false, onSelect } = {}) {
     `<span class="feature-chip success">GP POINTS</span>`,
   ].join("");
 
-  gpCard.innerHTML = `
-    ${hostLabelHTML}
-    <div class="map-preview">${getGrandPrixPreviewSvg()}</div>
-    <div class="map-name">Grand Prix</div>
-    <div class="map-feature-chips">${chipsHtml}</div>
-    <div class="map-desc">Rotates through every circuit map in order. Points stack across races — highest total wins the championship.</div>
-    <div class="map-stat">CIRCUITS: ${getGrandPrixCircuitIndices().length} · FORMAT: ${grandPrixRaces}-RACE SERIES</div>
-  `;
-
-  if (!disabled) {
-    gpCard.addEventListener("click", () => {
-      if (game.p1Locked) return;
-      if (onSelect) onSelect();
-    });
-  }
-  return gpCard;
+  return buildMapCard({
+    classes: "map-card grand-prix-card",
+    preview: getGrandPrixPreviewSvg(),
+    title: "Grand Prix",
+    chipsHtml,
+    desc: "Rotates through every circuit map in order. Points stack across races — highest total wins the championship.",
+    stat: `CIRCUITS: ${getGrandPrixCircuitIndices().length} · FORMAT: ${grandPrixRaces}-RACE SERIES`,
+    badge: hostLabelHTML,
+    selected: isGrandPrixSelection(),
+    disabled,
+    onSelect,
+  });
 }
 
 function buildCircuitMapCard(map, idx, { disabled = false, onSelect, targetMode = null } = {}) {
-  const card = document.createElement("div");
   const selectionMode = targetMode || (map.arena ? "battle" : "race");
   const isSelected = selectionMode === "battle"
     ? (isBattleMode() && idx === (game.selectedMapIdx || 0))
     : (!isGrandPrixSelection() && !isBattleMode() && idx === (game.selectedMapIdx || 0));
-  card.className = "map-card" + (isSelected ? " selected" : "");
-  if (disabled) card.classList.add("disabled");
 
   let hostLabelHTML = "";
   if (game.p2pMode && isSelected) {
@@ -7023,22 +7054,18 @@ function buildCircuitMapCard(map, idx, { disabled = false, onSelect, targetMode 
     ? `ARENA: ${map.worldW}x${map.worldH} · BATTLE`
     : `GRID: ${map.worldW}x${map.worldH} · SEGMENTS: ${map.waypoints.length} · 1 RACE`;
 
-  card.innerHTML = `
-    ${hostLabelHTML}
-    <div class="map-preview">${getMapPreviewSvg(map)}</div>
-    <div class="map-name">${map.name}</div>
-    <div class="map-feature-chips">${chipsHtml}</div>
-    <div class="map-desc">${map.desc}</div>
-    <div class="map-stat">${statLabel}</div>
-  `;
-
-  if (!disabled) {
-    card.addEventListener("click", () => {
-      if (game.p1Locked) return;
-      if (onSelect) onSelect(map, idx);
-    });
-  }
-  return card;
+  return buildMapCard({
+    classes: "map-card",
+    preview: getMapPreviewSvg(map),
+    title: map.name,
+    chipsHtml,
+    desc: map.desc,
+    stat: statLabel,
+    badge: hostLabelHTML,
+    selected: isSelected,
+    disabled,
+    onSelect: onSelect ? () => onSelect(map, idx) : undefined,
+  });
 }
 
 function renderP2pDualMapSelect(container) {
@@ -7318,7 +7345,7 @@ function p2pReturnToLobbyLocal(lobbyData = null) {
   game.tournament = null;
   game._pauseFromState = null;
   game.p2pConnectionUnstable = false;
-  pauseScreen.classList.add("hidden");
+  screens.hide("pause");
   if (lobbyData) {
     if (lobbyData.players) game.p2pPlayers = lobbyData.players;
     applyLobbyMapSelection(lobbyData);
@@ -7348,7 +7375,7 @@ function p2pGuestLeaveMatch() {
   Sound.stopAllEngines();
   Sound.stopAllDriftSqueals();
   Sound.stopAllRumbles();
-  pauseScreen.classList.add("hidden");
+  screens.hide("pause");
   handleP2pDisconnect({ silent: true });
 }
 
@@ -8397,7 +8424,7 @@ function update(dt, time) {
     Sound.setMuted(!Sound.muted);
   }
   if (consumePressed("back")) {
-    if (titleScreen.classList.contains("hidden")) {
+    if (!screens.isVisible("title")) {
       showMainMenu();
       return;
     }
@@ -8516,10 +8543,10 @@ function update(dt, time) {
     if (game.state === STATE.RACING || (game.p2pMode && game.state === STATE.COUNTDOWN)) {
       game._pauseFromState = game.state;
       game.state = STATE.PAUSED;
-      pauseScreen.classList.remove("hidden");
+      screens.show("pause");
       updatePauseScreenUi();
     } else if (game.state === STATE.PAUSED) {
-      pauseScreen.classList.add("hidden");
+      screens.hide("pause");
       game.state = game._pauseFromState || STATE.RACING;
       game._pauseFromState = null;
       updatePauseScreenUi();
@@ -14600,16 +14627,11 @@ function showFinishScreen() {
     if (waitHint) waitHint.style.display = isP2pGuest ? "block" : "none";
   }
 
-  finishScreen.classList.remove("hidden");
+  screens.show("finish");
 }
 
 function hideAll() {
-  titleScreen.classList.add("hidden");
-  settingsScreen.classList.add("hidden");
-  selectScreen.classList.add("hidden");
-  pauseScreen.classList.add("hidden");
-  finishScreen.classList.add("hidden");
-  p2pScreen.classList.add("hidden");
+  screens.hideAll();
 }
 
 function showMainMenu() {
@@ -14623,7 +14645,7 @@ function showMainMenu() {
   game.p1Locked = false;
   game.p2Locked = false;
   hideAll();
-  titleScreen.classList.remove("hidden");
+  screens.show("title");
   if (Sound.ctx) Sound.playVocoderTitle();
 }
 
@@ -14677,7 +14699,7 @@ function showSettingsScreen() {
   renderTimeOfDaySettings();
   if (view2dBtn) view2dBtn.classList.toggle("active", game.viewMode !== "3d");
   if (view3dBtn) view3dBtn.classList.toggle("active", game.viewMode === "3d");
-  settingsScreen.classList.remove("hidden");
+  screens.show("settings");
 }
 
 function renderTimeOfDaySettings() {
@@ -14741,7 +14763,7 @@ const promptlyTitleBubble = document.getElementById("promptly-title-bubble");
 const promptlyTitleImg = document.getElementById("promptly-title-img");
 
 function showPromptlyTip() {
-  if (titleScreen.classList.contains("hidden") && game.state !== STATE.TITLE) return;
+  if (!screens.isVisible("title") && game.state !== STATE.TITLE) return;
   if (!promptlyTitleBubble) return;
   promptlyTitleBubble.textContent = PROMPTLY_TIPS[promptlyTipIdx % PROMPTLY_TIPS.length];
   promptlyTipIdx++;
@@ -15068,7 +15090,7 @@ startP2pBtn.addEventListener("click", () => {
   game.tournament = null;
   game.mode = "race";
   hideAll();
-  p2pScreen.classList.remove("hidden");
+  screens.show("p2p");
 });
 
 p2pHostBtn.addEventListener("click", () => {
@@ -15521,7 +15543,7 @@ function applyP2pBattleEnd(data) {
   game.finalRanking = ids.map((id) => getKartById(id)).filter(Boolean);
   game.p2pBattleEndPending = false;
   game._pauseFromState = null;
-  pauseScreen.classList.add("hidden");
+  screens.hide("pause");
   game.state = STATE.FINISHED;
   showFinishScreen();
   bus.emit("race:finished", {});
@@ -15672,7 +15694,7 @@ function handleP2pDisconnect({ silent = false } = {}) {
     Sound.stopAllRumbles();
     game.state = STATE.TITLE;
     hideAll();
-    titleScreen.classList.remove("hidden");
+    screens.show("title");
     if (!silent) alert("Peer disconnected! Returning to menu.");
   }
 }
@@ -15822,7 +15844,7 @@ function handleP2pData(data, sourceConn = null) {
 
   else if (data.type === "tournament_standings") {
     game.tournament = data.tournament;
-    if (!finishScreen.classList.contains("hidden")) {
+    if (screens.isVisible("finish")) {
       showFinishScreen();
     }
   }
@@ -15839,7 +15861,7 @@ function handleP2pData(data, sourceConn = null) {
           // Keep local pause overlay while the online race continues.
         } else if (gs === STATE.FINISHED) {
           game._pauseFromState = null;
-          pauseScreen.classList.add("hidden");
+          screens.hide("pause");
           game.state = STATE.FINISHED;
           if (game.p2pMode && isBattleMode() && game.p2pRole === "guest") {
             game.p2pBattleEndPending = true;
