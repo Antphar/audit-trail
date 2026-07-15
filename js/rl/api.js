@@ -43,7 +43,7 @@ import {
   handleP2pData,
 } from "../net/p2p.js";
 
-/** Symbols still defined in main.js are passed via installTestHooks at boot. */
+import { setTimeOfDay } from "../ui/menus.js";
 let testHooks = {};
 
 export function installTestHooks(hooks = {}) {
@@ -202,6 +202,6 @@ export function installWindowExports() {
   window.serializeKartState = serializeKartState;
   window.applyKartState = applyKartState;
   window.isDayMode = isDayMode;
-  window.setTimeOfDay = testHooks.setTimeOfDay;
+  window.setTimeOfDay = setTimeOfDay;
   window.ellipseNormDist = ellipseNormDist;
 }

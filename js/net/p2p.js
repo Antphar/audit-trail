@@ -521,17 +521,7 @@ export function handleP2pDisconnect({ silent = false } = {}) {
   game.p2Locked = false;
   game.p2pBattleEndPending = false;
 
-  netRuntime.p2pHostStatus.innerText = "Click Create Lobby to generate a code";
-  netRuntime.p2pHostStatus.className = "p2p-status";
-  netRuntime.p2pCodeBox.style.display = "none";
-  netRuntime.p2pMyCode.innerText = "------";
-  netRuntime.p2pHostRoster.innerHTML = "";
-  netRuntime.p2pJoinRoster.innerHTML = "";
-  netRuntime.p2pStartRaceBtn.style.display = "none";
-
-  netRuntime.p2pJoinInput.value = "";
-  netRuntime.p2pJoinStatus.innerText = "Enter code and click Join";
-  netRuntime.p2pJoinStatus.className = "p2p-status";
+  if (netRuntime.resetP2pLobbyDom) netRuntime.resetP2pLobbyDom();
 
   if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED || battleEndPending) {
     Sound.stopAllEngines();
