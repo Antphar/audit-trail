@@ -836,6 +836,26 @@
     overflow-y: auto;
     padding: 2px 6px 8px;
   }
+  .p2p-map-category {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .p2p-map-category .map-select-container {
+    max-height: 22vh;
+  }
+  .p2p-map-category .map-select-title {
+    align-self: flex-start;
+    margin-left: 4px;
+  }
+  #battle-select-section .toggle-btn.disabled,
+  #battle-select-section .toggle-btn:disabled {
+    opacity: 0.45;
+    pointer-events: none;
+  }
   .map-card {
     background: var(--compass-surface);
     border: 1px solid var(--compass-border-subtle);
@@ -873,6 +893,28 @@
     transform: none;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
     border-color: rgba(255, 255, 255, 0.08);
+  }
+  .map-card.grand-prix-card {
+    border-color: rgba(255, 216, 107, 0.42);
+    background: linear-gradient(145deg, rgba(48, 38, 14, 0.94), rgba(27, 23, 38, 0.9));
+    grid-column: 1 / -1;
+    max-width: 100%;
+  }
+  .map-card.grand-prix-card:hover {
+    border-color: rgba(255, 216, 107, 0.62);
+    box-shadow: 0 8px 28px rgba(255, 216, 107, 0.18);
+  }
+  .map-card.grand-prix-card.selected {
+    border-color: #ffd86b;
+    background: linear-gradient(145deg, rgba(56, 44, 12, 0.96), rgba(27, 23, 38, 0.94));
+    box-shadow: 0 0 24px rgba(255, 216, 107, 0.38), inset 0 0 10px rgba(255, 216, 107, 0.1);
+  }
+  .map-card.grand-prix-card .map-preview {
+    background:
+      radial-gradient(circle at 25% 35%, rgba(255, 216, 107, 0.18), transparent 55%),
+      radial-gradient(circle at 75% 65%, rgba(123, 117, 255, 0.12), transparent 50%),
+      rgba(8, 6, 26, 0.2);
+    border-color: rgba(255, 216, 107, 0.28);
   }
   .map-name {
     font-size: 14px;
@@ -1110,12 +1152,11 @@
         <button class="btn toggle-btn" data-laps="5" type="button" style="flex:1;">5</button>
         <button class="btn toggle-btn" data-laps="7" type="button" style="flex:1;">7</button>
       </div>
-      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">Race Series</div>
+      <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">Grand Prix Length</div>
       <div class="settings-group" id="series-group" style="display:flex;gap:8px;margin-bottom:12px;">
-        <button class="btn toggle-btn" data-series="1" type="button" style="flex:1;">Single</button>
-        <button class="btn toggle-btn" data-series="3" type="button" style="flex:1;">3 Races</button>
-        <button class="btn toggle-btn" data-series="5" type="button" style="flex:1;">5 Races</button>
-        <button class="btn toggle-btn" data-series="7" type="button" style="flex:1;">7 Races</button>
+        <button class="btn toggle-btn" data-gp-races="3" type="button" style="flex:1;">3 Races</button>
+        <button class="btn toggle-btn" data-gp-races="5" type="button" style="flex:1;">5 Races</button>
+        <button class="btn toggle-btn" data-gp-races="7" type="button" style="flex:1;">7 Races</button>
       </div>
       <div class="settings-label" style="font-size:11px;opacity:0.7;letter-spacing:1px;margin-bottom:6px;">AI Opponents</div>
       <div id="aicount-group" style="display:flex;gap:8px;margin-bottom:12px;">
@@ -1238,7 +1279,12 @@
   <!-- Pause screen -->
   <div id="pause-screen" class="overlay hidden">
     <div class="title-text" style="font-size: clamp(36px, 6vw, 70px);">Paused</div>
-    <div class="subtitle">Press P to resume</div>
+    <div class="subtitle" id="pause-default-subtitle">Press P to resume</div>
+    <div class="subtitle" id="pause-p2p-subtitle" style="display:none;">Race continues online while paused</div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top: 8px;">
+      <button class="btn btn-alt" id="p2p-cancel-lobby-btn" type="button" style="display:none;">Cancel Race · Back to Lobby</button>
+      <button class="btn btn-alt" id="p2p-leave-match-btn" type="button" style="display:none;">Leave Match</button>
+    </div>
     <div class="hint">Press R to restart · Esc for main menu · M to mute</div>
   </div>
 
@@ -1273,6 +1319,10 @@ const titleScreen = document.getElementById("title-screen");
 const settingsScreen = document.getElementById("settings-screen");
 const selectScreen = document.getElementById("select-screen");
 const pauseScreen = document.getElementById("pause-screen");
+const pauseDefaultSubtitle = document.getElementById("pause-default-subtitle");
+const pauseP2pSubtitle = document.getElementById("pause-p2p-subtitle");
+const p2pCancelLobbyBtn = document.getElementById("p2p-cancel-lobby-btn");
+const p2pLeaveMatchBtn = document.getElementById("p2p-leave-match-btn");
 const finishScreen = document.getElementById("finish-screen");
 const finishResults = document.getElementById("finish-results");
 const finishTitle = document.getElementById("finish-title");
@@ -1348,7 +1398,7 @@ function saveGameSettings(patch = {}) {
       musicVolume: Sound?.musicVolume ?? savedSettings.musicVolume ?? 0.8,
       sfxVolume: Sound?.sfxVolume ?? savedSettings.sfxVolume ?? 1.0,
       totalLaps: typeof TOTAL_LAPS === "number" ? TOTAL_LAPS : (savedSettings.totalLaps ?? 3),
-      seriesRaces: typeof seriesRaces === "number" ? seriesRaces : (savedSettings.seriesRaces ?? 1),
+      grandPrixRaces: typeof grandPrixRaces === "number" ? grandPrixRaces : clampGrandPrixRaces(savedSettings.grandPrixRaces ?? savedSettings.seriesRaces ?? 3),
       aiCount: typeof aiCount === "number" ? aiCount : (savedSettings.aiCount ?? 4),
       aiDifficulty: typeof aiDifficulty === "string" ? aiDifficulty : (savedSettings.aiDifficulty ?? "normal"),
       battleUntimed: !!(game?.battleUntimed ?? savedSettings.battleUntimed),
@@ -2711,7 +2761,10 @@ function updateBattleApprovals() {
 
 // Ends the battle when time runs out or only one kart is left standing.
 function checkBattleEnd() {
-  if (!isBattleMode() || game.state !== STATE.RACING) return;
+  if (!isBattleMode()) return;
+  const simRacing = game.state === STATE.RACING ||
+    (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.RACING);
+  if (!simRacing) return;
   const active = getActiveKarts();
   const alive = active.filter((k) => k && !k.eliminated);
   const timeUp = !isUntimedHumanBattle() && game.battleTimeLeft <= 0;
@@ -3004,6 +3057,72 @@ const COMPASS_VISUAL = Object.freeze({
   floorNightOuter: "#0e1810",
 });
 
+/** Immutable per-map day palettes — O(1) lookup, initialized once. */
+const MAP_DAY_PALETTES = Object.freeze({
+  core_mainframe: Object.freeze({
+    skyTop: "#5eb0ff", skyMid: "#c8e8ff", skyBot: "#b8f0c8",
+    grassTint: "rgba(184, 240, 200, 0.26)", grassGrid: "rgba(123, 117, 255, 0.10)",
+    roadOuterShadow: "rgba(123, 117, 255, 0.22)", roadShadowBlur: 6,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#2a2548",
+    roadNarrowBoundary: "#4db8ff", roadEdgeGlow: "rgba(123, 117, 255, 0.55)",
+    roadFlowMarks: "rgba(123, 117, 255, 0.22)", roadCenterLine: "rgba(123, 117, 255, 0.65)",
+  }),
+  compliance_chicane: Object.freeze({
+    skyTop: "#8a9ad8", skyMid: "#c8d0f0", skyBot: "#b8c8d8",
+    grassTint: "rgba(200, 212, 240, 0.28)", grassGrid: "rgba(157, 77, 255, 0.09)",
+    roadOuterShadow: "rgba(157, 77, 255, 0.20)", roadShadowBlur: 6,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#2c2840",
+    roadNarrowBoundary: "#9d4dff", roadEdgeGlow: "rgba(157, 77, 255, 0.50)",
+    roadFlowMarks: "rgba(157, 77, 255, 0.20)", roadCenterLine: "rgba(123, 117, 255, 0.60)",
+  }),
+  audit_super_ring: Object.freeze({
+    skyTop: "#60d8a0", skyMid: "#b0f0c8", skyBot: "#98e8a8",
+    grassTint: "rgba(164, 255, 128, 0.30)", grassGrid: "rgba(79, 72, 112, 0.08)",
+    roadOuterShadow: "rgba(164, 255, 128, 0.18)", roadShadowBlur: 5,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#283828",
+    roadNarrowBoundary: "#70e8a0", roadEdgeGlow: "rgba(164, 255, 128, 0.48)",
+    roadFlowMarks: "rgba(164, 255, 128, 0.22)", roadCenterLine: "rgba(123, 117, 255, 0.58)",
+  }),
+  black_ice_data_vault: Object.freeze({
+    skyTop: "#8aa8b8", skyMid: "#b8d0e0", skyBot: "#a0b8c8",
+    grassTint: "rgba(176, 220, 240, 0.24)", grassGrid: "rgba(87, 242, 255, 0.09)",
+    roadOuterShadow: "rgba(87, 242, 255, 0.18)", roadShadowBlur: 5,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#283038",
+    roadNarrowBoundary: "#57f2ff", roadEdgeGlow: "rgba(87, 242, 255, 0.45)",
+    roadFlowMarks: "rgba(87, 242, 255, 0.18)", roadCenterLine: "rgba(123, 117, 255, 0.55)",
+  }),
+  regulatory_dragon_run: Object.freeze({
+    skyTop: "#f0c060", skyMid: "#f8e0a8", skyBot: "#e8d0a0",
+    grassTint: "rgba(248, 220, 160, 0.26)", grassGrid: "rgba(253, 153, 39, 0.10)",
+    roadOuterShadow: "rgba(253, 153, 39, 0.20)", roadShadowBlur: 5,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#3a3028",
+    roadNarrowBoundary: "#fd9927", roadEdgeGlow: "rgba(253, 153, 39, 0.48)",
+    roadFlowMarks: "rgba(255, 77, 109, 0.18)", roadCenterLine: "rgba(123, 117, 255, 0.55)",
+  }),
+  protocol_amendment_labyrinth: Object.freeze({
+    skyTop: "#e8d0a0", skyMid: "#f8ecd8", skyBot: "#e0d0b0",
+    grassTint: "rgba(248, 232, 200, 0.28)", grassGrid: "rgba(253, 153, 39, 0.09)",
+    roadOuterShadow: "rgba(253, 153, 39, 0.18)", roadShadowBlur: 5,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#383028",
+    roadNarrowBoundary: "#fd9927", roadEdgeGlow: "rgba(253, 153, 39, 0.45)",
+    roadFlowMarks: "rgba(253, 153, 39, 0.20)", roadCenterLine: "rgba(123, 117, 255, 0.55)",
+  }),
+  dragon_escape: Object.freeze({
+    skyTop: "#a8d8c0", skyMid: "#d8f0d8", skyBot: "#98c8a0",
+    grassTint: "rgba(200, 240, 210, 0.28)", grassGrid: "rgba(80, 140, 90, 0.10)",
+    roadOuterShadow: "rgba(100, 160, 110, 0.18)", roadShadowBlur: 5,
+    roadRumbleA: "#ff4d6d", roadRumbleB: "#a4ff80", roadAsphalt: "#2a3830",
+    roadNarrowBoundary: "#66aa77", roadEdgeGlow: "rgba(100, 170, 120, 0.45)",
+    roadFlowMarks: "rgba(100, 170, 120, 0.18)", roadCenterLine: "rgba(123, 117, 255, 0.52)",
+    mountainLayers: ["rgba(120, 160, 130, 0.10)", "rgba(100, 140, 110, 0.08)", "rgba(80, 120, 90, 0.06)", "rgba(60, 100, 70, 0.04)"],
+    bambooStroke: "rgba(60, 120, 70, 0.28)", glowInner: "rgba(200, 240, 210, 0.06)",
+  }),
+});
+const _MAP_DAY_PALETTE_DEFAULT = MAP_DAY_PALETTES.core_mainframe;
+function getMapDayPalette(mapId) {
+  return MAP_DAY_PALETTES[mapId] || _MAP_DAY_PALETTE_DEFAULT;
+}
+
 const _compassPatternCache = new WeakMap();
 
 function getCompassFloorPattern(ctx, surfaceKey) {
@@ -3014,7 +3133,9 @@ function getCompassFloorPattern(ctx, surfaceKey) {
   }
   if (surfaceMap.has(surfaceKey)) return surfaceMap.get(surfaceKey);
 
-  const [tod, surface] = surfaceKey.split(":");
+  const parts = surfaceKey.split(":");
+  const tod = parts[0];
+  const surface = parts[1];
   const day = tod === "day";
   const tile = surface === "arena" ? 128 : surface === "road" ? 96 : 80;
   const off = document.createElement("canvas");
@@ -3040,8 +3161,9 @@ function getCompassFloorPattern(ctx, surfaceKey) {
     oc.fillStyle = day ? "rgba(164, 255, 128, 0.38)" : "rgba(164, 255, 128, 0.18)";
     oc.beginPath(); oc.arc(tile / 2, tile / 2, 2, 0, TAU); oc.fill();
   } else if (surface === "grass") {
+    const mapPal = day && parts[2] ? getMapDayPalette(parts[2]) : null;
     // Transparent app-shell grid over the existing sky/ground gradient.
-    oc.strokeStyle = day ? "rgba(79, 72, 112, 0.09)" : "rgba(123, 117, 255, 0.06)";
+    oc.strokeStyle = day ? (mapPal?.grassGrid || "rgba(79, 72, 112, 0.09)") : "rgba(123, 117, 255, 0.06)";
     oc.lineWidth = 1;
     oc.beginPath();
     oc.moveTo(0, tile - 0.5);
@@ -3049,7 +3171,7 @@ function getCompassFloorPattern(ctx, surfaceKey) {
     oc.moveTo(tile - 0.5, 0);
     oc.lineTo(tile - 0.5, tile);
     oc.stroke();
-    oc.fillStyle = day ? "rgba(230, 255, 220, 0.24)" : "rgba(235, 228, 255, 0.04)";
+    oc.fillStyle = day ? (mapPal?.grassTint || "rgba(230, 255, 220, 0.24)") : "rgba(235, 228, 255, 0.04)";
     oc.fillRect(0, 0, tile, 2);
   } else {
     // Dense, quiet road material; all detail is baked once into this tile.
@@ -6664,10 +6786,12 @@ function clampLaps(v) {
   if (!Number.isFinite(n)) return 3;
   return Math.max(1, Math.min(7, n));
 }
-function clampSeries(v) {
+const GRAND_PRIX_ID = "grand_prix";
+
+function clampGrandPrixRaces(v) {
   const n = Math.round(Number(v));
   if (n === 3 || n === 5 || n === 7) return n;
-  return 1;
+  return 3;
 }
 function clampAiCount(v) {
   const n = Math.round(Number(v));
@@ -6691,13 +6815,241 @@ function isArenaMap(mapOrIdx) {
 function ensureSelectedMapMatchesMode() {
   const wantsArena = isBattleMode();
   const current = MAPS[game.selectedMapIdx];
-  if (current && !!current.arena === wantsArena) return game.selectedMapIdx;
+  if (current && !!current.arena === wantsArena) {
+    if (!wantsArena && game.mapSelection === GRAND_PRIX_ID) return game.selectedMapIdx;
+    if (game.mapSelection !== GRAND_PRIX_ID) game.mapSelection = current.id;
+    return game.selectedMapIdx;
+  }
 
   const fallbackIdx = wantsArena
     ? getArenaMapIdx()
     : MAPS.findIndex((map) => !map.arena);
   game.selectedMapIdx = fallbackIdx >= 0 ? fallbackIdx : 0;
+  game.mapSelection = MAPS[game.selectedMapIdx].id;
   return game.selectedMapIdx;
+}
+
+function getGrandPrixCircuitIndices() {
+  const indices = [];
+  for (let i = 0; i < MAPS.length; i++) {
+    const m = MAPS[i];
+    if (!m.arena && m.id !== "dragon_escape") indices.push(i);
+  }
+  return indices;
+}
+
+function getDefaultCircuitMapIdx() {
+  const circuits = getGrandPrixCircuitIndices();
+  return circuits.length ? circuits[0] : 0;
+}
+
+function isGrandPrixSelection() {
+  return game.mapSelection === GRAND_PRIX_ID;
+}
+
+function isGrandPrixActive(t = game.tournament) {
+  return !!(t && t.format === "grand_prix" && t.totalRaces > 1);
+}
+
+function shouldShowGrandPrixCard() {
+  return !isBattleMode() && (!game.multiplayer || game.p2pMode);
+}
+
+function createGrandPrixTournament(totalRaces = grandPrixRaces) {
+  const circuits = getGrandPrixCircuitIndices();
+  const safeTotal = clampGrandPrixRaces(totalRaces);
+  const circuitOrder = [];
+  for (let i = 0; i < safeTotal; i++) {
+    circuitOrder.push(circuits[i % circuits.length]);
+  }
+  return {
+    format: "grand_prix",
+    totalRaces: safeTotal,
+    raceIndex: 0,
+    standings: [],
+    circuitOrder,
+  };
+}
+
+function selectGrandPrixMap() {
+  game.mapSelection = GRAND_PRIX_ID;
+  game.tournament = null;
+  game.selectedMapIdx = getDefaultCircuitMapIdx();
+}
+
+function selectCircuitMap(idx) {
+  const map = MAPS[idx];
+  if (!map) return;
+  game.mapSelection = map.id;
+  game.selectedMapIdx = idx;
+  game.tournament = null;
+}
+
+function syncMapSelectionFromIdx(mapIdx) {
+  const map = MAPS[mapIdx];
+  if (map) game.mapSelection = map.id;
+}
+
+function sanitizeP2pLobbyMode(mode) {
+  return mode === "battle" ? "battle" : "race";
+}
+
+function isP2pBattleGuest() {
+  return !!(game.p2pMode && isBattleMode() && game.p2pRole === "guest");
+}
+
+function isP2pBattleHost() {
+  return !!(game.p2pMode && isBattleMode() && game.p2pRole === "host");
+}
+
+function canResolveBattleCombat() {
+  return !isP2pBattleGuest();
+}
+
+function resetP2pReadyForLobbyChange() {
+  if (!game.p2pMode) return;
+  for (const p of (game.p2pPlayers || [])) p.locked = false;
+  game.p1Locked = false;
+  game.p2Locked = false;
+  syncP2pSelectionFromRoster({ preserveLocal: true });
+  if (game.p2pRole === "host") broadcastP2pLobby();
+  updateSelectionHighlight();
+  updateP2pStartButton();
+}
+
+function selectArenaMap(idx) {
+  const map = MAPS[idx];
+  if (!map || !map.arena) return;
+  game.mode = "battle";
+  game.mapSelection = map.id;
+  game.selectedMapIdx = idx;
+  game.tournament = null;
+}
+
+function selectP2pMap({ mapIdx, mapSelection, mode } = {}) {
+  if (game.p1Locked && game.p2pRole === "host") return;
+  const nextMode = sanitizeP2pLobbyMode(mode);
+  game.mode = nextMode;
+  if (nextMode === "battle") {
+    game.tournament = null;
+    if (mapIdx !== undefined) selectArenaMap(mapIdx);
+  } else if (mapSelection === GRAND_PRIX_ID) {
+    selectGrandPrixMap();
+  } else if (mapIdx !== undefined) {
+    selectCircuitMap(mapIdx);
+  }
+  ensureSelectedMapMatchesMode();
+  resetP2pReadyForLobbyChange();
+  const selectedMap = MAPS[game.selectedMapIdx || 0];
+  if (selectedMap) previewSelectedMapMusic(selectedMap);
+  renderMapSelect();
+  renderAiModelSelector();
+  updateDriveButtonLabel();
+  updateP2pBattleLobbyUi();
+  Sound.tone(nextMode === "battle" ? 700 : 520, 0.08, "sine", 0.15);
+}
+
+function updateP2pBattleLobbyUi() {
+  const battleSection = document.getElementById("battle-select-section");
+  const showBattleRules = isBattleMode() || (game.p2pMode && isArenaMap(game.selectedMapIdx));
+  if (battleSection) battleSection.style.display = showBattleRules ? "flex" : "none";
+  if (showBattleRules) renderApprovalsSelect();
+  const isGuest = game.p2pMode && game.p2pRole === "guest";
+  if (battleSection) {
+    battleSection.querySelectorAll("button").forEach((b) => {
+      b.disabled = isGuest;
+      b.classList.toggle("disabled", isGuest);
+    });
+  }
+  if (game.p2pMode) {
+    const subtitle = document.getElementById("lobby-subtitle");
+    const hint = document.getElementById("lobby-hint");
+    if (subtitle) {
+      subtitle.innerText = game.p2pRole === "host"
+        ? "Online Lobby: Pick Mode, Map & Coder"
+        : "Online Lobby: Host Picks Mode & Map · Pick Your Coder";
+    }
+    if (hint) {
+      hint.innerText = game.p2pRole === "host"
+        ? "Host picks mode/map/rules · Everyone picks coder · Space/Enter to ready"
+        : "Host picks mode/map/rules · Pick coder · Space/Enter to ready";
+    }
+  }
+}
+
+function applyLobbyMapSelection(data = {}) {
+  if (data.mode !== undefined) game.mode = sanitizeP2pLobbyMode(data.mode);
+  if (data.battleApprovals !== undefined) game.battleApprovals = clampApprovals(data.battleApprovals);
+  if (data.battleUntimed !== undefined) game.battleUntimed = !!data.battleUntimed;
+  if (data.mapIdx !== undefined) game.selectedMapIdx = data.mapIdx;
+  if (data.mapSelection !== undefined) {
+    game.mapSelection = data.mapSelection;
+  } else if (data.mapIdx !== undefined) {
+    syncMapSelectionFromIdx(data.mapIdx);
+  }
+  if (data.grandPrixRaces !== undefined) grandPrixRaces = clampGrandPrixRaces(data.grandPrixRaces);
+  ensureSelectedMapMatchesMode();
+  if (isBattleMode()) game.tournament = null;
+  if (game.state === STATE.SELECT || !isGrandPrixSelection()) game.tournament = null;
+}
+
+function prepareRaceFormatFromSelection() {
+  if (!isGrandPrixSelection()) {
+    game.tournament = null;
+    return;
+  }
+  if (!game.tournament || game.tournament.format !== "grand_prix") {
+    game.tournament = createGrandPrixTournament(grandPrixRaces);
+  }
+  const order = game.tournament.circuitOrder || [];
+  game.selectedMapIdx = order[game.tournament.raceIndex] ?? getDefaultCircuitMapIdx();
+  game.mapSelection = GRAND_PRIX_ID;
+}
+
+function getTournamentRaceMapIdx(tournament) {
+  if (tournament?.format === "grand_prix" && Array.isArray(tournament.circuitOrder) && tournament.circuitOrder.length) {
+    return tournament.circuitOrder[tournament.raceIndex] ?? tournament.circuitOrder[0];
+  }
+  return getNextCircuitMapIdx(game.selectedMapIdx || 0);
+}
+
+function getRaceStartButtonLabel({ p2pHost = false, allReady = true, readyCount = 0, totalPlayers = 0 } = {}) {
+  if (p2pHost) {
+    if (!allReady) return `Waiting (${readyCount}/${totalPlayers})`;
+    if (isBattleMode()) return "Start Online Battle";
+    return isGrandPrixSelection() ? "Start Grand Prix" : "Start Online Race";
+  }
+  if (isBattleMode()) return "Battle!";
+  return isGrandPrixSelection() ? "Start Grand Prix" : "Drive!";
+}
+
+function getGrandPrixPreviewSvg() {
+  const colors = ["#57f2ff", "#fd9927", "#a4ff80", "#bd57ff"];
+  let tracks = "";
+  for (let i = 0; i < 4; i++) {
+    const x = 24 + i * 36;
+    const y = 30 + (i % 2) * 7;
+    tracks += `<ellipse cx="${x}" cy="${y}" rx="13" ry="8" fill="none" stroke="${colors[i]}" stroke-width="2" opacity="0.75"/>`;
+  }
+  return `
+    <svg viewBox="0 0 180 70" aria-hidden="true" focusable="false">
+      <g opacity="0.9">${tracks}</g>
+      <path d="M90 6 L97 22 L114 24 L101 36 L105 54 L90 45 L75 54 L79 36 L66 24 L83 22 Z" fill="#ffd86b" stroke="#c9a830" stroke-width="1.4"/>
+      <rect x="84" y="40" width="12" height="10" rx="2" fill="#c9a830"/>
+    </svg>
+  `;
+}
+
+function getP2pLobbyMapPayload() {
+  return {
+    mode: isBattleMode() ? "battle" : "race",
+    battleApprovals: clampApprovals(game.battleApprovals),
+    battleUntimed: !!game.battleUntimed,
+    mapIdx: game.selectedMapIdx,
+    mapSelection: game.mapSelection,
+    grandPrixRaces,
+    trackIdx: Sound.trackIdx,
+  };
 }
 function normalizeTimeOfDay(v) {
   return v === "night" ? "night" : "day";
@@ -6921,7 +7273,7 @@ function qualifiesApprovalRam(att, def, dirx, diry) {
 }
 
 let TOTAL_LAPS = clampLaps(savedSettings.totalLaps ?? 3);
-let seriesRaces = clampSeries(savedSettings.seriesRaces ?? 1);
+let grandPrixRaces = clampGrandPrixRaces(savedSettings.grandPrixRaces ?? savedSettings.seriesRaces ?? 3);
 let aiCount = clampAiCount(savedSettings.aiCount ?? 4);
 let aiDifficulty = normalizeAiDifficulty(savedSettings.aiDifficulty);
 const CHECKPOINT_RADIUS = 80;
@@ -7604,30 +7956,34 @@ class Track {
     // Grass background tile
     this._drawGrass(ctx);
 
+    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const day = isDayMode();
+    const dayPal = day ? getMapDayPalette(mapId) : null;
+
     // Road Outer Shadow
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    ctx.strokeStyle = "rgba(123, 117, 255, 0.15)";
+    ctx.strokeStyle = dayPal ? dayPal.roadOuterShadow : "rgba(123, 117, 255, 0.15)";
     ctx.lineWidth = (this.halfWidth + 18) * 2;
-    ctx.shadowColor = "#7b75ff";
-    ctx.shadowBlur = 10;
+    ctx.shadowColor = dayPal ? COMPASS_VISUAL.primary : "#7b75ff";
+    ctx.shadowBlur = dayPal ? dayPal.roadShadowBlur : 10;
     this.drawPath(ctx); ctx.stroke();
     ctx.shadowBlur = 0;
 
     // Rumble strip — alternating neon Pink (#ff4d6d) and Mint Green (#a4ff80)
-    ctx.strokeStyle = "#ff4d6d";
+    ctx.strokeStyle = dayPal ? dayPal.roadRumbleA : "#ff4d6d";
     ctx.lineWidth = (this.halfWidth + 5) * 2;
     ctx.setLineDash([30, 30]);
     ctx.lineDashOffset = -((time * 0.04) % 60);
     this.drawPath(ctx); ctx.stroke();
 
-    ctx.strokeStyle = "#a4ff80";
+    ctx.strokeStyle = dayPal ? dayPal.roadRumbleB : "#a4ff80";
     ctx.lineDashOffset = -((time * 0.04) % 60) + 30;
     this.drawPath(ctx); ctx.stroke();
     ctx.setLineDash([]);
 
     // Asphalt (Deep indigo mainframe circuit)
-    ctx.strokeStyle = "#0d0b21";
+    ctx.strokeStyle = dayPal ? dayPal.roadAsphalt : "#0d0b21";
     ctx.lineWidth = this.halfWidth * 2;
     this.drawPath(ctx); ctx.stroke();
 
@@ -7635,13 +7991,13 @@ class Track {
     for (let i = 0; i < this.segments.length; i++) {
       const s = this.segments[i];
       if (s && s.halfW < this.halfWidth * 0.95) {
-        ctx.strokeStyle = "#0d0b21";
+        ctx.strokeStyle = dayPal ? dayPal.roadAsphalt : "#0d0b21";
         ctx.lineWidth = s.halfW * 2;
         ctx.beginPath();
         ctx.moveTo(s.a.x, s.a.y); ctx.lineTo(s.b.x, s.b.y); ctx.stroke();
 
         // Wall edges where it's narrow - neon cyan boundary lines
-        ctx.strokeStyle = "#00e5ff";
+        ctx.strokeStyle = dayPal ? dayPal.roadNarrowBoundary : "#00e5ff";
         ctx.lineWidth = (s.halfW + 2) * 2;
         ctx.globalCompositeOperation = "destination-over";
         ctx.beginPath();
@@ -7651,14 +8007,14 @@ class Track {
     }
 
     // Glowing cyan edges for the main highway
-    ctx.strokeStyle = "#7b75ff";
+    ctx.strokeStyle = dayPal ? dayPal.roadEdgeGlow : "#7b75ff";
     ctx.lineWidth = (this.halfWidth + 1) * 2;
     ctx.globalCompositeOperation = "destination-over";
     this.drawPath(ctx); ctx.stroke();
     ctx.globalCompositeOperation = "source-over";
 
     // Scrolling flowing lane speed-arrows on road surface
-    ctx.strokeStyle = "rgba(0, 229, 255, 0.15)";
+    ctx.strokeStyle = dayPal ? dayPal.roadFlowMarks : "rgba(0, 229, 255, 0.15)";
     ctx.lineWidth = 2;
     ctx.setLineDash([12, 48]);
     ctx.lineDashOffset = -((time * 0.08) % 60);
@@ -7666,7 +8022,7 @@ class Track {
     ctx.setLineDash([]);
 
     // Center dashed line (neon purple)
-    ctx.strokeStyle = "rgba(123, 117, 255, 0.5)";
+    ctx.strokeStyle = dayPal ? dayPal.roadCenterLine : "rgba(123, 117, 255, 0.5)";
     ctx.lineWidth = 4;
     ctx.setLineDash([24, 32]);
     this.drawPath(ctx); ctx.stroke();
@@ -8038,6 +8394,8 @@ class Track {
   _drawGrass(ctx) {
     const mapId = MAPS[game.selectedMapIdx || 0].id;
     const isDragon = mapId === "dragon_escape";
+    const day = isDayMode();
+    const dayPal = day ? getMapDayPalette(mapId) : null;
 
     // Approx visible world X range from context transform (for huge world culling)
     let minX = -500, maxX = WORLD_W + 500;
@@ -8055,62 +8413,109 @@ class Track {
     }
 
     if (isDragon) {
-      // Japanese highland dusk scene
-      const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
-      grad.addColorStop(0, "#1a0c0c");
-      grad.addColorStop(0.4, "#2d1810");
-      grad.addColorStop(1, "#0d1a10");
-      ctx.fillStyle = grad;
-      ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+      if (day && dayPal) {
+        // Morning-mist green highlands (day)
+        const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+        grad.addColorStop(0, dayPal.skyTop);
+        grad.addColorStop(0.45, dayPal.skyMid);
+        grad.addColorStop(1, dayPal.skyBot);
+        ctx.fillStyle = grad;
+        ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
 
-      // Far misty mountains (multiple layers) — capped to visible range
-      for (let m = 0; m < 4; m++) {
-        const mh = 150 + m * 50;
-        const my = WORLD_H * 0.2 + m * 120;
-        const alpha = 0.06 - m * 0.01;
-        ctx.fillStyle = `rgba(${60 + m * 20}, ${30 + m * 10}, ${20 + m * 5}, ${alpha})`;
-        ctx.beginPath();
-        ctx.moveTo(minX, my + mh);
-        for (let x = minX; x <= maxX + 60; x += 60) {
-          ctx.lineTo(x, my + mh - Math.sin((x + m * 200) * 0.003) * mh * 0.4 - Math.abs(Math.sin((x + m * 300) * 0.001)) * mh * 0.3);
+        const layers = dayPal.mountainLayers || [];
+        for (let m = 0; m < layers.length; m++) {
+          const mh = 140 + m * 45;
+          const my = WORLD_H * 0.18 + m * 110;
+          ctx.fillStyle = layers[m];
+          ctx.beginPath();
+          ctx.moveTo(minX, my + mh);
+          for (let x = minX; x <= maxX + 60; x += 60) {
+            ctx.lineTo(x, my + mh - Math.sin((x + m * 200) * 0.003) * mh * 0.38 - Math.abs(Math.sin((x + m * 300) * 0.001)) * mh * 0.28);
+          }
+          ctx.lineTo(maxX + 500, WORLD_H + 500);
+          ctx.lineTo(minX, WORLD_H + 500);
+          ctx.closePath();
+          ctx.fill();
         }
-        ctx.lineTo(maxX + 500, WORLD_H + 500);
-        ctx.lineTo(minX, WORLD_H + 500);
-        ctx.closePath();
-        ctx.fill();
-      }
 
-      // Bamboo / grass swaying on edges — capped
-      ctx.strokeStyle = "rgba(20, 50, 20, 0.2)";
-      ctx.lineWidth = 1.5;
-      const grassStart = Math.max(0, Math.floor(minX / 40) * 40);
-      const grassEnd   = Math.min(WORLD_W, Math.ceil(maxX / 40) * 40);
-      for (let i = grassStart; i < grassEnd; i += 40) {
-        const h = 20 + Math.sin(i * 0.05) * 15;
-        const sway = Math.sin(i * 0.02 + performance.now() * 0.0005) * 5;
-        ctx.beginPath();
-        ctx.moveTo(i, WORLD_H * 0.45);
-        ctx.quadraticCurveTo(i + sway, WORLD_H * 0.45 - h * 0.5, i + sway * 0.3, WORLD_H * 0.45 - h);
-        ctx.stroke();
-      }
+        ctx.strokeStyle = dayPal.bambooStroke || "rgba(60, 120, 70, 0.28)";
+        ctx.lineWidth = 1.5;
+        const grassStart = Math.max(0, Math.floor(minX / 40) * 40);
+        const grassEnd   = Math.min(WORLD_W, Math.ceil(maxX / 40) * 40);
+        for (let i = grassStart; i < grassEnd; i += 40) {
+          const h = 22 + Math.sin(i * 0.05) * 14;
+          const sway = Math.sin(i * 0.02 + performance.now() * 0.0005) * 4;
+          ctx.beginPath();
+          ctx.moveTo(i, WORLD_H * 0.45);
+          ctx.quadraticCurveTo(i + sway, WORLD_H * 0.45 - h * 0.5, i + sway * 0.3, WORLD_H * 0.45 - h);
+          ctx.stroke();
+        }
 
-      // Subtle radial glow centered on track
-      const centerX = WORLD_W / 2;
-      const centerY = WORLD_H / 2;
-      const glowR = Math.min(WORLD_W * 0.7, 3000);
-      const glow = ctx.createRadialGradient(centerX, centerY, 100, centerX, centerY, glowR);
-      glow.addColorStop(0, "rgba(255, 80, 20, 0.04)");
-      glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-      ctx.fillStyle = glow;
-      ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+        const centerX = WORLD_W / 2;
+        const centerY = WORLD_H / 2;
+        const glowR = Math.min(WORLD_W * 0.7, 3000);
+        const glow = ctx.createRadialGradient(centerX, centerY, 100, centerX, centerY, glowR);
+        glow.addColorStop(0, dayPal.glowInner || "rgba(200, 240, 210, 0.06)");
+        glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+      } else {
+        // Japanese highland dusk scene (night — unchanged)
+        const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
+        grad.addColorStop(0, "#1a0c0c");
+        grad.addColorStop(0.4, "#2d1810");
+        grad.addColorStop(1, "#0d1a10");
+        ctx.fillStyle = grad;
+        ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+
+        // Far misty mountains (multiple layers) — capped to visible range
+        for (let m = 0; m < 4; m++) {
+          const mh = 150 + m * 50;
+          const my = WORLD_H * 0.2 + m * 120;
+          const alpha = 0.06 - m * 0.01;
+          ctx.fillStyle = `rgba(${60 + m * 20}, ${30 + m * 10}, ${20 + m * 5}, ${alpha})`;
+          ctx.beginPath();
+          ctx.moveTo(minX, my + mh);
+          for (let x = minX; x <= maxX + 60; x += 60) {
+            ctx.lineTo(x, my + mh - Math.sin((x + m * 200) * 0.003) * mh * 0.4 - Math.abs(Math.sin((x + m * 300) * 0.001)) * mh * 0.3);
+          }
+          ctx.lineTo(maxX + 500, WORLD_H + 500);
+          ctx.lineTo(minX, WORLD_H + 500);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        // Bamboo / grass swaying on edges — capped
+        ctx.strokeStyle = "rgba(20, 50, 20, 0.2)";
+        ctx.lineWidth = 1.5;
+        const grassStart = Math.max(0, Math.floor(minX / 40) * 40);
+        const grassEnd   = Math.min(WORLD_W, Math.ceil(maxX / 40) * 40);
+        for (let i = grassStart; i < grassEnd; i += 40) {
+          const h = 20 + Math.sin(i * 0.05) * 15;
+          const sway = Math.sin(i * 0.02 + performance.now() * 0.0005) * 5;
+          ctx.beginPath();
+          ctx.moveTo(i, WORLD_H * 0.45);
+          ctx.quadraticCurveTo(i + sway, WORLD_H * 0.45 - h * 0.5, i + sway * 0.3, WORLD_H * 0.45 - h);
+          ctx.stroke();
+        }
+
+        // Subtle radial glow centered on track
+        const centerX = WORLD_W / 2;
+        const centerY = WORLD_H / 2;
+        const glowR = Math.min(WORLD_W * 0.7, 3000);
+        const glow = ctx.createRadialGradient(centerX, centerY, 100, centerX, centerY, glowR);
+        glow.addColorStop(0, "rgba(255, 80, 20, 0.04)");
+        glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+        ctx.fillStyle = glow;
+        ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
+      }
     } else {
-      const day = isDayMode();
       const todKey = day ? "day" : "night";
       const grad = ctx.createLinearGradient(0, 0, 0, WORLD_H);
-      if (day) {
-        grad.addColorStop(0, COMPASS_VISUAL.skyDayTop);
-        grad.addColorStop(0.5, COMPASS_VISUAL.skyDayMid);
-        grad.addColorStop(1, "#8ec49a");
+      if (day && dayPal) {
+        grad.addColorStop(0, dayPal.skyTop);
+        grad.addColorStop(0.5, dayPal.skyMid);
+        grad.addColorStop(1, dayPal.skyBot);
       } else {
         grad.addColorStop(0, COMPASS_VISUAL.skyNightTop);
         grad.addColorStop(1, COMPASS_VISUAL.skyNightBot);
@@ -8118,7 +8523,8 @@ class Track {
       ctx.fillStyle = grad;
       ctx.fillRect(-500, -500, WORLD_W + 1000, WORLD_H + 1000);
 
-      const grassPattern = getCompassFloorPattern(ctx, `${todKey}:grass`);
+      const grassKey = day ? `${todKey}:grass:${mapId}` : `${todKey}:grass`;
+      const grassPattern = getCompassFloorPattern(ctx, grassKey);
       if (grassPattern) {
         ctx.fillStyle = grassPattern;
         ctx.fillRect(minX, -500, maxX - minX + 1000, WORLD_H + 1000);
@@ -8128,6 +8534,7 @@ class Track {
 
   _drawDecor(ctx) {
     const time = performance.now();
+    const day = isDayMode();
     for (const p of this.decorations) {
       const pulse = 0.85 + 0.15 * Math.sin(time * 0.003 + p.pulseOffset);
       const h = p.h * pulse;
@@ -8210,9 +8617,9 @@ class Track {
         }
       } else {
         // Default cyberpunk pillar
-        ctx.shadowBlur = 15 * pulse;
+        ctx.shadowBlur = day ? 8 * pulse : 15 * pulse;
         ctx.shadowColor = p.color;
-        ctx.fillStyle = hexToRgba(p.color, 0.15);
+        ctx.fillStyle = hexToRgba(p.color, day ? 0.10 : 0.15);
         ctx.strokeStyle = p.color;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
@@ -8225,14 +8632,14 @@ class Track {
         ctx.fill();
         ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(255,255,255,0.7)";
+        ctx.strokeStyle = day ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.7)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(0, -h);
         ctx.stroke();
-        ctx.fillStyle = "#ffffff";
-        ctx.shadowBlur = 10;
+        ctx.fillStyle = day ? hexToRgba("#ffffff", 0.85) : "#ffffff";
+        ctx.shadowBlur = day ? 4 : 10;
         ctx.shadowColor = p.color;
         ctx.beginPath();
         ctx.arc(0, -h, p.r * 0.35, 0, TAU);
@@ -8245,6 +8652,7 @@ class Track {
   _drawStartLine(ctx) {
     const gate = this.startLineGate();
     if (!gate) return;
+    const day = isDayMode();
     const px = gate.x;
     const py = gate.y;
     const ang = Math.atan2(gate.uy, gate.ux);
@@ -8254,16 +8662,16 @@ class Track {
     ctx.rotate(ang);
 
     // Digital glassmorphic road base band
-    ctx.fillStyle = "rgba(123, 117, 255, 0.35)";
+    ctx.fillStyle = day ? "rgba(123, 117, 255, 0.22)" : "rgba(123, 117, 255, 0.35)";
     ctx.fillRect(-12, -halfW, 24, halfW * 2);
 
     // White / Cyan cyber checker
     const tiles = 12;
     const tileH = (halfW * 2) / tiles;
     for (let i = 0; i < tiles; i++) {
-      ctx.fillStyle = i % 2 === 0 ? "#111" : "#7b75ff";
+      ctx.fillStyle = i % 2 === 0 ? (day ? "#2a2840" : "#111") : "#7b75ff";
       ctx.fillRect(-12, -halfW + i * tileH, 12, tileH);
-      ctx.fillStyle = i % 2 === 0 ? "#7b75ff" : "#111";
+      ctx.fillStyle = i % 2 === 0 ? "#7b75ff" : (day ? "#2a2840" : "#111");
       ctx.fillRect(0, -halfW + i * tileH, 12, tileH);
     }
 
@@ -8271,10 +8679,10 @@ class Track {
     for (const side of [-1, 1]) {
       ctx.save();
       ctx.translate(0, side * (halfW + 15));
-      ctx.fillStyle = "#0d0b21";
+      ctx.fillStyle = day ? "#2a2548" : "#0d0b21";
       ctx.strokeStyle = "#7b75ff";
       ctx.lineWidth = 3;
-      ctx.shadowBlur = 10;
+      ctx.shadowBlur = day ? 4 : 10;
       ctx.shadowColor = "#7b75ff";
       ctx.fillRect(-8, -8, 16, 16);
       ctx.strokeRect(-8, -8, 16, 16);
@@ -8282,9 +8690,9 @@ class Track {
     }
 
     // Glassmorphic Overarching Sign Banner
-    ctx.shadowBlur = 15;
+    ctx.shadowBlur = day ? 6 : 15;
     ctx.shadowColor = "#7b75ff";
-    ctx.fillStyle = "rgba(6, 5, 20, 0.85)";
+    ctx.fillStyle = day ? "rgba(42, 37, 72, 0.72)" : "rgba(6, 5, 20, 0.85)";
     ctx.strokeStyle = "#7b75ff";
     ctx.lineWidth = 2.5;
     ctx.fillRect(-90, -halfW - 32, 180, 24);
@@ -9373,8 +9781,10 @@ class Kart {
       const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
       const dropX = this.x - fx * 32;
       const dropY = this.y - fy * 32;
-      const h = new MergeConflict(dropX, dropY, this);
-      game.hazards.push(h);
+      if (!isP2pBattleGuest()) {
+        const h = new MergeConflict(dropX, dropY, this);
+        game.hazards.push(h);
+      }
       if (game.p2pMode && game.p2pRole === "guest") {
         sendP2pMessage({
           type: "drop_conflict",
@@ -9387,7 +9797,7 @@ class Kart {
       const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
       const dropX = this.x - fx * 34;
       const dropY = this.y - fy * 34;
-      game.hazards.push(new PlaceboPill(dropX, dropY, this));
+      if (!isP2pBattleGuest()) game.hazards.push(new PlaceboPill(dropX, dropY, this));
       if (game.p2pMode && game.p2pRole === "guest") {
         sendP2pMessage({
           type: "drop_placebo",
@@ -9397,7 +9807,7 @@ class Kart {
         });
       }
     } else if (type === "doubleblind") {
-      game.hazards.push(new DoubleBlindCloud(this.x, this.y, this.heading, this));
+      if (!isP2pBattleGuest()) game.hazards.push(new DoubleBlindCloud(this.x, this.y, this.heading, this));
       if (game.p2pMode && game.p2pRole === "guest") {
         sendP2pMessage({
           type: "double_blind_cloud",
@@ -9411,8 +9821,10 @@ class Kart {
       const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
       const spawnX = this.x + fx * 32;
       const spawnY = this.y + fy * 32;
-      const d = new DossierProjectile(spawnX, spawnY, this.heading, this);
-      game.hazards.push(d);
+      if (!isP2pBattleGuest()) {
+        const d = new DossierProjectile(spawnX, spawnY, this.heading, this);
+        game.hazards.push(d);
+      }
       if (game.p2pMode && game.p2pRole === "guest") {
         sendP2pMessage({
           type: "shoot_dossier",
@@ -9423,17 +9835,45 @@ class Kart {
         });
       }
     } else if (type === "deauth") {
-      applyDeauthShockwave(this);
-      if (game.p2pMode && game.p2pRole === "guest") {
+      if (isP2pBattleGuest()) {
         sendP2pMessage({
           type: "deauth_shockwave",
           kartId: getKartId(this),
           x: this.x,
           y: this.y
         });
+      } else {
+        applyDeauthShockwave(this);
+        if (game.p2pMode && game.p2pRole === "guest") {
+          sendP2pMessage({
+            type: "deauth_shockwave",
+            kartId: getKartId(this),
+            x: this.x,
+            y: this.y
+          });
+        }
       }
     } else if (type === "mergerequest") {
-      startMergeRequestPull(this);
+      if (isP2pBattleGuest()) {
+        sendP2pMessage({ type: "merge_request", kartId: getKartId(this) });
+        if (game.particles) {
+          game.particles.add({
+            type: "text",
+            text: "MERGE REQUEST!",
+            x: this.x,
+            y: this.y - 22,
+            vx: 0,
+            vy: -0.8,
+            life: 42,
+            maxLife: 42,
+            size: 14,
+            color: "#39ff14"
+          });
+        }
+        triggerQuote(this, "boost");
+      } else {
+        startMergeRequestPull(this);
+      }
     } else if (type === "hotfix") {
       this.boostTimer = Math.max(this.boostTimer, TUNING.HOTFIX_DURATION);
       this.shieldTimer = Math.max(this.shieldTimer, TUNING.HOTFIX_DURATION);
@@ -10339,7 +10779,14 @@ class PlayerKart extends Kart {
   update(dt, track) {
     if (this.eliminated) return;
     const keys = this.playerIndex === 2 ? keysP2 : keysP1;
-    const input = {
+    const p2pLocalPaused = game.p2pMode && game.state === STATE.PAUSED && this.isPlayer && this === game.player;
+    const input = p2pLocalPaused ? {
+      forward: false,
+      back: false,
+      left: false,
+      right: false,
+      drift: false,
+    } : {
       forward: !!keys.up,
       back: !!keys.down,
       left: !!keys.left,
@@ -10348,19 +10795,19 @@ class PlayerKart extends Kart {
     };
 
     // Use Item Roulette active item on corresponding item press
-    const itemPressed = this.playerIndex === 2 ? consumePressedP2("item") : consumePressedP1("item");
+    const itemPressed = !p2pLocalPaused && (this.playerIndex === 2 ? consumePressedP2("item") : consumePressedP1("item"));
     if (itemPressed && this.itemState === "active" && this.itemSlot) {
       this.useItem();
     }
 
     // Ultimate ability activation
-    const ultPressed = this.playerIndex === 2 ? consumePressedP2("ult") : consumePressedP1("ult");
+    const ultPressed = !p2pLocalPaused && (this.playerIndex === 2 ? consumePressedP2("ult") : consumePressedP1("ult"));
     if (ultPressed && this.ultReady) {
       activateUltimate(this);
     }
 
     // Honk
-    const honkPressed = this.playerIndex === 2 ? consumePressedP2("honk") : consumePressedP1("honk");
+    const honkPressed = !p2pLocalPaused && (this.playerIndex === 2 ? consumePressedP2("honk") : consumePressedP1("honk"));
     if (honkPressed && (!this.honkCooldown || this.honkCooldown <= 0)) {
       Sound.honk(this.charId);
       this.honkCooldown = 30;
@@ -10907,7 +11354,15 @@ const game = {
   p2pLastHazardSyncAt: 0,
   p2pPing: 0,
   p2pLastPingAt: 0,
+  p2pBattleEndPending: false,
+  p2pLastHostSyncReceivedAt: 0,
+  p2pConnectionUnstable: false,
+  _pauseFromState: null,
   tournament: null,
+  mapSelection: (() => {
+    const idx = MAPS.findIndex((m) => !m.arena && m.id !== "dragon_escape");
+    return idx >= 0 ? MAPS[idx].id : MAPS[0].id;
+  })(),
 };
 
 function triggerHitFlash(text, color, duration = 90, kart = null) {
@@ -11378,17 +11833,35 @@ function updateP2pStartButton() {
     return;
   }
   driveBtn.style.display = "block";
-  driveBtn.textContent = areAllP2pPlayersReady() ? "Start Online Race" : `Waiting (${getP2pReadyCount()}/${(game.p2pPlayers || []).length})`;
-  driveBtn.disabled = !areAllP2pPlayersReady();
+  const players = game.p2pPlayers || [];
+  const allReady = areAllP2pPlayersReady();
+  driveBtn.textContent = getRaceStartButtonLabel({
+    p2pHost: true,
+    allReady,
+    readyCount: getP2pReadyCount(),
+    totalPlayers: players.length,
+  });
+  driveBtn.disabled = !allReady;
+}
+
+function updateDriveButtonLabel() {
+  if (!driveBtn || game.state !== STATE.SELECT) return;
+  if (game.p2pMode && game.p2pRole !== "host") {
+    driveBtn.style.display = "none";
+    return;
+  }
+  if (game.p2pMode && game.p2pRole === "host") {
+    updateP2pStartButton();
+    return;
+  }
+  driveBtn.textContent = getRaceStartButtonLabel();
 }
 
 function startP2pRaceFromSelection() {
   if (!game.p2pMode || game.p2pRole !== "host") return;
   const fromFinish = game.state === STATE.FINISHED;
   if (!fromFinish && !areAllP2pPlayersReady()) return;
-  if (!game.tournament && isTournamentEligible()) {
-    game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
-  }
+  prepareRaceFormatFromSelection();
   // Regenerate dragon trail with current seed so host has fresh deterministic trail
   if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
     _dragonTrailSeed = Math.floor(Math.random() * 2147483647);
@@ -11401,8 +11874,13 @@ function startP2pRaceFromSelection() {
   Sound.startEngine(1);
   sendP2pMessage({
     type: "start_race",
+    mode: isBattleMode() ? "battle" : "race",
+    battleApprovals: clampApprovals(game.battleApprovals),
+    battleUntimed: !!game.battleUntimed,
     players: game.p2pPlayers,
     mapIdx: game.selectedMapIdx,
+    mapSelection: game.mapSelection,
+    grandPrixRaces,
     trackIdx: Sound.trackIdx,
     dragonSeed: _dragonTrailSeed,
     tournament: game.tournament
@@ -11550,8 +12028,18 @@ function updateSelectionHighlight() {
 }
 
 function showSelectScreen() {
+  if (
+    isGrandPrixActive() &&
+    [STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED, STATE.FINISHED].includes(game.state)
+  ) {
+    game.tournament = null;
+  }
   if (Sound.ctx && !Sound.titleThemeActive && !Sound.isPlayingMusic) Sound.playVocoderTitle();
   ensureSelectedMapMatchesMode();
+  if (game.multiplayer && !game.p2pMode && isGrandPrixSelection()) {
+    syncMapSelectionFromIdx(game.selectedMapIdx || 0);
+    game.tournament = null;
+  }
   hideAll();
   selectScreen.classList.remove("hidden");
   game.state = STATE.SELECT;
@@ -11572,14 +12060,14 @@ function showSelectScreen() {
     document.getElementById("status-p2").innerText = game.p2pMode ? `Online: ${getP2pReadyCount()}/${(game.p2pPlayers || []).length} Ready` : "P2: Selecting";
     document.getElementById("status-p2").className = "p2-status selecting";
     document.getElementById("lobby-subtitle").innerText = game.p2pMode
-      ? (game.p2pRole === "host" ? "Online Lobby: Pick Track & Coder" : "Online Lobby: Pick Your Coder")
+      ? (game.p2pRole === "host" ? "Online Lobby: Pick Mode, Map & Coder" : "Online Lobby: Host Picks Mode & Map · Pick Your Coder")
       : "Lobby: 2 Players Ready Up";
     document.getElementById("lobby-hint").innerText = game.p2pMode
-      ? (game.p2pRole === "host" ? "Host picks track · Everyone picks coder · Space/Enter to ready" : "Host picks track · Pick coder · Space/Enter to ready")
+      ? (game.p2pRole === "host" ? "Host picks mode/map/rules · Everyone picks coder · Space/Enter to ready" : "Host picks mode/map/rules · Pick coder · Space/Enter to ready")
       : "Space to lock P1 · Right Shift to lock P2";
     driveBtn.disabled = false;
-    driveBtn.textContent = game.p2pMode && game.p2pRole === "host" ? "Waiting For Players" : "Drive!";
     driveBtn.style.display = game.p2pMode && game.p2pRole === "host" ? "block" : "none";
+    updateDriveButtonLabel();
   } else {
     if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none";
     game.selectedCharIdx2 = undefined;
@@ -11592,13 +12080,20 @@ function showSelectScreen() {
     document.getElementById("lobby-subtitle").innerText = "Lobby: Choose Your Coder";
     document.getElementById("lobby-hint").innerText = "Press Space or Enter to Drive!";
     driveBtn.disabled = false;
-    driveBtn.textContent = "Drive!";
     driveBtn.style.display = "block";
+    updateDriveButtonLabel();
   }
 
   const battleSection = document.getElementById("battle-select-section");
   const mapSection = document.getElementById("map-select-section");
-  if (isBattleMode()) {
+  if (game.p2pMode) {
+    if (mapSection) {
+      mapSection.style.display = "";
+      const mapTitle = document.getElementById("map-select-title");
+      if (mapTitle) mapTitle.innerText = "Select Mode & Map";
+    }
+    updateP2pBattleLobbyUi();
+  } else if (isBattleMode()) {
     if (mapSection) {
       mapSection.style.display = "";
       const mapTitle = document.getElementById("map-select-title");
@@ -11614,7 +12109,7 @@ function showSelectScreen() {
     if (mapSection) {
       mapSection.style.display = "";
       const mapTitle = document.getElementById("map-select-title");
-      if (mapTitle) mapTitle.innerText = "Select Circuit Track";
+      if (mapTitle) mapTitle.innerText = shouldShowGrandPrixCard() ? "Select Circuit or Grand Prix" : "Select Circuit Track";
     }
     if (battleSection) battleSection.style.display = "none";
   }
@@ -11636,63 +12131,163 @@ function renderApprovalsSelect() {
   });
 }
 
+function buildGrandPrixMapCard({ disabled = false, onSelect } = {}) {
+  const gpCard = document.createElement("div");
+  gpCard.className = "map-card grand-prix-card" + (isGrandPrixSelection() ? " selected" : "");
+  if (disabled) gpCard.classList.add("disabled");
+
+  let hostLabelHTML = "";
+  if (game.p2pMode && isGrandPrixSelection()) {
+    hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
+  }
+
+  const chipsHtml = [
+    `<span class="feature-chip accent">CHAMPIONSHIP</span>`,
+    `<span class="feature-chip">${grandPrixRaces} RACES</span>`,
+    `<span class="feature-chip success">GP POINTS</span>`,
+  ].join("");
+
+  gpCard.innerHTML = `
+    ${hostLabelHTML}
+    <div class="map-preview">${getGrandPrixPreviewSvg()}</div>
+    <div class="map-name">Grand Prix</div>
+    <div class="map-feature-chips">${chipsHtml}</div>
+    <div class="map-desc">Rotates through every circuit map in order. Points stack across races — highest total wins the championship.</div>
+    <div class="map-stat">CIRCUITS: ${getGrandPrixCircuitIndices().length} · FORMAT: ${grandPrixRaces}-RACE SERIES</div>
+  `;
+
+  if (!disabled) {
+    gpCard.addEventListener("click", () => {
+      if (game.p1Locked) return;
+      if (onSelect) onSelect();
+    });
+  }
+  return gpCard;
+}
+
+function buildCircuitMapCard(map, idx, { disabled = false, onSelect, targetMode = null } = {}) {
+  const card = document.createElement("div");
+  const selectionMode = targetMode || (map.arena ? "battle" : "race");
+  const isSelected = selectionMode === "battle"
+    ? (isBattleMode() && idx === (game.selectedMapIdx || 0))
+    : (!isGrandPrixSelection() && !isBattleMode() && idx === (game.selectedMapIdx || 0));
+  card.className = "map-card" + (isSelected ? " selected" : "");
+  if (disabled) card.classList.add("disabled");
+
+  let hostLabelHTML = "";
+  if (game.p2pMode && isSelected) {
+    hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
+  }
+
+  const featureChips = getMapFeatureChips(map);
+  const chipsHtml = featureChips.map((chip) => {
+    const cls = chip === "OPEN" || chip === "ENDLESS" ? "accent" : (chip.includes("REVIEW") || chip.includes("APPROVED") ? "success" : "");
+    return `<span class="feature-chip${cls ? " " + cls : ""}">${chip}</span>`;
+  }).join("");
+
+  const statLabel = map.arena
+    ? `ARENA: ${map.worldW}x${map.worldH} · BATTLE`
+    : `GRID: ${map.worldW}x${map.worldH} · SEGMENTS: ${map.waypoints.length} · 1 RACE`;
+
+  card.innerHTML = `
+    ${hostLabelHTML}
+    <div class="map-preview">${getMapPreviewSvg(map)}</div>
+    <div class="map-name">${map.name}</div>
+    <div class="map-feature-chips">${chipsHtml}</div>
+    <div class="map-desc">${map.desc}</div>
+    <div class="map-stat">${statLabel}</div>
+  `;
+
+  if (!disabled) {
+    card.addEventListener("click", () => {
+      if (game.p1Locked) return;
+      if (onSelect) onSelect(map, idx);
+    });
+  }
+  return card;
+}
+
+function renderP2pDualMapSelect(container) {
+  const isP2pGuest = game.p2pRole === "guest";
+
+  const raceSection = document.createElement("div");
+  raceSection.className = "p2p-map-category";
+  raceSection.innerHTML = `<div class="map-select-title">Race &amp; Grand Prix</div>`;
+  const raceGrid = document.createElement("div");
+  raceGrid.className = "map-select-container";
+  raceGrid.appendChild(buildGrandPrixMapCard({
+    disabled: isP2pGuest,
+    onSelect: () => selectP2pMap({ mapSelection: GRAND_PRIX_ID, mode: "race" }),
+  }));
+  MAPS.forEach((map, idx) => {
+    if (map.arena) return;
+    raceGrid.appendChild(buildCircuitMapCard(map, idx, {
+      disabled: isP2pGuest,
+      targetMode: "race",
+      onSelect: (_, mapIdx) => selectP2pMap({ mapIdx, mode: "race" }),
+    }));
+  });
+  raceSection.appendChild(raceGrid);
+
+  const battleSection = document.createElement("div");
+  battleSection.className = "p2p-map-category";
+  battleSection.innerHTML = `<div class="map-select-title">Battle Arenas</div>`;
+  const battleGrid = document.createElement("div");
+  battleGrid.className = "map-select-container";
+  MAPS.forEach((map, idx) => {
+    if (!map.arena) return;
+    battleGrid.appendChild(buildCircuitMapCard(map, idx, {
+      disabled: isP2pGuest,
+      targetMode: "battle",
+      onSelect: (_, mapIdx) => selectP2pMap({ mapIdx, mode: "battle" }),
+    }));
+  });
+  battleSection.appendChild(battleGrid);
+
+  container.appendChild(raceSection);
+  container.appendChild(battleSection);
+  updateP2pBattleLobbyUi();
+}
+
 function renderMapSelect() {
   const container = document.getElementById("maps-container");
   if (!container) return;
   ensureSelectedMapMatchesMode();
   container.innerHTML = "";
 
-  const isP2pGuest = (game.p2pMode && game.p2pRole === "guest");
+  if (game.p2pMode) {
+    renderP2pDualMapSelect(container);
+    return;
+  }
 
-  MAPS.forEach((map, idx) => {
-    // Arena maps only appear in Battle mode; regular tracks only outside it.
-    if (!!map.arena !== isBattleMode()) return;
-    const card = document.createElement("div");
-    card.className = "map-card" + (idx === (game.selectedMapIdx || 0) ? " selected" : "");
-    if (isP2pGuest) {
-      card.classList.add("disabled");
-    }
-
-    let hostLabelHTML = "";
-    if (game.p2pMode) {
-      if (idx === (game.selectedMapIdx || 0)) {
-        hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
-      }
-    }
-
-    const featureChips = getMapFeatureChips(map);
-    const chipsHtml = featureChips.map((chip, ci) => {
-      const cls = chip === "OPEN" || chip === "ENDLESS" ? "accent" : (chip.includes("REVIEW") || chip.includes("APPROVED") ? "success" : "");
-      return `<span class="feature-chip${cls ? " " + cls : ""}">${chip}</span>`;
-    }).join("");
-
-    card.innerHTML = `
-      ${hostLabelHTML}
-      <div class="map-preview">${getMapPreviewSvg(map)}</div>
-      <div class="map-name">${map.name}</div>
-      <div class="map-feature-chips">${chipsHtml}</div>
-      <div class="map-desc">${map.desc}</div>
-      <div class="map-stat">GRID: ${map.worldW}x${map.worldH} · SEGMENTS: ${map.waypoints.length}</div>
-    `;
-
-    if (!isP2pGuest) {
-      card.addEventListener("click", () => {
-        if (game.p1Locked) return;
-        game.selectedMapIdx = idx;
-        previewSelectedMapMusic(map);
+  const showGpCard = shouldShowGrandPrixCard();
+  if (showGpCard) {
+    container.appendChild(buildGrandPrixMapCard({
+      onSelect: () => {
+        selectGrandPrixMap();
+        const firstMap = MAPS[game.selectedMapIdx];
+        if (firstMap) previewSelectedMapMusic(firstMap);
         renderMapSelect();
         renderAiModelSelector();
-        Sound.tone(520, 0.08, "sine", 0.15);
-        if (game.p2pMode && game.p2pRole === "host") {
-          sendP2pMessage({
-            type: "map_update",
-            mapIdx: game.selectedMapIdx
-          });
-        }
-      });
-    }
+        updateDriveButtonLabel();
+        Sound.tone(620, 0.1, "sine", 0.18);
+      },
+    }));
+  }
 
-    container.appendChild(card);
+  MAPS.forEach((map, idx) => {
+    if (!!map.arena !== isBattleMode()) return;
+    container.appendChild(buildCircuitMapCard(map, idx, {
+      onSelect: (m) => {
+        if (isBattleMode()) selectArenaMap(idx);
+        else selectCircuitMap(idx);
+        previewSelectedMapMusic(m);
+        renderMapSelect();
+        renderAiModelSelector();
+        updateDriveButtonLabel();
+        Sound.tone(520, 0.08, "sine", 0.15);
+      },
+    }));
   });
 }
 
@@ -11825,23 +12420,114 @@ function addP2pGuest(conn) {
 }
 
 function removeP2pGuestByConn(conn) {
-  let removedId = null;
-  for (const [id, existing] of p2pConnections.entries()) {
-    if (existing === conn) {
-      removedId = id;
-      break;
-    }
-  }
+  const removedId = getP2pIdForConn(conn);
   if (!removedId) return;
   p2pConnections.delete(removedId);
-  game.p2pPlayers = game.p2pPlayers.filter(p => p.id !== removedId);
-  if (game.state === STATE.SELECT) {
-    syncP2pSelectionFromRoster({ preserveLocal: true });
-    updateSelectionHighlight();
-    updateP2pStartButton();
+  handleP2pPlayerRemoved(removedId);
+}
+
+function markP2pKartDisconnected(playerId) {
+  const kart = getKartById(playerId);
+  if (!kart) return;
+  if (isBattleMode()) {
+    if (!kart.eliminated) {
+      kart.eliminated = true;
+      kart.vx = 0;
+      kart.vy = 0;
+    }
+  } else {
+    kart.finished = true;
+    kart.finishTime = undefined;
+  }
+  triggerHitFlash("PLAYER LEFT", "#ff4d6d", 90, kart);
+  if (game.particles) {
+    game.particles.add({
+      type: "text",
+      text: "PLAYER LEFT",
+      x: kart.x,
+      y: kart.y - 30,
+      vx: 0,
+      vy: -0.8,
+      life: 55,
+      maxLife: 55,
+      size: 16,
+      color: "#ff4d6d",
+      drag: 0.98
+    });
+  }
+}
+
+function handleP2pPlayerRemoved(playerId) {
+  const midRace = [STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED].includes(game.state);
+  if (midRace) {
+    markP2pKartDisconnected(playerId);
+    const p = game.p2pPlayers.find((row) => row.id === playerId);
+    if (p) p.disconnected = true;
+  } else {
+    game.p2pPlayers = game.p2pPlayers.filter((p) => p.id !== playerId);
+    if (game.state === STATE.SELECT) {
+      syncP2pSelectionFromRoster({ preserveLocal: true });
+      updateSelectionHighlight();
+      updateP2pStartButton();
+    }
   }
   renderP2pLobby();
-  broadcastP2pLobby();
+  if (!midRace) broadcastP2pLobby();
+}
+
+function p2pReturnToLobbyLocal(lobbyData = null) {
+  Sound.stopAllEngines();
+  Sound.stopAllDriftSqueals();
+  Sound.stopAllRumbles();
+  game.hazards = [];
+  game.p2pBattleEndPending = false;
+  game.tournament = null;
+  game._pauseFromState = null;
+  game.p2pConnectionUnstable = false;
+  pauseScreen.classList.add("hidden");
+  if (lobbyData) {
+    if (lobbyData.players) game.p2pPlayers = lobbyData.players;
+    applyLobbyMapSelection(lobbyData);
+    if (lobbyData.trackIdx !== undefined && lobbyData.trackIdx !== null) setMusicTrack(lobbyData.trackIdx);
+  }
+  if (game.p2pRole === "host") {
+    game.p2pPlayers = (game.p2pPlayers || []).filter((p) => !p.disconnected);
+  }
+  resetP2pReadyForLobbyChange();
+  hideAll();
+  showSelectScreen();
+}
+
+function p2pHostCancelRaceToLobby() {
+  if (!game.p2pMode || game.p2pRole !== "host") return;
+  resetP2pReadyForLobbyChange();
+  broadcastP2pMessage({
+    type: "return_lobby",
+    players: game.p2pPlayers.filter((p) => !p.disconnected),
+    ...getP2pLobbyMapPayload(),
+  });
+  p2pReturnToLobbyLocal();
+}
+
+function p2pGuestLeaveMatch() {
+  if (!game.p2pMode || game.p2pRole !== "guest") return;
+  Sound.stopAllEngines();
+  Sound.stopAllDriftSqueals();
+  Sound.stopAllRumbles();
+  pauseScreen.classList.add("hidden");
+  handleP2pDisconnect({ silent: true });
+}
+
+function updatePauseScreenUi() {
+  const isP2pPaused = game.p2pMode && game.state === STATE.PAUSED;
+  if (pauseP2pSubtitle) pauseP2pSubtitle.style.display = isP2pPaused ? "block" : "none";
+  if (pauseDefaultSubtitle) pauseDefaultSubtitle.style.display = isP2pPaused ? "none" : "block";
+  if (p2pCancelLobbyBtn) {
+    p2pCancelLobbyBtn.style.display = (isP2pPaused && game.p2pRole === "host") ? "inline-block" : "none";
+  }
+  if (p2pLeaveMatchBtn) {
+    p2pLeaveMatchBtn.style.display = (isP2pPaused && game.p2pRole === "guest") ? "inline-block" : "none";
+  }
 }
 
 function getP2pIdForConn(conn) {
@@ -11879,8 +12565,7 @@ function broadcastP2pLobby() {
   broadcastP2pMessage({
     type: "lobby_state",
     players: game.p2pPlayers,
-    mapIdx: game.selectedMapIdx,
-    trackIdx: Sound.trackIdx
+    ...getP2pLobbyMapPayload(),
   });
   renderP2pLobby();
 }
@@ -12056,6 +12741,9 @@ function startCountdown() {
   game.countdownText = "3";
   game.rocketStartP1 = { holdStart: 0, holding: false, result: null };
   game.rocketStartP2 = { holdStart: 0, holding: false, result: null };
+  if (game.p2pMode && game.p2pRole === "guest") {
+    game.p2pLastHostSyncReceivedAt = performance.now();
+  }
   Sound.countdown(false);
 }
 
@@ -12116,6 +12804,10 @@ function applyRocketStart() {
 function startRace() {
   game.state = STATE.RACING;
   game.startTime = performance.now();
+  if (game.p2pMode && game.p2pRole === "guest") {
+    game.p2pLastHostSyncReceivedAt = performance.now();
+  }
+  game.p2pConnectionUnstable = false;
   for (const k of getActiveKarts()) {
     if (!k) continue;
     k.lapTimes = [];
@@ -12132,11 +12824,6 @@ const GP_POINTS = [15, 12, 10, 8, 6, 4, 2, 1];
 
 function tournamentKey(kart) {
   return kart.p2pId || (kart.isPlayer ? "p" + (kart.playerIndex || 1) : "ai_" + kart.charId);
-}
-
-function isTournamentEligible() {
-  const m = MAPS[game.selectedMapIdx || 0];
-  return !isBattleMode() && !m.arena && m.id !== "dragon_escape" && seriesRaces > 1;
 }
 
 function getNextCircuitMapIdx(fromIdx) {
@@ -12184,13 +12871,13 @@ function getPromptlyStandingsComment(standings, isFinal) {
 
 function buildTournamentStandingsHtml() {
   const t = game.tournament;
-  if (!t || t.totalRaces <= 1) return "";
+  if (!isGrandPrixActive(t)) return "";
   const isFinal = t.raceIndex + 1 >= t.totalRaces;
   const standings = t.standings || [];
   const comment = getPromptlyStandingsComment(standings, isFinal);
 
   let html = `<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.1);">`;
-  html += `<div class="row" style="margin-bottom:8px;font-weight:900;color:#fff;"><span class="label">Race ${t.raceIndex + 1} of ${t.totalRaces} — Tournament Standings</span><span></span></div>`;
+  html += `<div class="row" style="margin-bottom:8px;font-weight:900;color:#fff;"><span class="label">Race ${t.raceIndex + 1} of ${t.totalRaces} — Grand Prix Standings</span><span></span></div>`;
   html += `<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px;">`;
   html += `<img src="promptly.webp" alt="Promptly" style="width:36px;height:36px;border-radius:50%;flex-shrink:0;" />`;
   html += `<div style="font-size:13px;color:var(--reg-text-dim);line-height:1.4;padding-top:4px;">${comment}</div>`;
@@ -12243,7 +12930,7 @@ function finishRace() {
   for (const k of unfinished) finished.push(k);
   for (const k of eliminated) finished.push(k);
   game.finalRanking = finished;
-  if (game.tournament && game.tournament.totalRaces > 1) {
+  if (isGrandPrixActive(game.tournament)) {
     if (!game.p2pMode || game.p2pRole === "host") {
       applyTournamentPoints(game.finalRanking);
       if (game.p2pMode) {
@@ -12251,9 +12938,15 @@ function finishRace() {
       }
     }
   }
+  if (game.p2pMode && game.p2pRole === "host" && isBattleMode()) {
+    sendP2pBattleEnd();
+  }
   if (!HEADLESS_MODE) {
-    showFinishScreen();
-    Sound.finish();
+    const guestWaitBattleEnd = game.p2pMode && game.p2pRole === "guest" && isBattleMode();
+    if (!guestWaitBattleEnd) {
+      showFinishScreen();
+      Sound.finish();
+    }
   }
 }
 
@@ -12985,12 +13678,16 @@ function update(dt, time) {
     }
   }
   if (consumePressed("pause")) {
-    if (game.state === STATE.RACING) {
+    if (game.state === STATE.RACING || (game.p2pMode && game.state === STATE.COUNTDOWN)) {
+      game._pauseFromState = game.state;
       game.state = STATE.PAUSED;
       pauseScreen.classList.remove("hidden");
+      updatePauseScreenUi();
     } else if (game.state === STATE.PAUSED) {
       pauseScreen.classList.add("hidden");
-      game.state = STATE.RACING;
+      game.state = game._pauseFromState || STATE.RACING;
+      game._pauseFromState = null;
+      updatePauseScreenUi();
     }
   }
   if (consumePressed("enter")) {
@@ -13013,7 +13710,12 @@ function update(dt, time) {
     }
   }
 
-  if (game.state === STATE.COUNTDOWN) {
+  const countdownSim = game.state === STATE.COUNTDOWN ||
+    (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.COUNTDOWN);
+  const racingSim = game.state === STATE.RACING ||
+    (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.RACING);
+
+  if (countdownSim) {
     const elapsed = performance.now() - game.countdownStart;
     const prevText = game.countdownText;
     if (elapsed < 900) game.countdownText = "3";
@@ -13061,7 +13763,7 @@ function update(dt, time) {
     }
   }
 
-  if (game.state === STATE.RACING) {
+  if (racingSim) {
     game.raceTime = (performance.now() - game.startTime) / 1000;
 
     if (isBattleMode()) {
@@ -13070,9 +13772,11 @@ function update(dt, time) {
       } else {
         game.battleTimeLeft = Math.max(0, game.battleDuration - game.raceTime);
       }
-      updateBattleApprovals();
+      if (canResolveBattleCombat()) {
+        updateBattleApprovals();
+        checkBattleEnd();
+      }
       updateSpectate();
-      checkBattleEnd();
     }
 
     // Dynamic Retro Soundtrack Final Lap Tempo surge (only for retro music)
@@ -13109,6 +13813,9 @@ function update(dt, time) {
       ]);
       if (game.player2) allRemote.add(game.player2);
       for (const rk of allRemote) {
+        if (isP2pBattleHost() && (rk.mergePullTimer || 0) > 0) {
+          applyMergeRequestPull(rk, dt);
+        }
         if (rk._lastSyncAt && !rk.finished && !rk.eliminated) {
           rk.x += rk.vx * dt;
           rk.y += rk.vy * dt;
@@ -13184,6 +13891,7 @@ function update(dt, time) {
 
           if (!kart.eliminated && kart.spinoutTimer <= 0 && (kart.recoverGraceTimer || 0) <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24) + getKartCollisionRadius(kart) - DEFAULT_KART_COLLISION_RADIUS) {
             if (shouldSkipGroundHazardForKart(kart, h)) continue;
+            if (isP2pBattleGuest()) break;
             game.hazards.splice(i, 1);
             const isDossier = (h instanceof DossierProjectile);
             const isRegulatory = (h instanceof RegulatoryProjectile);
@@ -13354,7 +14062,9 @@ function update(dt, time) {
     }
 
     // Collisions
-    kartCollisions();
+    if (!isP2pBattleGuest()) {
+      kartCollisions();
+    }
 
     // Particles
     game.particles.update(dt);
@@ -13474,27 +14184,43 @@ function update(dt, time) {
       Sound.stopDriftSqueal(2);
       Sound.stopEngine(2);
     }
+  }
 
-    if (game.p2pMode) {
-      const now = performance.now();
-      if (game.p2pRole === "host") {
-        const hostInterval = 1000 / TUNING.P2P_HOST_SYNC_HZ;
-        if (now - game.p2pLastHostSyncAt >= hostInterval) {
-          game.p2pLastHostSyncAt = now;
-          sendHostSync();
-        }
-      } else {
-        const guestInterval = 1000 / TUNING.P2P_GUEST_SYNC_HZ;
-        if (now - game.p2pLastGuestSyncAt >= guestInterval) {
-          game.p2pLastGuestSyncAt = now;
-          sendGuestSync();
-        }
+  if (game.p2pMode && (countdownSim || racingSim || game.p2pBattleEndPending)) {
+    const now = performance.now();
+    if (game.p2pRole === "host" && (countdownSim || racingSim)) {
+      const hostInterval = 1000 / TUNING.P2P_HOST_SYNC_HZ;
+      if (now - game.p2pLastHostSyncAt >= hostInterval) {
+        game.p2pLastHostSyncAt = now;
+        sendHostSync();
       }
-      if (now - game.p2pLastPingAt >= 2000) {
-        game.p2pLastPingAt = now;
-        sendP2pMessage({ type: "ping", t: now });
+    } else if (game.p2pRole === "guest" && racingSim) {
+      const guestInterval = 1000 / TUNING.P2P_GUEST_SYNC_HZ;
+      if (now - game.p2pLastGuestSyncAt >= guestInterval) {
+        game.p2pLastGuestSyncAt = now;
+        sendGuestSync();
       }
     }
+    if (now - game.p2pLastPingAt >= 2000) {
+      game.p2pLastPingAt = now;
+      sendP2pMessage({ type: "ping", t: now });
+    }
+    if (game.p2pRole === "guest") {
+      const watchActive = countdownSim || racingSim || game.p2pBattleEndPending;
+      if (watchActive) {
+        const sinceHostSync = now - (game.p2pLastHostSyncReceivedAt || 0);
+        if (sinceHostSync > 7000) {
+          handleP2pDisconnect({ silent: true });
+          alert("Lost connection to host.");
+          return;
+        }
+        game.p2pConnectionUnstable = racingSim && sinceHostSync > 2000;
+      } else {
+        game.p2pConnectionUnstable = false;
+      }
+    }
+  } else if (game.p2pMode) {
+    game.p2pConnectionUnstable = false;
   }
 
   // Camera follow for Single Player (split-screen computes internally)
@@ -14002,72 +14728,121 @@ const timeNightBtn = document.getElementById("time-night-btn");
 const MAP_3D_THEMES = {
   core_mainframe: {
     sky: ["#0a0820", "#0e0630", "#180a40", "#0d1a28", "#060514"],
+    skyDay: ["#87ceeb", "#a8d8ff", "#c8e8ff", "#b8f0c8", "#98d8a8"],
     fog: [0x060514, 0.0004],
+    fogDay: [0xb8e0c8, 0.00003],
     ground: "#0a1f0d",
+    groundDay: "#8ed4a0",
     groundAccent: "#0e2a12",
+    groundAccentDay: "#a8e8b8",
     gridColor: 0x7b75ff,
+    gridColorDay: 0x7b75ff,
     gridSecondary: 0x1a1040,
+    gridSecondaryDay: 0xc8e8ff,
     clearColor: 0x060514,
+    clearColorDay: 0x87ceeb,
     scenery: "cyber",
   },
   compliance_chicane: {
     sky: ["#080614", "#120830", "#201050", "#18123a", "#080614"],
+    skyDay: ["#9aa8e0", "#b8c4f0", "#d0d8f8", "#c8d4e8", "#b0c0d8"],
     fog: [0x080614, 0.0005],
+    fogDay: [0xc8d4f0, 0.000035],
     ground: "#0d1420",
+    groundDay: "#b8c8d8",
     groundAccent: "#0f1828",
+    groundAccentDay: "#a8b8cc",
     gridColor: 0x9d4dff,
+    gridColorDay: 0x9d4dff,
     gridSecondary: 0x1a0830,
+    gridSecondaryDay: 0xd0d8f8,
     clearColor: 0x080614,
+    clearColorDay: 0xb0c0e0,
     scenery: "cyber",
   },
   audit_super_ring: {
     sky: ["#060a1a", "#081028", "#0a1838", "#0c2040", "#060a1a"],
+    skyDay: ["#70d0a0", "#88e0b0", "#a0f0c0", "#c0f8d8", "#90e8b0"],
     fog: [0x060a1a, 0.0003],
+    fogDay: [0xa8f0c0, 0.00003],
     ground: "#081810",
+    groundDay: "#98e8a8",
     groundAccent: "#0c2218",
+    groundAccentDay: "#b0f8b8",
     gridColor: 0xa4ff80,
+    gridColorDay: 0xa4ff80,
     gridSecondary: 0x0a2010,
+    gridSecondaryDay: 0xc0f8d8,
     clearColor: 0x060a1a,
+    clearColorDay: 0x88e8b0,
     scenery: "cyber",
   },
   black_ice_data_vault: {
     sky: ["#020408", "#040810", "#081020", "#0a1830", "#020408"],
+    skyDay: ["#8aa8b8", "#9ab8c8", "#aac8d8", "#b8d4e0", "#a0b8c8"],
     fog: [0x020408, 0.00035],
+    fogDay: [0xb0c8d8, 0.00004],
     ground: "#060a10",
+    groundDay: "#98b0c0",
     groundAccent: "#080e18",
+    groundAccentDay: "#88a8b8",
     gridColor: 0x57f2ff,
+    gridColorDay: 0x57f2ff,
     gridSecondary: 0x081828,
+    gridSecondaryDay: 0xb8d4e0,
     clearColor: 0x020408,
+    clearColorDay: 0xa8c0d0,
     scenery: "ice",
   },
   regulatory_dragon_run: {
     sky: ["#0a0414", "#180820", "#281038", "#1a0828", "#0a0414"],
+    skyDay: ["#f0c878", "#f8d890", "#ffe8a8", "#f0e0c0", "#e8d0a8"],
     fog: [0x0a0414, 0.00025],
+    fogDay: [0xf0e0b8, 0.00003],
     ground: "#100a18",
+    groundDay: "#d8c8a0",
     groundAccent: "#180e22",
+    groundAccentDay: "#e8d8b0",
     gridColor: 0xff4d6d,
+    gridColorDay: 0xff4d6d,
     gridSecondary: 0x200818,
+    gridSecondaryDay: 0xf0e0c0,
     clearColor: 0x0a0414,
+    clearColorDay: 0xf0d8a0,
     scenery: "dragon",
   },
   protocol_amendment_labyrinth: {
     sky: ["#080610", "#100a20", "#1a1038", "#141030", "#080610"],
+    skyDay: ["#e8d8b0", "#f0e0c0", "#f8ecd8", "#f0e4c8", "#e8d8b0"],
     fog: [0x080610, 0.0004],
+    fogDay: [0xf0e8d0, 0.000035],
     ground: "#0c0a14",
+    groundDay: "#d8c8a8",
     groundAccent: "#12101e",
+    groundAccentDay: "#e8d8b8",
     gridColor: 0xfd9927,
+    gridColorDay: 0xfd9927,
     gridSecondary: 0x181020,
+    gridSecondaryDay: 0xf8ecd8,
     clearColor: 0x080610,
+    clearColorDay: 0xf0e0c0,
     scenery: "cyber",
   },
   dragon_escape: {
     sky: ["#1a0c0c", "#2a1008", "#1a0a10", "#120818", "#0a0408"],
+    skyDay: ["#a8d8c0", "#b8e8c8", "#c8f0d0", "#d0e8c8", "#b0d8b8"],
     fog: [0x1a0c0c, 0.00008],
+    fogDay: [0xc8e8d0, 0.00005],
     ground: "#0d1a10",
+    groundDay: "#90c8a0",
     groundAccent: "#142818",
+    groundAccentDay: "#a8d8b0",
     gridColor: 0xff3300,
+    gridColorDay: 0x66aa77,
     gridSecondary: 0x1a0808,
+    gridSecondaryDay: 0xd0e8c8,
     clearColor: 0x1a0c0c,
+    clearColorDay: 0xb8e8c8,
     scenery: "japanese",
   },
   battle_arena: {
@@ -14116,6 +14891,9 @@ function apply3DMapTheme() {
     ground: day && baseTheme.groundDay ? baseTheme.groundDay : baseTheme.ground,
     groundAccent: day && baseTheme.groundAccentDay ? baseTheme.groundAccentDay : baseTheme.groundAccent,
     clearColor: day && baseTheme.clearColorDay ? baseTheme.clearColorDay : baseTheme.clearColor,
+    gridColor: day && baseTheme.gridColorDay ? baseTheme.gridColorDay : baseTheme.gridColor,
+    gridSecondary: day && baseTheme.gridSecondaryDay ? baseTheme.gridSecondaryDay : baseTheme.gridSecondary,
+    isDay: day,
   };
 
   THREE_STATE.renderer.setClearColor(theme.clearColor);
@@ -14171,7 +14949,7 @@ function apply3DMapTheme() {
       cx.fillRect(0, 0, 1, 256);
       child.material.map.image = c;
       child.material.map.needsUpdate = true;
-      child.material.toneMapped = !isArenaDay;
+      child.material.toneMapped = !(isArenaDay || (day && !MAPS[game.selectedMapIdx || 0].arena));
       child.material.needsUpdate = true;
     }
   });
@@ -14230,11 +15008,14 @@ function build3DScenery(theme) {
 
   const cx = WORLD_W / 2, cz = WORLD_H / 2;
   const mapRadius = Math.max(WORLD_W, WORLD_H) * 0.7;
+  const day = !!theme.isDay;
+  const sceneryOpacity = day ? 0.08 : 0.12;
+  const sceneryGlowOpacity = day ? 0.14 : 0.25;
 
   if (theme.scenery === "cyber" || theme.scenery === "dragon") {
     // Distant holographic towers / data pillars
-    const towerMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: 0.12 });
-    const towerGlowMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: 0.25 });
+    const towerMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: sceneryOpacity });
+    const towerGlowMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: sceneryGlowOpacity });
     for (let i = 0; i < 18; i++) {
       const ang = (i / 18) * TAU + Math.random() * 0.3;
       const r = mapRadius + 200 + Math.random() * 600;
@@ -14252,8 +15033,8 @@ function build3DScenery(theme) {
 
   if (theme.scenery === "ice") {
     // Icy crystal spires
-    const iceMat = new T.MeshBasicMaterial({ color: 0x57f2ff, transparent: true, opacity: 0.08 });
-    const iceGlowMat = new T.MeshBasicMaterial({ color: 0x57f2ff, transparent: true, opacity: 0.2 });
+    const iceMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: day ? 0.06 : 0.08 });
+    const iceGlowMat = new T.MeshBasicMaterial({ color: theme.gridColor, transparent: true, opacity: day ? 0.12 : 0.2 });
     for (let i = 0; i < 22; i++) {
       const ang = (i / 22) * TAU + Math.random() * 0.3;
       const r = mapRadius + 100 + Math.random() * 800;
@@ -14271,7 +15052,11 @@ function build3DScenery(theme) {
 
   if (theme.scenery === "japanese") {
     // Distant mountain silhouettes
-    const mtMat = new T.MeshBasicMaterial({ color: 0x1a0808, transparent: true, opacity: 0.15 });
+    const mtMat = new T.MeshBasicMaterial({
+      color: day ? 0x6a9a7a : 0x1a0808,
+      transparent: true,
+      opacity: day ? 0.12 : 0.15,
+    });
     for (let i = 0; i < 12; i++) {
       const x = WORLD_W * (i / 12) + Math.random() * 2000;
       const h = 300 + Math.random() * 500;
@@ -14284,7 +15069,11 @@ function build3DScenery(theme) {
       sg.add(mt2);
     }
     // Torii gate silhouettes
-    const toriiMat = new T.MeshBasicMaterial({ color: 0x661111, transparent: true, opacity: 0.2 });
+    const toriiMat = new T.MeshBasicMaterial({
+      color: day ? 0xbb3333 : 0x661111,
+      transparent: true,
+      opacity: day ? 0.28 : 0.2,
+    });
     for (let i = 0; i < 6; i++) {
       const x = WORLD_W * (i / 6) + 1000 + Math.random() * 2000;
       const z = (Math.random() > 0.5 ? 1 : -1) * (mapRadius + 150 + Math.random() * 200) + cz;
@@ -14966,7 +15755,13 @@ function rebuild3DTrack() {
     rGeo.setAttribute("position", new T.Float32BufferAttribute(rumbleVerts, 3));
     rGeo.setAttribute("color", new T.Float32BufferAttribute(rumbleColors, 3));
     rGeo.computeVertexNormals();
-    const rMat = new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.2, emissive: 0x111111, emissiveIntensity: 0.3 });
+    const rMat = new T.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.7,
+      metalness: 0.2,
+      emissive: 0x111111,
+      emissiveIntensity: roadDay ? 0.08 : 0.3,
+    });
     const rumble = new T.Mesh(rGeo, rMat);
     rumble.position.y = 0.3;
     group.add(rumble);
@@ -15011,9 +15806,9 @@ function rebuild3DTrack() {
         roughness: 0.5,
         metalness: 0.6,
         emissive: side === 1 ? 0x1a1840 : 0x2a1808,
-        emissiveIntensity: 0.4,
+        emissiveIntensity: roadDay ? 0.12 : 0.4,
         transparent: true,
-        opacity: 0.82,
+        opacity: roadDay ? 0.88 : 0.82,
       });
       const wall = new T.Mesh(wGeo, wMat);
       wall.position.y = 0.5;
@@ -15047,7 +15842,12 @@ function rebuild3DTrack() {
   if (centerVerts.length > 3) {
     const centerGeo = new T.BufferGeometry();
     centerGeo.setAttribute("position", new T.Float32BufferAttribute(centerVerts, 3));
-    const centerMat = new T.LineDashedMaterial({ color: 0x7b75ff, dashSize: 24, gapSize: 32, linewidth: 1 });
+    const centerMat = new T.LineDashedMaterial({
+      color: roadDay ? 0x5a54c8 : 0x7b75ff,
+      dashSize: 24,
+      gapSize: 32,
+      linewidth: 1,
+    });
     const centerLine = game.track.isOpen ? new T.Line(centerGeo, centerMat) : new T.LineLoop(centerGeo, centerMat);
     centerLine.computeLineDistances();
     group.add(centerLine);
@@ -17799,7 +18599,9 @@ function draw(time) {
   }
 
   // Unified Countdown overlay on top
-  if (game.state === STATE.COUNTDOWN) {
+  const countdownVisible = game.state === STATE.COUNTDOWN ||
+    (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.COUNTDOWN);
+  if (countdownVisible) {
     drawCountdown();
   } else if ((game.player && game.player.finished && !game.player.eliminated) || (game.player2 && game.player2.finished && !game.player2.eliminated)) {
     if (game.state === STATE.RACING) {
@@ -18113,6 +18915,16 @@ function drawHUD(time) {
     ctx.font = "bold 10px monospace";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(`${game.p2pPing}ms`, VIEW_W - 48, pingY + 10);
+  }
+
+  if (game.p2pConnectionUnstable) {
+    const unstableY = (game.p2pMode && game.p2pPing > 0) ? (Sound.muted ? 184 : 156) : (Sound.muted ? 158 : 130);
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(VIEW_W - 152, unstableY, 138, 20);
+    ctx.fillStyle = "#ffd86b";
+    ctx.font = "bold 9px monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("CONNECTION UNSTABLE", VIEW_W - 83, unstableY + 10);
   }
 
   ctx.restore();
@@ -18862,7 +19674,32 @@ function roundRect(c, x, y, w, h, r) {
 function showFinishScreen() {
   const ranking = game.finalRanking || rankAll();
 
-  if (game.multiplayer && game.player2) {
+  if (isBattleMode()) {
+    const playerPlace = ranking.indexOf(game.player) + 1;
+    const playerWon = playerPlace === 1 && !game.player.eliminated;
+    finishTitle.textContent = playerWon ? "Champion of Compliance!" : (game.player.eliminated ? "Submission Rejected!" : "Battle Over");
+    finishTitle.style.background = "";
+    let html = "";
+    const battleWinner = ranking.find((k) => k && !k.eliminated) || ranking[0];
+    if (battleWinner) {
+      html += `<div class="row"><span class="label">Winner</span><span class="value" style="color:${battleWinner.color};font-weight:900;">${battleWinner === game.player ? "YOU" : battleWinner.name} \uD83C\uDFC6</span></div>`;
+    }
+    html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
+    html += `<div class="row"><span class="label">Approvals Remaining</span><span class="value" style="color:#4dffaa;font-weight:900;">${Math.max(0, game.player.approvals || 0)}</span></div>`;
+    html += `<div class="row"><span class="label">Status</span><span class="value">${game.player.eliminated ? `<span style="color:#ff3366;font-weight:900;">REJECTED</span>` : `<span style="color:#4dffaa;font-weight:900;">SURVIVED</span>`}</span></div>`;
+    if (game.player.eliminated && game.player.killedBy) {
+      html += `<div class="row"><span class="label">Rejected By</span><span class="value" style="color:${game.player.killedBy.color};font-weight:700;">${game.player.killedBy.name}</span></div>`;
+    }
+    html += `<div class="row"><span class="label">Battle Time</span><span class="value">${formatTime(game.raceTime)}</span></div>`;
+
+    html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Standings</span><span></span></div>`;
+    ranking.forEach((k, i) => {
+      const status = k.eliminated ? `<span style="color:#ff3366;">REJECTED</span>` : `${Math.max(0, k.approvals || 0)} ✓`;
+      html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${status}</span></div>`;
+    });
+
+    finishResults.innerHTML = html;
+  } else if (game.multiplayer && game.player2) {
     if (isDragonEscape()) {
       // Dragon survival multiplayer results
       const p1Time = (game.player.finishTime || game.raceTime).toFixed(1);
@@ -18969,31 +19806,7 @@ function showFinishScreen() {
     const playerPlace = ranking.indexOf(game.player) + 1;
     const isDragon = isDragonEscape();
 
-    if (isBattleMode()) {
-      const playerWon = playerPlace === 1 && !game.player.eliminated;
-      finishTitle.textContent = playerWon ? "Champion of Compliance!" : (game.player.eliminated ? "Submission Rejected!" : "Battle Over");
-      finishTitle.style.background = "";
-      let html = "";
-      const battleWinner = ranking.find((k) => k && !k.eliminated) || ranking[0];
-      if (battleWinner) {
-        html += `<div class="row"><span class="label">Winner</span><span class="value" style="color:${battleWinner.color};font-weight:900;">${battleWinner === game.player ? "YOU" : battleWinner.name} \uD83C\uDFC6</span></div>`;
-      }
-      html += `<div class="row"><span class="label">Your Place</span><span class="value"><span class="place-badge place-${Math.min(playerPlace, 4)}">${ordinal(playerPlace)}</span></span></div>`;
-      html += `<div class="row"><span class="label">Approvals Remaining</span><span class="value" style="color:#4dffaa;font-weight:900;">${Math.max(0, game.player.approvals || 0)}</span></div>`;
-      html += `<div class="row"><span class="label">Status</span><span class="value">${game.player.eliminated ? `<span style="color:#ff3366;font-weight:900;">REJECTED</span>` : `<span style="color:#4dffaa;font-weight:900;">SURVIVED</span>`}</span></div>`;
-      if (game.player.eliminated && game.player.killedBy) {
-        html += `<div class="row"><span class="label">Rejected By</span><span class="value" style="color:${game.player.killedBy.color};font-weight:700;">${game.player.killedBy.name}</span></div>`;
-      }
-      html += `<div class="row"><span class="label">Battle Time</span><span class="value">${formatTime(game.raceTime)}</span></div>`;
-
-      html += `<div class="row" style="border-top:1px solid rgba(255,255,255,0.1);margin-top:6px;padding-top:10px;"><span class="label">Final Standings</span><span></span></div>`;
-      ranking.forEach((k, i) => {
-        const status = k.eliminated ? `<span style="color:#ff3366;">REJECTED</span>` : `${Math.max(0, k.approvals || 0)} ✓`;
-        html += `<div class="row"><span class="label" style="color:${k.color};font-weight:700;">${i + 1}. ${k.name}</span><span class="value">${status}</span></div>`;
-      });
-
-      finishResults.innerHTML = html;
-    } else if (isDragon) {
+    if (isDragon) {
       const bestDist = (game.player.x / 1000).toFixed(1);
       finishTitle.textContent = "Dragon's Wrath!";
       finishTitle.style.background = "linear-gradient(90deg, #ff4d4d, #ff8a00)";
@@ -19075,16 +19888,16 @@ function showFinishScreen() {
     }
   }
 
-  if (game.tournament && game.tournament.totalRaces > 1) {
+  if (isGrandPrixActive(game.tournament)) {
     finishResults.innerHTML = buildTournamentStandingsHtml() + finishResults.innerHTML;
     if (game.tournament.raceIndex + 1 >= game.tournament.totalRaces) {
-      finishTitle.textContent = "Tournament Complete!";
+      finishTitle.textContent = "Grand Prix Complete!";
       finishTitle.style.background = "";
     }
   }
 
   const tourn = game.tournament;
-  const tournActive = !!(tourn && tourn.totalRaces > 1);
+  const tournActive = isGrandPrixActive(tourn);
   const tournDone = tournActive && tourn.raceIndex + 1 >= tourn.totalRaces;
   const waitHint = document.getElementById("finish-tournament-wait");
   const isP2pGuest = game.p2pMode && game.p2pRole === "guest";
@@ -19097,17 +19910,21 @@ function showFinishScreen() {
         if (waitHint) waitHint.style.display = "block";
       } else {
         restartBtn.style.display = "";
-        restartBtn.textContent = tournDone ? "New Tournament" : "Next Race";
+        restartBtn.textContent = tournDone ? "New Grand Prix" : "Next Race";
         if (waitHint) waitHint.style.display = "none";
       }
     }
   } else {
     if (nextTrackBtn) nextTrackBtn.style.display = isBattleMode() ? "none" : "";
     if (restartBtn) {
-      restartBtn.style.display = "";
-      restartBtn.textContent = isBattleMode() ? "Battle Again" : "Rematch";
+      restartBtn.style.display = isP2pGuest ? "none" : "";
+      if (game.p2pMode && !tournActive) {
+        restartBtn.textContent = "Return to Lobby";
+      } else {
+        restartBtn.textContent = isBattleMode() ? "Battle Again" : "Rematch";
+      }
     }
-    if (waitHint) waitHint.style.display = "none";
+    if (waitHint) waitHint.style.display = isP2pGuest ? "block" : "none";
   }
 
   finishScreen.classList.remove("hidden");
@@ -19207,9 +20024,7 @@ function setTimeOfDay(mode) {
 }
 
 async function startSelectedRace() {
-  if (!game.tournament && isTournamentEligible()) {
-    game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
-  }
+  prepareRaceFormatFromSelection();
   if (!game.multiplayer) {
     await loadSelectedAiModel();
   }
@@ -19304,8 +20119,8 @@ function renderRaceSetupSettings() {
   document.querySelectorAll("#laps-group [data-laps]").forEach((b) => {
     b.classList.toggle("active", Number(b.dataset.laps) === TOTAL_LAPS);
   });
-  document.querySelectorAll("#series-group [data-series]").forEach((b) => {
-    b.classList.toggle("active", Number(b.dataset.series) === seriesRaces);
+  document.querySelectorAll("#series-group [data-gp-races]").forEach((b) => {
+    b.classList.toggle("active", Number(b.dataset.gpRaces) === grandPrixRaces);
   });
   document.querySelectorAll("#aicount-group [data-aicount]").forEach((b) => {
     b.classList.toggle("active", Number(b.dataset.aicount) === aiCount);
@@ -19331,13 +20146,17 @@ if (lapsGroup) {
 const seriesGroup = document.getElementById("series-group");
 if (seriesGroup) {
   seriesGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-series]");
+    const btn = e.target.closest("[data-gp-races]");
     if (!btn) return;
     Sound.ensure(); Sound.resume();
-    seriesRaces = clampSeries(btn.dataset.series);
-    saveGameSettings({ seriesRaces });
+    grandPrixRaces = clampGrandPrixRaces(btn.dataset.gpRaces);
+    saveGameSettings({ grandPrixRaces });
     Sound.tone(660, 0.07, "square", 0.1);
     renderRaceSetupSettings();
+    if (game.state === STATE.SELECT) renderMapSelect();
+    if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) {
+      resetP2pReadyForLobbyChange();
+    }
   });
 }
 
@@ -19372,10 +20191,14 @@ if (approvalsGroup) {
   approvalsGroup.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-approvals]");
     if (!btn) return;
+    if (game.p2pMode && game.p2pRole === "guest") return;
     Sound.ensure(); Sound.resume();
     game.battleApprovals = clampApprovals(btn.dataset.approvals);
     Sound.tone(700, 0.07, "square", 0.1);
     renderApprovalsSelect();
+    if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) {
+      resetP2pReadyForLobbyChange();
+    }
   });
 }
 
@@ -19384,11 +20207,15 @@ if (battleTimingGroup) {
   battleTimingGroup.addEventListener("click", (e) => {
     const btn = e.target.closest("[data-battle-timed]");
     if (!btn) return;
+    if (game.p2pMode && game.p2pRole === "guest") return;
     Sound.ensure(); Sound.resume();
     game.battleUntimed = btn.dataset.battleTimed !== "1";
     saveGameSettings({ battleUntimed: game.battleUntimed });
     Sound.tone(700, 0.07, "square", 0.1);
     renderApprovalsSelect();
+    if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) {
+      resetP2pReadyForLobbyChange();
+    }
   });
 }
 
@@ -19479,13 +20306,14 @@ driveBtn.addEventListener("click", async () => {
 function rematchRace() {
   Sound.ensure(); Sound.resume();
   const tourn = game.tournament;
-  const tournActive = !!(tourn && tourn.totalRaces > 1);
+  const tournActive = isGrandPrixActive(tourn);
   const tournDone = tournActive && tourn.raceIndex + 1 >= tourn.totalRaces;
 
   if (tournActive && !tournDone) {
     if (game.p2pMode && game.p2pRole !== "host") return;
     tourn.raceIndex += 1;
-    game.selectedMapIdx = getNextCircuitMapIdx(game.selectedMapIdx || 0);
+    game.selectedMapIdx = getTournamentRaceMapIdx(tourn);
+    if (isGrandPrixSelection() || tourn.format === "grand_prix") game.mapSelection = GRAND_PRIX_ID;
     if (game.p2pMode) {
       startP2pRaceFromSelection();
     } else {
@@ -19496,9 +20324,12 @@ function rematchRace() {
 
   if (tournDone) {
     if (game.p2pMode && game.p2pRole !== "host") return;
-    game.tournament = null;
-    if (isTournamentEligible()) {
-      game.tournament = { totalRaces: seriesRaces, raceIndex: 0, standings: [] };
+    if (isGrandPrixSelection() || tourn.format === "grand_prix") {
+      game.tournament = createGrandPrixTournament(grandPrixRaces);
+      game.mapSelection = GRAND_PRIX_ID;
+      game.selectedMapIdx = game.tournament.circuitOrder[0];
+    } else {
+      game.tournament = null;
     }
     if (game.p2pMode) {
       startP2pRaceFromSelection();
@@ -19510,13 +20341,35 @@ function rematchRace() {
 
   // P2P rematches must renegotiate the lobby, so fall back to the select screen.
   if (game.p2pMode) {
-    showSelectScreen();
+    if (game.p2pRole === "host") {
+      resetP2pReadyForLobbyChange();
+      broadcastP2pMessage({
+        type: "return_lobby",
+        players: game.p2pPlayers.filter((p) => !p.disconnected),
+        ...getP2pLobbyMapPayload(),
+      });
+    }
+    p2pReturnToLobbyLocal();
     return;
   }
   startSelectedRace().catch(() => showSelectScreen());
 }
 
 restartBtn.addEventListener("click", rematchRace);
+
+if (p2pCancelLobbyBtn) {
+  p2pCancelLobbyBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    p2pHostCancelRaceToLobby();
+  });
+}
+
+if (p2pLeaveMatchBtn) {
+  p2pLeaveMatchBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    p2pGuestLeaveMatch();
+  });
+}
 
 if (nextTrackBtn) {
   nextTrackBtn.addEventListener("click", () => {
@@ -19592,8 +20445,7 @@ p2pHostBtn.addEventListener("click", () => {
             type: "lobby_connected",
             playerId: player.id,
             players: game.p2pPlayers,
-            mapIdx: game.selectedMapIdx,
-            trackIdx: Sound.trackIdx
+            ...getP2pLobbyMapPayload(),
           });
           broadcastP2pLobby();
           if (game.state !== STATE.SELECT && game.state !== STATE.RACING && game.state !== STATE.COUNTDOWN) {
@@ -19929,7 +20781,10 @@ function applyKartState(kart, p, opts = {}) {
   const pFinished = p.finished !== undefined ? p.finished : p.fin;
   const pElim = p.eliminated !== undefined ? p.eliminated : p.elim;
 
-  const smooth = !!opts.smooth && !pFinished && !pElim;
+  const preserveBattleAuthority = !!opts.preserveBattleAuthority;
+  const effectiveFinished = preserveBattleAuthority ? kart.finished : pFinished;
+  const effectiveEliminated = preserveBattleAuthority ? kart.eliminated : pElim;
+  const smooth = !!opts.smooth && !effectiveFinished && !effectiveEliminated;
   if (smooth && Number.isFinite(kart.x) && Number.isFinite(kart.y)) {
     const targetX = px + pvx * TUNING.P2P_REMOTE_VELOCITY_LEAD;
     const targetY = py + pvy * TUNING.P2P_REMOTE_VELOCITY_LEAD;
@@ -19965,27 +20820,46 @@ function applyKartState(kart, p, opts = {}) {
   kart.amendmentTimer = p.amendmentTimer ?? p.amt ?? 0;
   kart.itemSlot = p.itemSlot ?? p.it ?? null;
   kart.itemState = p.itemState ?? p.is ?? "empty";
-  kart.finished = pFinished || false;
-  if (pElim !== undefined) kart.eliminated = !!pElim;
+  if (!preserveBattleAuthority) {
+    kart.finished = pFinished || false;
+    if (pElim !== undefined) kart.eliminated = !!pElim;
+  }
   kart.lap = p.lap;
   if ((p.nextCheckpoint ?? p.nc) !== undefined) kart.nextCheckpoint = p.nextCheckpoint ?? p.nc;
   if ((p.checkpointsThisLap ?? p.cl) !== undefined) kart.checkpointsThisLap = p.checkpointsThisLap ?? p.cl;
   if ((p.finishTime ?? p.ft) !== undefined) kart.finishTime = p.finishTime ?? p.ft;
   kart.activeQuote = p.activeQuote ?? p.aq ?? null;
   kart.quoteTimer = p.quoteTimer ?? p.qt ?? 0;
-  kart.spinoutTimer = p.spinoutTimer ?? p.sp ?? 0;
+  const incomingSpinout = p.spinoutTimer ?? p.sp ?? 0;
+  kart.spinoutTimer = preserveBattleAuthority
+    ? Math.max(kart.spinoutTimer || 0, incomingSpinout)
+    : incomingSpinout;
   kart.coinsCollected = p.coinsCollected ?? p.cc ?? 0;
-  kart.mergePullTimer = p.mergePullTimer ?? p.mp ?? 0;
-  kart.mergePullTargetId = p.mergePullTargetId ?? p.mt ?? null;
-  kart.mergePullTarget = getKartById(kart.mergePullTargetId);
+  if (!preserveBattleAuthority) {
+    kart.mergePullTimer = p.mergePullTimer ?? p.mp ?? 0;
+    kart.mergePullTargetId = p.mergePullTargetId ?? p.mt ?? null;
+    kart.mergePullTarget = getKartById(kart.mergePullTargetId);
+  }
   if ((p.ultCharge ?? p.uc) !== undefined) kart.ultCharge = p.ultCharge ?? p.uc ?? 0;
   if ((p.ultReady ?? p.ur) !== undefined) kart.ultReady = !!(p.ultReady ?? p.ur);
   if ((p.ultActiveTimer ?? p.ua) !== undefined) kart.ultActiveTimer = p.ultActiveTimer ?? p.ua ?? 0;
   if ((p.ultTier ?? p.ut) !== undefined) kart.ultTier = p.ultTier ?? p.ut ?? 0;
+  applyBattleCompactFields(kart, p);
 }
 
 function applyLocalAuthoritativeEffects(kart, p) {
   if (!kart || !p) return;
+  if (game.p2pMode && isBattleMode()) {
+    applyBattleCompactFields(kart, p);
+    if (p.mp !== undefined) kart.mergePullTimer = p.mp;
+    if (p.mt !== undefined) {
+      kart.mergePullTargetId = p.mt;
+      kart.mergePullTarget = getKartById(p.mt);
+    }
+    if (p.elim !== undefined || p.eliminated !== undefined) {
+      kart.eliminated = !!(p.elim ?? p.eliminated);
+    }
+  }
   const remoteSpinout = p.spinoutTimer ?? p.sp ?? 0;
   if (remoteSpinout > (kart.spinoutTimer || 0) + 2) {
     kart.spinoutTimer = remoteSpinout;
@@ -20042,6 +20916,45 @@ function applyDragonEscapeState(state) {
   applyDragonObjectState(game.dragonEscape, state);
 }
 
+function applyBattleCompactFields(kart, p) {
+  if (!kart || !p) return;
+  if (p.ap !== undefined) kart.approvals = p.ap;
+  if (p.bs !== undefined) kart.battleSteals = p.bs;
+  if (p.rg !== undefined) kart.recoverGraceTimer = p.rg;
+  if (p.kb !== undefined) kart.killedBy = p.kb ? getKartById(p.kb) : null;
+}
+
+function sendP2pBattleEnd() {
+  if (!game.p2pMode || game.p2pRole !== "host" || !isBattleMode()) return;
+  const ranking = game.finalRanking || [];
+  sendP2pMessage({
+    type: "battle_end",
+    raceTime: game.raceTime,
+    ranking: ranking.map((k) => getKartId(k)).filter(Boolean),
+    karts: ranking.map((k) => ({ id: getKartId(k), s: serializeKartCompact(k) })).filter((row) => row.id),
+  });
+}
+
+function applyP2pBattleEnd(data) {
+  Sound.stopAllEngines();
+  Sound.stopAllDriftSqueals();
+  Sound.stopAllRumbles();
+  if (data.raceTime !== undefined) game.raceTime = data.raceTime;
+  const snapshots = data.karts || [];
+  for (const snap of snapshots) {
+    const kart = getKartById(snap.id);
+    if (kart && snap.s) applyKartState(kart, snap.s);
+  }
+  const ids = data.ranking || [];
+  game.finalRanking = ids.map((id) => getKartById(id)).filter(Boolean);
+  game.p2pBattleEndPending = false;
+  game._pauseFromState = null;
+  pauseScreen.classList.add("hidden");
+  game.state = STATE.FINISHED;
+  showFinishScreen();
+  Sound.finish();
+}
+
 function applyDragonObjectState(dragon, state) {
   if (!dragon || !state) return;
   dragon.x = state.x;
@@ -20058,7 +20971,7 @@ function applyDragonObjectState(dragon, state) {
 
 function serializeKartCompact(k) {
   if (!k) return null;
-  return {
+  const out = {
     x: Math.round(k.x * 10) / 10,
     y: Math.round(k.y * 10) / 10,
     h: Math.round(k.heading * 1000) / 1000,
@@ -20092,6 +21005,15 @@ function serializeKartCompact(k) {
     z: (k.z > 0.05) ? Math.round(k.z * 10) / 10 : undefined,
     vz: (k.vz && Math.abs(k.vz) > 0.05) ? Math.round(k.vz * 100) / 100 : undefined,
   };
+  if (isBattleMode() || k.approvals !== undefined) {
+    out.ap = k.approvals ?? 0;
+    out.bs = k.battleSteals || 0;
+    out.rg = k.recoverGraceTimer || 0;
+    out.kb = k.killedBy ? getKartId(k.killedBy) : null;
+    out.mp = k.mergePullTimer || 0;
+    out.mt = k.mergePullTargetId || null;
+  }
+  return out;
 }
 
 function serializeHazardCompact(h) {
@@ -20126,10 +21048,13 @@ function sendHostSync() {
     now - game.p2pLastPickupSyncAt >= TUNING.P2P_PICKUP_FULL_SYNC_INTERVAL_MS;
   const includeHazards = !game.p2pLastHazardSyncAt ||
     now - game.p2pLastHazardSyncAt >= (1000 / TUNING.P2P_HAZARD_SYNC_HZ);
+  const authState = (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState)
+    ? game._pauseFromState
+    : game.state;
   const sync = {
     type: "host_sync",
     rt: game.raceTime,
-    gs: game.state,
+    gs: authState,
     dr: serializeDragonState(game.track && game.track.regulatoryDragon),
     de: serializeDragonState(game.dragonEscape),
     pl: (game.p2pPlayers || []).map(p => ({
@@ -20148,6 +21073,7 @@ function sendHostSync() {
     sync.co = game.track.coins.map(c => c.collected ? 1 : 0);
     sync.ib = game.track.itemBoxes.map(b => b.active ? 1 : 0);
   }
+  if (isBattleMode()) sync.btl = game.battleTimeLeft;
   sendP2pMessage(sync);
 }
 
@@ -20163,6 +21089,7 @@ function sendGuestSync() {
 
 function handleP2pDisconnect({ silent = false } = {}) {
   p2pJoinAttemptSeq++;
+  const battleEndPending = !!game.p2pBattleEndPending;
   const leaveMsg = {
     type: "player_left",
     playerId: game.p2pLocalId || (game.p2pRole === "host" ? "host" : "guest"),
@@ -20196,6 +21123,7 @@ function handleP2pDisconnect({ silent = false } = {}) {
   game.multiplayer = false;
   game.p1Locked = false;
   game.p2Locked = false;
+  game.p2pBattleEndPending = false;
 
   p2pHostStatus.innerText = "Click Create Lobby to generate a code";
   p2pHostStatus.className = "p2p-status";
@@ -20209,7 +21137,7 @@ function handleP2pDisconnect({ silent = false } = {}) {
   p2pJoinStatus.innerText = "Enter code and click Join";
   p2pJoinStatus.className = "p2p-status";
 
-  if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN) {
+  if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED || battleEndPending) {
     Sound.stopAllEngines();
     Sound.stopAllDriftSqueals();
     Sound.stopAllRumbles();
@@ -20240,7 +21168,7 @@ function handleP2pData(data, sourceConn = null) {
     game.multiplayer = true;
     game.p2pLocalId = data.playerId || "guest_1";
     game.p2pPlayers = data.players || [];
-    game.selectedMapIdx = data.mapIdx !== undefined ? data.mapIdx : game.selectedMapIdx;
+    applyLobbyMapSelection(data);
     if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
     renderP2pLobby();
     p2pJoinStatus.innerText = "Connected! Waiting for host to start...";
@@ -20255,7 +21183,7 @@ function handleP2pData(data, sourceConn = null) {
 
   else if (data.type === "lobby_state") {
     game.p2pPlayers = data.players || game.p2pPlayers;
-    game.selectedMapIdx = data.mapIdx !== undefined ? data.mapIdx : game.selectedMapIdx;
+    applyLobbyMapSelection(data);
     if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
     syncP2pSelectionFromRoster();
     renderP2pLobby();
@@ -20263,6 +21191,8 @@ function handleP2pData(data, sourceConn = null) {
       updateSelectionHighlight();
       updateP2pStartButton();
       renderMapSelect();
+      renderApprovalsSelect();
+      updateP2pBattleLobbyUi();
     }
   }
 
@@ -20302,21 +21232,52 @@ function handleP2pData(data, sourceConn = null) {
   }
 
   else if (data.type === "map_update") {
-    game.selectedMapIdx = data.mapIdx;
+    applyLobbyMapSelection(data);
     const selectedMap = MAPS[game.selectedMapIdx || 0];
     if (selectedMap) previewSelectedMapMusic(selectedMap);
     renderMapSelect();
+    renderApprovalsSelect();
+    updateP2pBattleLobbyUi();
+    updateDriveButtonLabel();
+  }
+
+  else if (data.type === "return_lobby") {
+    p2pReturnToLobbyLocal(data);
+  }
+
+  else if (data.type === "battle_end") {
+    game.p2pLastHostSyncReceivedAt = performance.now();
+    applyP2pBattleEnd(data);
+  }
+
+  else if (data.type === "merge_request") {
+    if (game.p2pRole !== "host" || !isBattleMode()) return;
+    const requesterId = getP2pIdForConn(sourceConn) || data.kartId;
+    const kart = getKartById(requesterId);
+    if (!kart || kart.eliminated || kart.finished) return;
+    const now = performance.now();
+    if ((kart.mergePullTimer || 0) > 0 || now - (kart._lastMergeRequestRpcAt || -Infinity) < 2500) return;
+    kart._lastMergeRequestRpcAt = now;
+    startMergeRequestPull(kart);
   }
 
   else if (data.type === "start_race") {
+    applyLobbyMapSelection(data);
     if (data.players) game.p2pPlayers = data.players;
     if (data.trackIdx !== undefined && data.trackIdx !== null) setMusicTrack(data.trackIdx);
     if (!data.players) {
       game.selectedCharIdx = data.guestCharIdx;
       game.selectedCharIdx2 = data.hostCharIdx;
     }
-    game.selectedMapIdx = data.mapIdx !== undefined ? data.mapIdx : 0;
     game.tournament = data.tournament || null;
+    if (game.tournament?.format === "grand_prix") {
+      game.mapSelection = GRAND_PRIX_ID;
+    }
+    ensureSelectedMapMatchesMode();
+    game.p2pBattleEndPending = false;
+    if (game.p2pRole === "guest") {
+      game.p2pLastHostSyncReceivedAt = performance.now();
+    }
 
     // Sync dragon trail from host seed so all clients have the same map
     if (data.dragonSeed !== undefined && MAPS[game.selectedMapIdx].id === "dragon_escape") {
@@ -20338,18 +21299,31 @@ function handleP2pData(data, sourceConn = null) {
   }
 
   else if (data.type === "host_sync") {
+    if (game.p2pRole === "guest") {
+      game.p2pLastHostSyncReceivedAt = performance.now();
+      game.p2pConnectionUnstable = false;
+    }
     const gs = data.gs ?? data.state;
     if (gs !== undefined) {
       if (game.state !== gs) {
-        if (gs === STATE.FINISHED) {
+        if (game.p2pMode && game.state === STATE.PAUSED && gs !== STATE.FINISHED) {
+          // Keep local pause overlay while the online race continues.
+        } else if (gs === STATE.FINISHED) {
+          game._pauseFromState = null;
+          pauseScreen.classList.add("hidden");
           game.state = STATE.FINISHED;
-          showFinishScreen();
+          if (game.p2pMode && isBattleMode() && game.p2pRole === "guest") {
+            game.p2pBattleEndPending = true;
+          } else {
+            showFinishScreen();
+          }
         } else {
           game.state = gs;
         }
       }
     }
     if ((data.rt ?? data.raceTime) !== undefined) game.raceTime = data.rt ?? data.raceTime;
+    if (data.btl !== undefined && isBattleMode()) game.battleTimeLeft = data.btl;
     if (data.dr ?? data.dragon) applyDragonState(data.dr ?? data.dragon);
     if (data.de ?? data.dragonEscape) applyDragonEscapeState(data.de ?? data.dragonEscape);
 
@@ -20470,14 +21444,20 @@ function handleP2pData(data, sourceConn = null) {
 
   else if (data.type === "guest_sync") {
     if (data.playerId && data.state) {
-      applyKartState(getKartById(data.playerId), data.state, { smooth: true });
+      applyKartState(getKartById(data.playerId), data.state, {
+        smooth: true,
+        preserveBattleAuthority: game.p2pMode && isBattleMode(),
+      });
       if (game.p2pRole === "host") {
         broadcastP2pMessage(data, sourceConn);
       }
       return;
     }
     if (game.player2 && data.p2) {
-      applyKartState(game.player2, data.p2, { smooth: true });
+      applyKartState(game.player2, data.p2, {
+        smooth: true,
+        preserveBattleAuthority: game.p2pMode && isBattleMode(),
+      });
     }
   }
 
@@ -20526,10 +21506,14 @@ function handleP2pData(data, sourceConn = null) {
   }
 
   else if (data.type === "player_left") {
-    const who = data.role === "host" ? "Host" : "A player";
-    handleP2pDisconnect({ silent: true });
-    if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN) {
-      alert(`${who} left the race. Returning to menu.`);
+    if (game.p2pRole === "host") {
+      handleP2pPlayerRemoved(data.playerId);
+    } else {
+      handleP2pDisconnect({ silent: true });
+      const who = data.role === "host" ? "Host" : "A player";
+      if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED) {
+        alert(`${who} left the race. Returning to menu.`);
+      }
     }
   }
 
