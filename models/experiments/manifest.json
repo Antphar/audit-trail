@@ -1,0 +1,130 @@
+{
+  "models": [
+    {
+      "id": "dqn-arena-nstep3-exp",
+      "name": "DQN Arena n-step 3 experiment",
+      "path": "experiments/dqn-arena-nstep3-exp.json",
+      "mode": "battle",
+      "map": "battle_arena",
+      "character": "florian",
+      "format": "turbo-kart-headless-dqn-v2",
+      "observationKeyCount": 260,
+      "actionCount": 15,
+      "metrics": {
+        "episodes": 3,
+        "finish_rate": 0.0,
+        "avg_reward": -7.210000000000032,
+        "avg_laps": 0.0,
+        "avg_race_time": 119.99999999999442,
+        "avg_progress": 4.905007800482976,
+        "avg_coins": 3.0,
+        "avg_item_uses": 0.6666666666666666,
+        "avg_ult_uses": 0.0,
+        "avg_drift_boosts": 0.0,
+        "avg_approvals_left": 2.6666666666666665,
+        "avg_steals": 0.0,
+        "avg_survival_time": 119.99999999999442,
+        "battle_win_rate": 0.0,
+        "winner_chars": {
+          "anton": 2,
+          "artur": 1
+        },
+        "player_win_rate": 0.0
+      },
+      "eval": {
+        "avg_reward": -7.210000000000032,
+        "avg_finish_rate": 0.0,
+        "tracks": {
+          "battle_arena": {
+            "battle": {
+              "episodes": 3,
+              "finish_rate": 0.0,
+              "avg_reward": -7.210000000000032,
+              "avg_laps": 0.0,
+              "avg_race_time": 119.99999999999442,
+              "avg_progress": 4.905007800482976,
+              "avg_coins": 3.0,
+              "avg_item_uses": 0.6666666666666666,
+              "avg_ult_uses": 0.0,
+              "avg_drift_boosts": 0.0,
+              "avg_approvals_left": 2.6666666666666665,
+              "avg_steals": 0.0,
+              "avg_survival_time": 119.99999999999442,
+              "battle_win_rate": 0.0,
+              "winner_chars": {
+                "anton": 2,
+                "artur": 1
+              },
+              "player_win_rate": 0.0
+            }
+          }
+        }
+      },
+      "frameStack": 4,
+      "frameSkip": 6,
+      "updatedAt": 1784086929
+    },
+    {
+      "id": "dqn-arena-nstep1-exp",
+      "name": "DQN Arena n-step 1 experiment",
+      "path": "experiments/dqn-arena-nstep1-exp.json",
+      "mode": "battle",
+      "map": "battle_arena",
+      "character": "florian",
+      "format": "turbo-kart-headless-dqn-v2",
+      "observationKeyCount": 260,
+      "actionCount": 15,
+      "metrics": {
+        "episodes": 3,
+        "finish_rate": 0.0,
+        "avg_reward": -6.38000000000002,
+        "avg_laps": 0.0,
+        "avg_race_time": 119.99999999999442,
+        "avg_progress": 2.2212742367916216,
+        "avg_coins": 4.0,
+        "avg_item_uses": 1.0,
+        "avg_ult_uses": 0.0,
+        "avg_drift_boosts": 0.6666666666666666,
+        "avg_approvals_left": 3.0,
+        "avg_steals": 0.0,
+        "avg_survival_time": 119.99999999999442,
+        "battle_win_rate": 0.0,
+        "winner_chars": {
+          "anton": 3
+        },
+        "player_win_rate": 0.0
+      },
+      "eval": {
+        "avg_reward": -6.38000000000002,
+        "avg_finish_rate": 0.0,
+        "tracks": {
+          "battle_arena": {
+            "battle": {
+              "episodes": 3,
+              "finish_rate": 0.0,
+              "avg_reward": -6.38000000000002,
+              "avg_laps": 0.0,
+              "avg_race_time": 119.99999999999442,
+              "avg_progress": 2.2212742367916216,
+              "avg_coins": 4.0,
+              "avg_item_uses": 1.0,
+              "avg_ult_uses": 0.0,
+              "avg_drift_boosts": 0.6666666666666666,
+              "avg_approvals_left": 3.0,
+              "avg_steals": 0.0,
+              "avg_survival_time": 119.99999999999442,
+              "battle_win_rate": 0.0,
+              "winner_chars": {
+                "anton": 3
+              },
+              "player_win_rate": 0.0
+            }
+          }
+        }
+      },
+      "frameStack": 4,
+      "frameSkip": 6,
+      "updatedAt": 1784047033
+    }
+  ]
+}
