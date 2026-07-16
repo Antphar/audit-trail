@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import random
 from pathlib import Path
@@ -20,7 +21,7 @@ from playwright.sync_api import sync_playwright
 from rich.console import Console
 from rich.table import Table
 
-from rl_common import TurboKartEnv, launch_chromium, parse_csv
+from rl_common import make_env, parse_csv
 
 
 def load_manifest(path: Path) -> list[dict[str, Any]]:
@@ -44,38 +45,9 @@ def load_model_payload(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
     return json.loads((root / path).read_text(encoding="utf-8"))
 
 
-def decide_action(page: Any, payload: dict[str, Any]) -> dict[str, Any]:
-    return page.evaluate(
-        """(weights) => {
-            const observation = getHeadlessObservation(game.player);
-            const decision = weights.type === "sac"
-                ? runHeadlessSac(weights, observation, game.player)
-                : runHeadlessDqn(weights, observation, game.player);
-            return decision.action;
-        }""",
-        payload,
-    )
-
-
-def ranking(page: Any) -> list[dict[str, Any]]:
-    return page.evaluate(
-        """() => rankAll().map(k => ({
-            name: k.name,
-            charId: k.charId,
-            finished: !!k.finished,
-            eliminated: !!k.eliminated,
-            progress: progressValue(k),
-            lap: k.lap,
-            coins: k.coinsCollected || 0,
-            itemUses: k.itemUseCount || 0,
-            ultUses: k.ultUseCount || 0,
-            driftBoosts: k.driftBoostCount || 0,
-        }))"""
-    )
-
 
 def run_episode(
-    env: TurboKartEnv,
+    env: Any,
     player_payload: dict[str, Any],
     opponent_payload: dict[str, Any],
     *,
@@ -97,10 +69,10 @@ def run_episode(
     total_reward = 0.0
     info: dict[str, Any] = {}
     while not done:
-        action = decide_action(env.page, player_payload)
+        action = env.decide_headless_action(player_payload)
         _, reward, done, info = env.step(action)
         total_reward += reward
-    ranks = ranking(env.page)
+    ranks = env.get_episode_ranking()
     player_rank = next((idx + 1 for idx, kart in enumerate(ranks) if kart.get("charId") == character), None)
     player_stats = next((kart for kart in ranks if kart.get("charId") == character), {})
     return {
@@ -164,6 +136,12 @@ def add_summary_row(table: Table, label: str, summary: dict[str, float]) -> None
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backend",
+        choices=["browser", "node"],
+        default="browser",
+        help="Simulation backend: Playwright Chromium (browser) or Node stdio sim-server (node).",
+    )
     parser.add_argument("--index", default="index.html")
     parser.add_argument(
         "--mode",
@@ -203,12 +181,19 @@ def main() -> None:
     characters = parse_csv(args.characters)
     console = Console()
 
-    with sync_playwright() as p:
-        browser = launch_chromium(p, args.auto_install_browser)
-        page = browser.new_page()
-        env = TurboKartEnv(
+    index_path = Path(args.index).resolve()
+    browser_ctx = sync_playwright() if args.backend == "browser" else contextlib.nullcontext()
+    with browser_ctx as p:
+        page = None
+        if args.backend == "browser":
+            from rl_common import launch_chromium
+
+            browser = launch_chromium(p, args.auto_install_browser)
+            page = browser.new_page()
+        env = make_env(
+            args.backend,
+            index_path=index_path,
             page=page,
-            index_path=Path(args.index),
             map_id=maps[0],
             character=characters[0],
             frames=args.frames,
@@ -247,7 +232,10 @@ def main() -> None:
                     classic_opponents=args.classic_opponents,
                 )
             )
-        browser.close()
+        env.close()
+        if args.backend == "browser":
+            page.close()
+            browser.close()
 
     table = Table(title="TurboKart Head-to-Head")
     table.add_column("Player")

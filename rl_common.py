@@ -19,13 +19,22 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page, sync_playwright
 from rich.console import Console
+from sim_client import (
+    NodeRpcClient,
+    build_sim_query_flags,
+    build_sim_query_string,
+    find_node_executable,
+    normalize_sim_mode,
+    run_node_headless_eval,
+)
+
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
@@ -521,56 +530,16 @@ class RolloutResult:
     count: int
 
 
-class TurboKartEnv:
-    def __init__(
-        self,
-        page: Page,
-        index_path: Path,
-        map_id: str,
-        character: str,
-        frames: int,
-        solo: bool,
-        no_items: bool,
-        no_hazards: bool,
-        frame_stack: int = 1,
-        frame_skip: int = 4,
-        opponent_models: list[dict[str, Any]] | None = None,
-        classic_opponent_slots: int = 0,
-        mode: str = "race",
-    ):
-        self.page = page
-        self.mode = "battle" if str(mode).lower() in ("battle", "arena") else "race"
-        flags = [
-            "headless=1",
-            "external=1",
-            f"mode={self.mode}",
-            f"map={map_id}",
-            f"char={character}",
-            f"frames={frames}",
-            f"solo={1 if solo else 0}",
-            f"noItems={1 if no_items else 0}",
-            f"noHazards={1 if no_hazards else 0}",
-        ]
-        self.url = index_path.resolve().as_uri() + "?" + "&".join(flags)
-        self.map_id = map_id
-        self.character = character
-        self.frames = frames
-        self.solo = solo
-        self.no_items = no_items
-        self.no_hazards = no_hazards
-        self.frame_stack = max(1, int(frame_stack))
-        self.frame_skip = max(1, int(frame_skip))
-        self.opponent_models = opponent_models or []
-        self.classic_opponent_slots = max(0, int(classic_opponent_slots))
-        self.opponent_count: int | None = None
-        self.last_reset_info: dict[str, Any] = {}
-        self.obs_keys: list[str] = []
-        self._base_keys: list[str] = []
-        self.actions: list[dict[str, Any]] = []
-        self._frames: deque[np.ndarray] = deque(maxlen=self.frame_stack)
-
+class _RlObsStackMixin:
     _SHALLOW_STACK_PREFIXES = ("kartRay", "hazardRay", "pickupRay", "boosterRay")
     _SHALLOW_STACK_MAX_LAG = 0
+
+    def _init_obs_stack(self, frame_stack: int) -> None:
+        self.frame_stack = max(1, int(frame_stack))
+        self.obs_keys: list[str] = []
+        self._base_keys: list[str] = []
+        self._frames: deque[np.ndarray] = deque(maxlen=self.frame_stack)
+        self._stack_mask: np.ndarray | None = None
 
     def _stack_keys(self, keys: list[str]) -> list[str]:
         if self.frame_stack <= 1:
@@ -598,7 +567,7 @@ class TurboKartEnv:
                 self._frames.append(obs.copy())
         if self.frame_stack <= 1:
             return obs
-        if not hasattr(self, "_stack_mask"):
+        if self._stack_mask is None:
             self._build_stack_mask()
         full = np.concatenate(list(self._frames)).astype(np.float32)
         return full[self._stack_mask] if self._stack_mask is not None else full
@@ -618,35 +587,18 @@ class TurboKartEnv:
                 keep.append(lag * n_base + i)
         self._stack_mask = np.array(keep, dtype=np.intp)
 
-    def load(self) -> None:
-        self.page.goto(self.url, wait_until="load")
-        ready = self.page.evaluate("window.__HEADLESS_READY__")
-        if not ready:
-            raise RuntimeError("Headless RL API did not initialize")
+    def _apply_reset_result(self, result: dict[str, Any]) -> np.ndarray:
+        self.last_reset_info = dict(result.get("info", {}))
+        self._base_keys = result["obsKeys"]
+        self.obs_keys = self._stack_keys(self._base_keys)
+        self.actions = result["actions"]
+        return self._stack_obs(np.asarray(result["obs"], dtype=np.float32), reset=True)
 
-    def reset(self) -> np.ndarray:
-        return self.reset_with()
+    def _apply_step_result(self, result: dict[str, Any]) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
+        obs = self._stack_obs(np.asarray(result["obs"], dtype=np.float32))
+        return obs, float(result["reward"]), bool(result["done"]), dict(result["info"])
 
-    def reset_with(
-        self,
-        *,
-        map_id: str | None = None,
-        character: str | None = None,
-        opponent_models: list[dict[str, Any]] | None = None,
-        classic_opponent_slots: int | None = None,
-        opponent_count: int | None = None,
-    ) -> np.ndarray:
-        if map_id is not None:
-            self.map_id = map_id
-        if character is not None:
-            self.character = character
-        if opponent_models is not None:
-            self.opponent_models = opponent_models
-        if classic_opponent_slots is not None:
-            self.classic_opponent_slots = max(0, int(classic_opponent_slots))
-        # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
-        # into subsequent baseline evals on the same env.
-        self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
+    def _build_reset_config(self) -> dict[str, Any]:
         cfg: dict[str, Any] = {
             "mode": self.mode,
             "map": self.map_id,
@@ -661,49 +613,9 @@ class TurboKartEnv:
         }
         if self.opponent_count is not None:
             cfg["opponentCount"] = self.opponent_count
-        result = self.page.evaluate("""(cfg) => window.rlReset(cfg)""", cfg)
-        self.last_reset_info = dict(result.get("info", {}))
-        self._base_keys = result["obsKeys"]
-        self.obs_keys = self._stack_keys(self._base_keys)
-        self.actions = result["actions"]
-        return self._stack_obs(np.asarray(result["obs"], dtype=np.float32), reset=True)
+        return cfg
 
-    def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
-        if isinstance(action, (int, np.integer)):
-            result = self.page.evaluate("(a) => window.rlStep(a)", int(action))
-        elif isinstance(action, dict):
-            result = self.page.evaluate("(a) => window.rlStep(a)", action)
-        else:
-            action_list = [float(x) for x in action]
-            result = self.page.evaluate("(a) => window.rlStep(a)", action_list)
-        obs = self._stack_obs(np.asarray(result["obs"], dtype=np.float32))
-        reward = float(result["reward"])
-        done = bool(result["done"])
-        info = dict(result["info"])
-        return obs, reward, done, info
-
-    def set_rollout_policy(self, policy: dict[str, Any]) -> None:
-        self.page.evaluate("""(p) => window.rlSetRolloutPolicy(p)""", policy)
-
-    def rollout(
-        self,
-        policy: dict[str, Any] | None,
-        epsilons: list[float],
-        seed: int,
-        *,
-        max_steps: int | None = None,
-        reuse_cached_policy: bool = False,
-    ) -> RolloutResult:
-        if not reuse_cached_policy:
-            if policy is None:
-                raise ValueError("policy is required unless reuse_cached_policy=True")
-            self.set_rollout_policy(policy)
-        config = {
-            "epsilons": [float(e) for e in epsilons],
-            "seed": int(seed) & 0xFFFFFFFF,
-            "maxSteps": int(max_steps if max_steps is not None else len(epsilons)),
-        }
-        result = self.page.evaluate("""(cfg) => window.rlRollout(cfg)""", config)
+    def _parse_rollout_result(self, result: dict[str, Any]) -> RolloutResult:
         stopped_reason = str(result.get("stoppedReason", ""))
         if stopped_reason == "alreadyDone":
             return RolloutResult(entries=[], stopped_reason="alreadyDone", count=0)
@@ -735,6 +647,358 @@ class TurboKartEnv:
             stopped_reason=stopped_reason,
             count=int(result.get("count", len(entries))),
         )
+
+
+class _KartEnvConfigMixin(_RlObsStackMixin):
+    def _init_env_config(
+        self,
+        *,
+        map_id: str,
+        character: str,
+        frames: int,
+        solo: bool,
+        no_items: bool,
+        no_hazards: bool,
+        frame_stack: int,
+        frame_skip: int,
+        opponent_models: list[dict[str, Any]] | None,
+        classic_opponent_slots: int,
+        mode: str,
+    ) -> None:
+        self.mode = normalize_sim_mode(mode)
+        self.map_id = map_id
+        self.character = character
+        self.frames = frames
+        self.solo = solo
+        self.no_items = no_items
+        self.no_hazards = no_hazards
+        self.frame_skip = max(1, int(frame_skip))
+        self.opponent_models = opponent_models or []
+        self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self.opponent_count: int | None = None
+        self.last_reset_info: dict[str, Any] = {}
+        self.actions: list[dict[str, Any]] = []
+        self._init_obs_stack(frame_stack)
+
+
+class TurboKartEnv(_KartEnvConfigMixin):
+    def __init__(
+        self,
+        page: Any,
+        index_path: Path,
+        map_id: str,
+        character: str,
+        frames: int,
+        solo: bool,
+        no_items: bool,
+        no_hazards: bool,
+        frame_stack: int = 1,
+        frame_skip: int = 4,
+        opponent_models: list[dict[str, Any]] | None = None,
+        classic_opponent_slots: int = 0,
+        mode: str = "race",
+    ):
+        self.page = page
+        self._init_env_config(
+            map_id=map_id,
+            character=character,
+            frames=frames,
+            solo=solo,
+            no_items=no_items,
+            no_hazards=no_hazards,
+            frame_stack=frame_stack,
+            frame_skip=frame_skip,
+            opponent_models=opponent_models,
+            classic_opponent_slots=classic_opponent_slots,
+            mode=mode,
+        )
+        flags = build_sim_query_flags(
+            mode=self.mode,
+            map_id=map_id,
+            character=character,
+            frames=frames,
+            solo=solo,
+            no_items=no_items,
+            no_hazards=no_hazards,
+        )
+        self.url = index_path.resolve().as_uri() + "?" + "&".join(flags)
+
+    def load(self) -> None:
+        self.page.goto(self.url, wait_until="load")
+        ready = self.page.evaluate("window.__HEADLESS_READY__")
+        if not ready:
+            raise RuntimeError("Headless RL API did not initialize")
+
+    def close(self) -> None:
+        return None
+
+    def reset(self) -> np.ndarray:
+        return self.reset_with()
+
+    def reset_with(
+        self,
+        *,
+        map_id: str | None = None,
+        character: str | None = None,
+        opponent_models: list[dict[str, Any]] | None = None,
+        classic_opponent_slots: int | None = None,
+        opponent_count: int | None = None,
+    ) -> np.ndarray:
+        if map_id is not None:
+            self.map_id = map_id
+        if character is not None:
+            self.character = character
+        if opponent_models is not None:
+            self.opponent_models = opponent_models
+        if classic_opponent_slots is not None:
+            self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
+        # into subsequent baseline evals on the same env.
+        self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
+        result = self.page.evaluate("""(cfg) => window.rlReset(cfg)""", self._build_reset_config())
+        return self._apply_reset_result(result)
+
+    def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
+        if isinstance(action, (int, np.integer)):
+            result = self.page.evaluate("(a) => window.rlStep(a)", int(action))
+        elif isinstance(action, dict):
+            result = self.page.evaluate("(a) => window.rlStep(a)", action)
+        else:
+            action_list = [float(x) for x in action]
+            result = self.page.evaluate("(a) => window.rlStep(a)", action_list)
+        return self._apply_step_result(result)
+
+    def set_rollout_policy(self, policy: dict[str, Any]) -> None:
+        self.page.evaluate("""(p) => window.rlSetRolloutPolicy(p)""", policy)
+
+    def rollout(
+        self,
+        policy: dict[str, Any] | None,
+        epsilons: list[float],
+        seed: int,
+        *,
+        max_steps: int | None = None,
+        reuse_cached_policy: bool = False,
+    ) -> RolloutResult:
+        if not reuse_cached_policy:
+            if policy is None:
+                raise ValueError("policy is required unless reuse_cached_policy=True")
+            self.set_rollout_policy(policy)
+        config = {
+            "epsilons": [float(e) for e in epsilons],
+            "seed": int(seed) & 0xFFFFFFFF,
+            "maxSteps": int(max_steps if max_steps is not None else len(epsilons)),
+        }
+        result = self.page.evaluate("""(cfg) => window.rlRollout(cfg)""", config)
+        return self._parse_rollout_result(result)
+
+    def get_last_ranking(self) -> list[dict[str, Any]]:
+        return self.page.evaluate(
+            """() => (
+                window.__lastRlRanking ||
+                (typeof rankAll === 'function'
+                  ? rankAll().map(k => ({ name: k.name, charId: k.charId, finished: !!k.finished }))
+                  : [])
+            )"""
+        )
+
+    def get_opponent_approvals(self, player_character: str) -> float:
+        value = self.page.evaluate(
+            """(playerChar) => {
+              const karts = typeof getActiveKarts === 'function' ? getActiveKarts() : [];
+              const opp = karts.find(k => k && k.charId !== playerChar);
+              return opp ? (opp.approvals || 0) : 0;
+            }""",
+            player_character,
+        )
+        return float(value or 0)
+
+    def decide_headless_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.page.evaluate(
+            """(weights) => {
+                const observation = getHeadlessObservation(game.player);
+                const decision = weights.type === "sac"
+                    ? runHeadlessSac(weights, observation, game.player)
+                    : runHeadlessDqn(weights, observation, game.player);
+                return decision.action;
+            }""",
+            payload,
+        )
+
+    def get_episode_ranking(self) -> list[dict[str, Any]]:
+        return self.page.evaluate(
+            """() => rankAll().map(k => ({
+                name: k.name,
+                charId: k.charId,
+                finished: !!k.finished,
+                eliminated: !!k.eliminated,
+                progress: progressValue(k),
+                lap: k.lap,
+                coins: k.coinsCollected || 0,
+                itemUses: k.itemUseCount || 0,
+                ultUses: k.ultUseCount || 0,
+                driftBoosts: k.driftBoostCount || 0,
+            }))"""
+        )
+
+
+class NodeSimEnv(_KartEnvConfigMixin):
+    def __init__(
+        self,
+        repo_root: Path,
+        map_id: str,
+        character: str,
+        frames: int,
+        solo: bool,
+        no_items: bool,
+        no_hazards: bool,
+        frame_stack: int = 1,
+        frame_skip: int = 4,
+        opponent_models: list[dict[str, Any]] | None = None,
+        classic_opponent_slots: int = 0,
+        mode: str = "race",
+    ):
+        self.repo_root = repo_root.resolve()
+        self._init_env_config(
+            map_id=map_id,
+            character=character,
+            frames=frames,
+            solo=solo,
+            no_items=no_items,
+            no_hazards=no_hazards,
+            frame_stack=frame_stack,
+            frame_skip=frame_skip,
+            opponent_models=opponent_models,
+            classic_opponent_slots=classic_opponent_slots,
+            mode=mode,
+        )
+        self.query = build_sim_query_string(
+            mode=self.mode,
+            map_id=map_id,
+            character=character,
+            frames=frames,
+            solo=solo,
+            no_items=no_items,
+            no_hazards=no_hazards,
+        )
+        self._client = NodeRpcClient(self.repo_root, self.query)
+
+    def load(self) -> None:
+        result = self._client.rpc("ping")
+        if not result or not result.get("ok"):
+            raise RuntimeError("Node sim-server failed ping handshake")
+
+    def close(self) -> None:
+        self._client.close()
+
+    def reset(self) -> np.ndarray:
+        return self.reset_with()
+
+    def reset_with(
+        self,
+        *,
+        map_id: str | None = None,
+        character: str | None = None,
+        opponent_models: list[dict[str, Any]] | None = None,
+        classic_opponent_slots: int | None = None,
+        opponent_count: int | None = None,
+    ) -> np.ndarray:
+        if map_id is not None:
+            self.map_id = map_id
+        if character is not None:
+            self.character = character
+        if opponent_models is not None:
+            self.opponent_models = opponent_models
+        if classic_opponent_slots is not None:
+            self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
+        result = self._client.rpc("reset", self._build_reset_config())
+        return self._apply_reset_result(result)
+
+    def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
+        if isinstance(action, (int, np.integer)):
+            params = {"action": int(action)}
+        elif isinstance(action, dict):
+            params = {"action": action}
+        else:
+            params = {"action": [float(x) for x in action]}
+        result = self._client.rpc("step", params)
+        return self._apply_step_result(result)
+
+    def set_rollout_policy(self, policy: dict[str, Any]) -> None:
+        self._client.rpc("set_rollout_policy", {"policy": policy})
+
+    def rollout(
+        self,
+        policy: dict[str, Any] | None,
+        epsilons: list[float],
+        seed: int,
+        *,
+        max_steps: int | None = None,
+        reuse_cached_policy: bool = False,
+    ) -> RolloutResult:
+        if not reuse_cached_policy:
+            if policy is None:
+                raise ValueError("policy is required unless reuse_cached_policy=True")
+            self.set_rollout_policy(policy)
+        config = {
+            "epsilons": [float(e) for e in epsilons],
+            "seed": int(seed) & 0xFFFFFFFF,
+            "maxSteps": int(max_steps if max_steps is not None else len(epsilons)),
+        }
+        result = self._client.rpc("rollout", config)
+        return self._parse_rollout_result(result)
+
+    def get_last_ranking(self) -> list[dict[str, Any]]:
+        return list(self._client.rpc("get_ranking") or [])
+
+    def get_opponent_approvals(self, player_character: str) -> float:
+        return float(self._client.rpc("get_opponent_approvals", {"playerChar": player_character}) or 0)
+
+    def decide_headless_action(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return dict(self._client.rpc("decide_headless_action", {"weights": payload}) or {})
+
+    def get_episode_ranking(self) -> list[dict[str, Any]]:
+        return list(self._client.rpc("get_episode_ranking") or [])
+
+
+def make_env(
+    backend: str,
+    *,
+    index_path: Path,
+    page: Any = None,
+    map_id: str,
+    character: str,
+    frames: int,
+    solo: bool,
+    no_items: bool,
+    no_hazards: bool,
+    frame_stack: int = 1,
+    frame_skip: int = 4,
+    opponent_models: list[dict[str, Any]] | None = None,
+    classic_opponent_slots: int = 0,
+    mode: str = "race",
+) -> TurboKartEnv | NodeSimEnv:
+    common_kwargs = {
+        "map_id": map_id,
+        "character": character,
+        "frames": frames,
+        "solo": solo,
+        "no_items": no_items,
+        "no_hazards": no_hazards,
+        "frame_stack": frame_stack,
+        "frame_skip": frame_skip,
+        "opponent_models": opponent_models,
+        "classic_opponent_slots": classic_opponent_slots,
+        "mode": mode,
+    }
+    if backend == "node":
+        return NodeSimEnv(repo_root=index_path.parent, **common_kwargs)
+    if backend == "browser":
+        if page is None:
+            raise ValueError("page is required for browser backend")
+        return TurboKartEnv(page=page, index_path=index_path, **common_kwargs)
+    raise ValueError(f"Unknown backend: {backend!r} (expected 'browser' or 'node')")
 
 
 def smoothgrad_attribution(
@@ -931,6 +1195,8 @@ CHROMIUM_LAUNCH_ARGS = ["--allow-file-access-from-files"]
 
 
 def launch_chromium(playwright: Any, auto_install: bool) -> Any:
+    from playwright.sync_api import Error as PlaywrightError
+
     try:
         return playwright.chromium.launch(headless=True, args=CHROMIUM_LAUNCH_ARGS)
     except PlaywrightError as exc:

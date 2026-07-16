@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import json
 import math
 import random
@@ -32,8 +33,6 @@ from typing import Any
 import numpy as np
 import rl_common as common
 import torch
-from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import Page, sync_playwright
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
@@ -158,7 +157,7 @@ class DQN(torch.nn.Module):
 class TurboKartEnv:
     def __init__(
         self,
-        page: Page,
+        page: Any,
         index_path: Path,
         map_id: str,
         character: str,
@@ -899,7 +898,7 @@ def score_battle_duel(
     if last_info.get("eliminated"):
         return 0.0
 
-    ranking = env.page.evaluate("() => window.__lastRlRanking || []")
+    ranking = env.get_last_ranking()
     if last_info.get("battleWin") and ranking and ranking[0].get("charId") == character:
         return 1.0
 
@@ -911,17 +910,7 @@ def score_battle_duel(
     player_idx = ranking.index(player_entry)
     opp_idx = ranking.index(opp_entry)
     player_approvals = float(last_info.get("approvals", 0))
-    opp_approvals = float(
-        env.page.evaluate(
-            """() => {
-              const karts = typeof getActiveKarts === 'function' ? getActiveKarts() : [];
-              const playerChar = game.player?.charId;
-              const opp = karts.find(k => k && k.charId !== playerChar);
-              return opp ? (opp.approvals || 0) : 0;
-            }"""
-        )
-        or 0
-    )
+    opp_approvals = env.get_opponent_approvals(character)
     if player_approvals == opp_approvals:
         return 0.5
     return 1.0 if player_idx < opp_idx else 0.0
@@ -1138,14 +1127,7 @@ def evaluate(
                 obs, reward, done, last_info = env.step(action)
                 total_reward += reward
             finishes += int(bool(last_info.get("finished")))
-            ranking = env.page.evaluate(
-                """() => (
-                    window.__lastRlRanking ||
-                    (typeof rankAll === 'function'
-                      ? rankAll().map(k => ({ name: k.name, charId: k.charId, finished: !!k.finished }))
-                      : [])
-                )"""
-            )
+            ranking = env.get_last_ranking()
             if ranking:
                 winner = ranking[0].get("charId") or ranking[0].get("name") or "unknown"
                 winner_chars[winner] = winner_chars.get(winner, 0) + 1
@@ -1290,6 +1272,84 @@ def waypoint_references(browser: Any, index_path: Path, args: argparse.Namespace
     return refs
 
 
+def run_benchmark(args: argparse.Namespace, index_path: Path) -> None:
+    is_battle = args.mode == "battle"
+    if is_battle:
+        args.map = args.arena_map
+        args.solo = False
+        args.no_items = False
+        args.no_hazards = True
+
+    page = None
+    browser_ctx = None
+    if args.backend == "browser":
+        from playwright.sync_api import sync_playwright
+
+        browser_ctx = sync_playwright()
+    with browser_ctx if browser_ctx is not None else contextlib.nullcontext() as p:
+        if args.backend == "browser":
+            browser = common.launch_chromium(p, args.auto_install_browser)
+            page = browser.new_page()
+        env = common.make_env(
+            args.backend,
+            index_path=index_path,
+            page=page,
+            map_id=args.map,
+            character=args.character,
+            frames=args.frames,
+            solo=args.solo,
+            no_items=args.no_items,
+            no_hazards=args.no_hazards,
+            frame_stack=args.frame_stack,
+            frame_skip=args.frame_skip,
+            mode=args.mode,
+        )
+        try:
+            env.load()
+            obs = env.reset_with()
+            obs_dim = int(obs.shape[0])
+            action_dim = len(env.actions)
+            q = DQN(obs_dim, action_dim, args.hidden)
+            policy = build_compact_dqn_policy(
+                q,
+                env.obs_keys,
+                env.actions,
+                meta={"frameStack": args.frame_stack, "frameSkip": args.frame_skip, "mode": args.mode},
+            )
+            env.set_rollout_policy(policy)
+
+            steps = 0
+            batch_size = max(1, args.rollout_batch_size)
+            started = time.perf_counter()
+            while steps < args.benchmark:
+                batch_k = min(batch_size, args.benchmark - steps)
+                epsilons = [1.0] * batch_k
+                rollout_result = env.rollout(
+                    None,
+                    epsilons,
+                    rollout_seed(args.seed, steps + 1),
+                    max_steps=batch_k,
+                    reuse_cached_policy=True,
+                )
+                if rollout_result.stopped_reason == "alreadyDone":
+                    env.reset_with()
+                    continue
+                steps += len(rollout_result.entries)
+            elapsed = time.perf_counter() - started
+            report = {
+                "backend": args.backend,
+                "env_steps_per_sec": round(steps / max(elapsed, 1e-9), 2),
+                "wall_seconds": round(elapsed, 4),
+                "steps": steps,
+            }
+            print(json.dumps(report))
+        finally:
+            env.close()
+            if page is not None:
+                page.close()
+                browser.close()
+
+
 def train(args: argparse.Namespace) -> None:
     console = Console()
     random.seed(args.seed)
@@ -1328,12 +1388,22 @@ def train(args: argparse.Namespace) -> None:
     if not index_path.exists():
         raise FileNotFoundError(index_path)
 
-    with sync_playwright() as p:
-        browser = common.launch_chromium(p, args.auto_install_browser)
-        page = browser.new_page()
-        env = common.TurboKartEnv(
-            page=page,
+    if args.benchmark:
+        run_benchmark(args, index_path)
+        return
+
+    browser_ctx = None
+    if args.backend == "browser":
+        from playwright.sync_api import sync_playwright
+
+        browser_ctx = sync_playwright()
+    with browser_ctx if browser_ctx is not None else contextlib.nullcontext() as p:
+        browser = common.launch_chromium(p, args.auto_install_browser) if args.backend == "browser" else None
+        page = browser.new_page() if browser is not None else None
+        env = common.make_env(
+            args.backend,
             index_path=index_path,
+            page=page,
             map_id=args.map,
             character=args.character,
             frames=args.frames,
@@ -1392,10 +1462,11 @@ def train(args: argparse.Namespace) -> None:
         self_play_checked = check_self_play_applied(
             env, args, console, self_play_checked, len(reset_kwargs["opponent_models"])
         )
-        eval_page = browser.new_page()
-        eval_env = common.TurboKartEnv(
-            page=eval_page,
+        eval_page = browser.new_page() if browser is not None else None
+        eval_env = common.make_env(
+            args.backend,
             index_path=index_path,
+            page=eval_page,
             map_id=args.map,
             character=args.character,
             frames=args.frames,
@@ -1468,7 +1539,7 @@ def train(args: argparse.Namespace) -> None:
         # The waypoint reference baseline is a race concept (laps/progress); skip it for arena.
         reference_metrics = (
             common.waypoint_references(browser, index_path, args)
-            if args.reference_episodes > 0 and not is_battle
+            if args.reference_episodes > 0 and not is_battle and args.backend == "browser"
             else {}
         )
 
@@ -2027,12 +2098,28 @@ def train(args: argparse.Namespace) -> None:
                     console.print(f"[green]Elo chart written:[/green] {elo_png}")
                 except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
                     console.print(f"[yellow]Could not render Elo chart PNG: {exc}[/yellow]")
-        eval_page.close()
-        browser.close()
+        eval_env.close()
+        env.close()
+        if eval_page is not None:
+            eval_page.close()
+        if browser is not None:
+            browser.close()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backend",
+        choices=["browser", "node"],
+        default="browser",
+        help="Simulation backend: Playwright Chromium (browser) or Node stdio sim-server (node).",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=int,
+        default=0,
+        help="If >0, run this many rollout-batched env steps with a random policy and print JSON throughput stats.",
+    )
     parser.add_argument("--index", default="index.html")
     parser.add_argument(
         "--mode",

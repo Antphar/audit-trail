@@ -23,6 +23,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import sim_client as common
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 from rich.console import Console
@@ -55,6 +56,43 @@ def select_models(models: list[dict[str, Any]], selector: str) -> list[dict[str,
         return models
     wanted = set(parse_csv(selector))
     return [model for model in models if model.get("id") in wanted or model.get("name") in wanted]
+
+
+def evaluate_model_node(root: Path, model_path: str, map_id: str, args: argparse.Namespace) -> dict[str, Any]:
+    solo = args.solo
+    no_items = args.no_items
+    no_hazards = args.no_hazards
+    if args.mode == "battle":
+        solo = False
+        no_items = False
+        no_hazards = True
+    query = common.build_sim_query_string(
+        mode=args.mode,
+        map_id=map_id,
+        character=args.character,
+        frames=args.frames,
+        solo=solo,
+        no_items=no_items,
+        no_hazards=no_hazards,
+    )
+    return common.run_node_headless_eval(
+        root,
+        query,
+        {
+            "modelPath": str((root / model_path).resolve()),
+            "mode": args.mode,
+            "map": map_id,
+            "character": args.character,
+            "frames": args.frames,
+            "episodes": args.episodes,
+            "solo": solo,
+            "noItems": no_items,
+            "noHazards": no_hazards,
+            "frameSkip": args.frame_skip,
+            "trace": bool(args.html_report),
+            "traceEvery": args.trace_every,
+        },
+    )
 
 
 def evaluate_model(page: Any, base_url: str, model_path: str, map_id: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -250,6 +288,12 @@ svg {{ width: 100%; height: auto; display: block; }}
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--backend",
+        choices=["browser", "node"],
+        default="browser",
+        help="Simulation backend: Playwright Chromium (browser) or Node stdio sim-server (node).",
+    )
     parser.add_argument("--index", default="index.html")
     parser.add_argument(
         "--mode",
@@ -303,15 +347,13 @@ def main() -> None:
     report_results = []
     map_lookup = {m["id"]: m for m in load_maps_from_index(Path(args.index))}
 
-    with LocalServer(root) as base_url, sync_playwright() as p:
-        browser = launch_chromium(p, args.auto_install_browser)
-        page = browser.new_page()
+    if args.backend == "node":
         for model in models:
             model_path = model.get("path")
             if not model_path:
                 continue
             for map_id in maps:
-                result = evaluate_model(page, base_url, model_path, map_id, args)
+                result = evaluate_model_node(root, model_path, map_id, args)
                 report_results.append(
                     {
                         "model": model.get("name") or model.get("id") or model_path,
@@ -346,7 +388,51 @@ def main() -> None:
                         f"{agg.get('totalPlayerLaps', 0) / max(1, args.episodes):.2f}",
                         f"{agg.get('avgPlayerProgress', 0):.1f}",
                     )
-        browser.close()
+    else:
+        with LocalServer(root) as base_url, sync_playwright() as p:
+            browser = launch_chromium(p, args.auto_install_browser)
+            page = browser.new_page()
+            for model in models:
+                model_path = model.get("path")
+                if not model_path:
+                    continue
+                for map_id in maps:
+                    result = evaluate_model(page, base_url, model_path, map_id, args)
+                    report_results.append(
+                        {
+                            "model": model.get("name") or model.get("id") or model_path,
+                            "map": map_id,
+                            "result": result,
+                        }
+                    )
+                    agg = result.get("aggregate", {})
+                    label = model.get("name") or model.get("id") or model_path
+                    if is_battle:
+                        eps = result.get("episodes", [])
+                        n = max(1, len(eps))
+                        win_rate = sum(1 for e in eps if e.get("playerPlace") == 1) / n
+                        survival = sum(float(e.get("raceTime", 0)) for e in eps) / n
+                        approvals = sum(float(e.get("playerApprovals", 0)) for e in eps) / n
+                        pops = sum(float(e.get("playerSteals", 0)) for e in eps) / n
+                        table.add_row(
+                            label,
+                            map_id,
+                            f"{win_rate:.2f}",
+                            f"{agg.get('avgReward', 0):.1f}",
+                            f"{survival:.1f}",
+                            f"{approvals:.2f}",
+                            f"{pops:.1f}",
+                        )
+                    else:
+                        table.add_row(
+                            label,
+                            map_id,
+                            f"{agg.get('finishCount', 0) / max(1, args.episodes):.2f}",
+                            f"{agg.get('avgReward', 0):.1f}",
+                            f"{agg.get('totalPlayerLaps', 0) / max(1, args.episodes):.2f}",
+                            f"{agg.get('avgPlayerProgress', 0):.1f}",
+                        )
+            browser.close()
 
     console.print(table)
     if args.html_report:

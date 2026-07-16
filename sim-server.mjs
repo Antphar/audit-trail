@@ -42,6 +42,21 @@ function handleRequest(req) {
       case "rollout":
         result = api.rlRollout(params);
         break;
+      case "get_ranking":
+        result = api.getRanking();
+        break;
+      case "get_opponent_approvals":
+        result = api.getOpponentApprovals(params.playerChar ?? params.player_character);
+        break;
+      case "decide_headless_action":
+        result = api.decideHeadlessAction(params.weights ?? params);
+        break;
+      case "get_episode_ranking":
+        result = api.getEpisodeRanking();
+        break;
+      case "headless_eval":
+        result = api.runHeadlessModelEval(params);
+        break;
       default:
         writeResponse({ id, error: `Unknown method: ${method}` });
         return;
