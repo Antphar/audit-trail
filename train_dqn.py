@@ -38,6 +38,9 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
+BATTLE_DEFAULT_ANCHORS = "dqn-arena-v5,dqn-arena"
+RACE_DEFAULT_ANCHORS = "dqn-15act-h64-tanh-ortho-300k"
+
 
 @dataclass
 class Transition:
@@ -770,6 +773,14 @@ def resolve_training_opponents(
             rng=rng,
         )
         return opponent_models, classic_slots
+    if not is_battle and args.self_play and not args.race_league:
+        opponent_models, classic_slots = common.sample_race_opponents(
+            checkpoint_pool,
+            total_slots=total_slots,
+            classic_prob=args.race_classic_prob,
+            rng=rng,
+        )
+        return opponent_models, classic_slots
     return common.sample_league_opponents(args, league), None
 
 
@@ -916,6 +927,67 @@ def score_battle_duel(
     return 1.0 if player_idx < opp_idx else 0.0
 
 
+RACE_DUEL_PROGRESS_EPS = 1e-4
+
+
+@torch.no_grad()
+def score_race_duel(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+) -> float:
+    """Run a 1v1 race duel; return 1.0 win, 0.5 draw, 0.0 loss.
+
+    Winner is the first kart to finish; if neither finishes within the frame
+    budget, higher ``progressValue`` wins; ties within a tiny epsilon are draws.
+    """
+    obs = env.reset_with(
+        map_id=map_id,
+        character=character,
+        opponent_models=[opponent_payload] if opponent_payload else [],
+        classic_opponent_slots=0 if opponent_payload else 1,
+        opponent_count=1,
+        race_position_reward=False,
+    )
+    done = False
+    last_info: dict[str, Any] = {}
+    while not done:
+        q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+        action = int(torch.argmax(q_vals, dim=1).item())
+        obs, _, done, last_info = env.step(action)
+
+    ranking = env.get_last_ranking()
+    player_entry = next((r for r in ranking if r.get("charId") == character), None)
+    opp_entry = next((r for r in ranking if r.get("charId") != character), None)
+    if not player_entry or not opp_entry:
+        return 0.5
+
+    player_finished = bool(player_entry.get("finished"))
+    opp_finished = bool(opp_entry.get("finished"))
+    if player_finished and not opp_finished:
+        return 1.0
+    if opp_finished and not player_finished:
+        return 0.0
+    if player_finished and opp_finished:
+        player_idx = ranking.index(player_entry)
+        opp_idx = ranking.index(opp_entry)
+        if player_idx < opp_idx:
+            return 1.0
+        if player_idx > opp_idx:
+            return 0.0
+        return 0.5
+
+    player_prog = float(player_entry.get("progress", last_info.get("progress", 0)))
+    opp_prog = float(opp_entry.get("progress", 0))
+    diff = player_prog - opp_prog
+    if abs(diff) <= RACE_DUEL_PROGRESS_EPS:
+        return 0.5
+    return 1.0 if diff > 0 else 0.0
+
+
 def run_elo_rating_round(
     eval_env: Any,
     model: DQN,
@@ -937,6 +1009,9 @@ def run_elo_rating_round(
     ratings[checkpoint_name] = prev_rating
     rating_at_start = prev_rating
 
+    is_battle = args.mode == "battle"
+    duel_map = args.map if is_battle else args.elo_map
+
     opponents: list[tuple[str, dict[str, Any] | None]] = [("classic", None)]
     for anchor in anchors:
         opponents.append((anchor["name"], anchor["payload"]))
@@ -949,13 +1024,22 @@ def run_elo_rating_round(
     for opp_name, opp_payload in opponents:
         wins = losses = draws = 0
         for _ in range(args.rating_episodes):
-            score = score_battle_duel(
-                eval_env,
-                model,
-                map_id=args.map,
-                character=args.character,
-                opponent_payload=opp_payload,
-            )
+            if is_battle:
+                score = score_battle_duel(
+                    eval_env,
+                    model,
+                    map_id=duel_map,
+                    character=args.character,
+                    opponent_payload=opp_payload,
+                )
+            else:
+                score = score_race_duel(
+                    eval_env,
+                    model,
+                    map_id=duel_map,
+                    character=args.character,
+                    opponent_payload=opp_payload,
+                )
             if score >= 1.0:
                 wins += 1
             elif score <= 0.0:
@@ -1373,6 +1457,8 @@ def train(args: argparse.Namespace) -> None:
             args.model_name = "DQN Arena"
         if args.out == "models/dqn-latest.json":
             args.out = "models/dqn-arena.json"
+    elif args.anchor_models == BATTLE_DEFAULT_ANCHORS:
+        args.anchor_models = RACE_DEFAULT_ANCHORS
 
     if args.rollout_batch_size > 1 and args.l2_norm:
         raise ValueError(
@@ -1413,12 +1499,13 @@ def train(args: argparse.Namespace) -> None:
             frame_stack=args.frame_stack,
             frame_skip=args.frame_skip,
             mode=args.mode,
+            race_position_reward=args.race_position_reward,
         )
         env.load()
         league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode) if args.self_play else []
         anchors = (
             load_anchor_models(Path(args.league_manifest), parse_csv(args.anchor_models), console=console)
-            if is_battle and args.self_play
+            if args.self_play
             else []
         )
         checkpoint_pool: list[dict[str, Any]] = []
@@ -1435,7 +1522,13 @@ def train(args: argparse.Namespace) -> None:
 
         def training_reset_kwargs(step: int) -> dict[str, Any]:
             opp_count = battle_training_opponent_count(args, step, curriculum_rng)
-            total_slots = opp_count if opp_count is not None else 4
+            if opp_count is not None:
+                total_slots = opp_count
+            elif args.self_play and not is_battle and not args.race_league:
+                opp_count = args.race_opponents
+                total_slots = args.race_opponents
+            else:
+                total_slots = 4
             opponents, classic_slots = resolve_training_opponents(
                 args,
                 is_battle=is_battle,
@@ -1455,6 +1548,8 @@ def train(args: argparse.Namespace) -> None:
             if opp_count is not None:
                 kwargs["opponent_count"] = opp_count
                 recent_opponent_counts.append(opp_count)
+            if args.race_position_reward:
+                kwargs["race_position_reward"] = True
             return kwargs
 
         reset_kwargs = training_reset_kwargs(0)
@@ -1628,6 +1723,14 @@ def train(args: argparse.Namespace) -> None:
                         "[bold]Battle curriculum[/bold]: "
                         f"{args.battle_opponent_curriculum_parsed.summary()}"
                     )
+            elif args.self_play and not is_battle:
+                if args.race_league:
+                    panel_lines.append(f"[bold]Race self-play[/bold]: league ({args.league_opponents} slots)")
+                else:
+                    panel_lines.append(
+                        f"[bold]Race self-play[/bold]: checkpoint pool ({args.race_opponents} slots, "
+                        f"classic_prob={args.race_classic_prob})"
+                    )
             console.print(
                 Panel.fit(
                     "\n".join(panel_lines),
@@ -1698,12 +1801,20 @@ def train(args: argparse.Namespace) -> None:
                     }
                     if is_battle and args.self_play:
                         episode_payload["battle_opponents"] = env.last_reset_info.get("opponentCount")
+                    elif args.self_play and not is_battle and not args.race_league:
+                        episode_payload["opponent_models_applied"] = env.last_reset_info.get(
+                            "opponentModelsApplied"
+                        )
                     if args.json_logs:
                         emit_json(episode_payload)
                     else:
                         opp_note = ""
                         if is_battle and args.self_play:
                             opp_note = f" opponents={env.last_reset_info.get('opponentCount')}"
+                        elif args.self_play and not is_battle and not args.race_league:
+                            opp_note = (
+                                f" oppApplied={env.last_reset_info.get('opponentModelsApplied', 0)}"
+                            )
                         console.print(
                             "[magenta]episode[/magenta] "
                             f"#{episode_count} step={step} reward={episode_payload['episode_reward']} "
@@ -1715,7 +1826,7 @@ def train(args: argparse.Namespace) -> None:
                 recent_finishes.append(1.0 if info.get("finished") else 0.0)
                 recent_maps.append(env.map_id)
                 recent_chars.append(env.character)
-                if args.self_play and not is_battle:
+                if args.self_play and not is_battle and args.race_league:
                     league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
                 ep_reset_kwargs = training_reset_kwargs(step)
                 obs = env.reset_with(**ep_reset_kwargs)
@@ -1820,7 +1931,7 @@ def train(args: argparse.Namespace) -> None:
 
             run_checkpoint = common.should_run_interval(step, args.checkpoint_every)
             run_eval = common.should_run_interval(step, args.eval_every)
-            run_elo = is_battle and args.self_play and common.should_run_interval(step, args.elo_every)
+            run_elo = args.self_play and common.should_run_interval(step, args.elo_every)
 
             if run_checkpoint or run_elo:
                 meta_overrides: dict[str, Any] = {}
@@ -2246,20 +2357,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--classic-opponent-prob", type=float, default=0.25)
     parser.add_argument(
         "--anchor-models",
-        default="dqn-arena-v5,dqn-arena",
-        help="Comma-separated manifest ids used as fixed anchor opponents (battle self-play).",
+        default=BATTLE_DEFAULT_ANCHORS,
+        help="Comma-separated manifest ids used as fixed anchor opponents (Elo eval only). "
+        f"Race default: {RACE_DEFAULT_ANCHORS}.",
     )
     parser.add_argument(
         "--checkpoint-pool-size",
         type=int,
         default=8,
-        help="How many recent own checkpoints stay in the battle self-play pool.",
+        help="How many recent own checkpoints stay in the self-play pool (battle/race).",
+    )
+    parser.add_argument(
+        "--race-opponents",
+        type=int,
+        default=3,
+        help="Opponent kart slots for race checkpoint-pool self-play (default 3).",
+    )
+    parser.add_argument(
+        "--race-classic-prob",
+        type=float,
+        default=0.25,
+        help="Probability a race self-play episode includes one classic AI slot. "
+        "0 = pure self-play; classic still fills slots while the checkpoint pool is empty.",
+    )
+    parser.add_argument(
+        "--race-league",
+        action="store_true",
+        help="Use manifest league sampling for race self-play instead of checkpoint pool.",
+    )
+    parser.add_argument(
+        "--race-position-reward",
+        action="store_true",
+        help="Add terminal position bonus in race mode (+30/+15/0/-10 for ranks 1/2/3/4+).",
+    )
+    parser.add_argument(
+        "--elo-map",
+        default="core_mainframe",
+        help="Fixed map for race-mode Elo duels (battle uses --arena-map).",
     )
     parser.add_argument(
         "--rating-episodes",
         type=int,
         default=1,
-        help="Duel episodes per rated opponent at each checkpoint (battle only).",
+        help="Duel episodes per rated opponent at each checkpoint.",
     )
     parser.add_argument(
         "--rating-recent-checkpoints",

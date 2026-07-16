@@ -17,7 +17,7 @@ import { initBattleKartState } from "../modes/battle.js";
 import {
   HEADLESS_DQN_ACTIONS, HEADLESS_OBS_KEYS, HEADLESS_BATTLE_OBS_KEYS,
   headlessObsKeys, getHeadlessObservation, applyHeadlessAction,
-  computeHeadlessStepReward,
+  computeHeadlessStepReward, racePositionTerminalBonus,
 } from "./observation.js";
 
 export class HeadlessRandomKart extends Kart {
@@ -476,6 +476,7 @@ export function makeHeadlessConfig(overrides = {}) {
     opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,
     classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
     opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
+    racePositionReward: !!overrides.racePositionReward,
     seed: Number.isFinite(Number(overrides.seed)) ? Number(overrides.seed) >>> 0 : undefined,
   };
 }
@@ -761,6 +762,10 @@ export function headlessRlStepOnce(action) {
     if (areAllHumansDone()) finishRaceSim();
   }
   const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
+  if (done && config.racePositionReward && config.mode !== "battle" && !game.player._rlPositionBonusApplied) {
+    game.player._rlPositionBonusApplied = true;
+    reward += racePositionTerminalBonus(game.player);
+  }
   const obs = getHeadlessObservation(game.player);
   window.__lastRlRanking = rankAll().map(k => ({
     name: k.name,

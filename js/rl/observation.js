@@ -280,6 +280,15 @@ export function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, befo
   return Math.fround(reward);
 }
 
+export function racePositionTerminalBonus(kart) {
+  const ranked = rankAll();
+  const rank = ranked.findIndex(k => k === kart) + 1;
+  if (rank === 1) return 30;
+  if (rank === 2) return 15;
+  if (rank === 3) return 0;
+  return -10;
+}
+
 export function computeHeadlessBattleReward(kart) {
   const steals = game.rlSteals || 0;
   const losses = game.rlLosses || 0;

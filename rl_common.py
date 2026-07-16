@@ -613,6 +613,8 @@ class _RlObsStackMixin:
         }
         if self.opponent_count is not None:
             cfg["opponentCount"] = self.opponent_count
+        if self.race_position_reward:
+            cfg["racePositionReward"] = True
         return cfg
 
     def _parse_rollout_result(self, result: dict[str, Any]) -> RolloutResult:
@@ -664,6 +666,7 @@ class _KartEnvConfigMixin(_RlObsStackMixin):
         opponent_models: list[dict[str, Any]] | None,
         classic_opponent_slots: int,
         mode: str,
+        race_position_reward: bool = False,
     ) -> None:
         self.mode = normalize_sim_mode(mode)
         self.map_id = map_id
@@ -675,6 +678,7 @@ class _KartEnvConfigMixin(_RlObsStackMixin):
         self.frame_skip = max(1, int(frame_skip))
         self.opponent_models = opponent_models or []
         self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self.race_position_reward = bool(race_position_reward)
         self.opponent_count: int | None = None
         self.last_reset_info: dict[str, Any] = {}
         self.actions: list[dict[str, Any]] = []
@@ -697,6 +701,7 @@ class TurboKartEnv(_KartEnvConfigMixin):
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int = 0,
         mode: str = "race",
+        race_position_reward: bool = False,
     ):
         self.page = page
         self._init_env_config(
@@ -711,6 +716,7 @@ class TurboKartEnv(_KartEnvConfigMixin):
             opponent_models=opponent_models,
             classic_opponent_slots=classic_opponent_slots,
             mode=mode,
+            race_position_reward=race_position_reward,
         )
         flags = build_sim_query_flags(
             mode=self.mode,
@@ -744,6 +750,7 @@ class TurboKartEnv(_KartEnvConfigMixin):
         classic_opponent_slots: int | None = None,
         opponent_count: int | None = None,
         seed: int | None = None,
+        race_position_reward: bool | None = None,
     ) -> np.ndarray:
         if map_id is not None:
             self.map_id = map_id
@@ -753,6 +760,8 @@ class TurboKartEnv(_KartEnvConfigMixin):
             self.opponent_models = opponent_models
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        if race_position_reward is not None:
+            self.race_position_reward = bool(race_position_reward)
         # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
         # into subsequent baseline evals on the same env.
         self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
@@ -861,6 +870,7 @@ class NodeSimEnv(_KartEnvConfigMixin):
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int = 0,
         mode: str = "race",
+        race_position_reward: bool = False,
     ):
         self.repo_root = repo_root.resolve()
         self._init_env_config(
@@ -875,6 +885,7 @@ class NodeSimEnv(_KartEnvConfigMixin):
             opponent_models=opponent_models,
             classic_opponent_slots=classic_opponent_slots,
             mode=mode,
+            race_position_reward=race_position_reward,
         )
         self.query = build_sim_query_string(
             mode=self.mode,
@@ -907,6 +918,7 @@ class NodeSimEnv(_KartEnvConfigMixin):
         classic_opponent_slots: int | None = None,
         opponent_count: int | None = None,
         seed: int | None = None,
+        race_position_reward: bool | None = None,
     ) -> np.ndarray:
         if map_id is not None:
             self.map_id = map_id
@@ -916,6 +928,8 @@ class NodeSimEnv(_KartEnvConfigMixin):
             self.opponent_models = opponent_models
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        if race_position_reward is not None:
+            self.race_position_reward = bool(race_position_reward)
         self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
         cfg = self._build_reset_config()
         if seed is not None:
@@ -986,6 +1000,7 @@ def make_env(
     opponent_models: list[dict[str, Any]] | None = None,
     classic_opponent_slots: int = 0,
     mode: str = "race",
+    race_position_reward: bool = False,
 ) -> TurboKartEnv | NodeSimEnv:
     common_kwargs = {
         "map_id": map_id,
@@ -999,6 +1014,7 @@ def make_env(
         "opponent_models": opponent_models,
         "classic_opponent_slots": classic_opponent_slots,
         "mode": mode,
+        "race_position_reward": race_position_reward,
     }
     if backend == "node":
         return NodeSimEnv(repo_root=index_path.parent, **common_kwargs)
@@ -1353,6 +1369,34 @@ def sample_battle_opponents(
                 opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
             else:
                 # Uniform over full history: keep beating old play styles too.
+                opponents.append(r.choice(checkpoint_pool)["payload"])
+        else:
+            classic_slots += 1
+    return opponents, classic_slots
+
+
+def sample_race_opponents(
+    checkpoint_pool: list[dict[str, Any]],
+    *,
+    total_slots: int = 3,
+    classic_prob: float = 0.25,
+    rng: random.Random | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Sample race self-play opponents for one episode.
+
+    Like ``sample_battle_opponents`` but without anchor models — anchors are
+    Elo eval-only and never enter the training opponent pool. While the
+    checkpoint pool is empty, remaining slots fall back to classic AI.
+    """
+    r = rng or random
+    classic_slots = 1 if r.random() < classic_prob else 0
+    opponents: list[dict[str, Any]] = []
+    while len(opponents) + classic_slots < total_slots:
+        if checkpoint_pool:
+            if r.random() < 0.5:
+                weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
+                opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
+            else:
                 opponents.append(r.choice(checkpoint_pool)["payload"])
         else:
             classic_slots += 1
