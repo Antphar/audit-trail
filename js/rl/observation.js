@@ -1,5 +1,5 @@
 import { TUNING } from "../config/tuning.js";
-import { clamp, dist, angleDiff } from "../core/math.js";
+import { clamp, dist, len2d, angleDiff } from "../core/math.js";
 import { game, STATE, isBattleMode, getActiveKarts } from "../core/state.js";
 import { getRayObjectRadius, getKartCollisionRadius, progressValue, rankAll } from "../modes/race.js";
 import { qualifiesApprovalRam, activateUltimate } from "../modes/battle.js";
@@ -189,10 +189,10 @@ export function getHeadlessRaceTail(kart) {
   const signedOffset = ((kart.x - cs.proj.x) * seg.nx + (kart.y - cs.proj.y) * seg.ny) / Math.max(1, seg.halfW);
   const values = [
     clamp(angleDiff(kart.heading, Math.atan2(dy, dx)) / Math.PI, -1, 1),
-    clamp(Math.hypot(dx, dy) / 1200, 0, 3),
+    clamp(len2d(dx, dy) / 1200, 0, 3),
     clamp(signedOffset, -2, 2),
     clamp(angleDiff(kart.heading, Math.atan2(ndy, ndx)) / Math.PI, -1, 1),
-    clamp(Math.hypot(ndx, ndy) / 1600, 0, 3),
+    clamp(len2d(ndx, ndy) / 1600, 0, 3),
   ];
   return { values, target, nextTarget };
 }
@@ -274,10 +274,10 @@ export function applyHeadlessAction(kart, track, dt, action) {
 
 export function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinished) {
   const afterProgress = progressValue(kart);
-  let reward = (afterProgress - beforeProgress) * 10;
+  let reward = Math.fround(Math.fround(afterProgress) - Math.fround(beforeProgress)) * 10;
   if ((kart.lap || 0) > beforeLap) reward += 50;
   if (!beforeFinished && kart.finished) reward += 200;
-  return reward;
+  return Math.fround(reward);
 }
 
 export function computeHeadlessBattleReward(kart) {

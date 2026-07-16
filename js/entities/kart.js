@@ -5,7 +5,7 @@ import {
 } from "../config/characters.js";
 import { COMPASS_VISUAL } from "../config/themes.js";
 import {
-  TAU, lerp, clamp, dist, angleDiff, rand, pick, ellipseNormDist,
+  TAU, lerp, clamp, dist, len2d, angleDiff, rand, pick, ellipseNormDist,
 } from "../core/math.js";
 import { bus } from "../core/events.js";
 import {
@@ -28,6 +28,8 @@ import {
   spawnRampLandingFx,
 } from "./particles.js";
 import { runtime } from "./runtime.js";
+import { simRandom } from "../core/rng.js";
+import { simNow } from "../core/clock.js";
 
 const VERTICAL_GRAVITY = 0.32;
 const AIRBORNE_THRESHOLD = 4;
@@ -78,7 +80,7 @@ export function constrainArenaKart(kart, track) {
 
   const nx = (kart.x - floor.cx) / Math.max(1, floor.rx);
   const ny = (kart.y - floor.cy) / Math.max(1, floor.ry);
-  const len = Math.hypot(nx, ny) || 1;
+  const len = len2d(nx, ny) || 1;
   const ux = nx / len;
   const uy = ny / len;
   kart.x = floor.cx + ux * floor.rx * (limit - wallPad);
@@ -86,7 +88,7 @@ export function constrainArenaKart(kart, track) {
 
   const gx = (kart.x - floor.cx) / (floor.rx * floor.rx);
   const gy = (kart.y - floor.cy) / (floor.ry * floor.ry);
-  const glen = Math.hypot(gx, gy) || 1;
+  const glen = len2d(gx, gy) || 1;
   const outNx = gx / glen;
   const outNy = gy / glen;
 
@@ -101,9 +103,9 @@ export function constrainArenaKart(kart, track) {
     kart.vy -= outNy * 0.8;
   }
 
-  if (performance.now() - (kart.lastBumpAt || -999) > 1100) {
+  if (simNow() - (kart.lastBumpAt || -999) > 1100) {
     runtime.triggerQuote(kart, "crash");
-    kart.lastBumpAt = performance.now();
+    kart.lastBumpAt = simNow();
     if (kart.isPlayer) {
       Sound.bump();
       game.shake = Math.max(game.shake, 5);
@@ -114,7 +116,7 @@ export function constrainArenaKart(kart, track) {
 
 export function checkTrackRamps(kart, track) {
   if (!track?.ramps?.length || !isKartGrounded(kart)) return false;
-  const now = performance.now();
+  const now = simNow();
   for (const ramp of track.ramps) {
     if (!ramp.cooldown) ramp.cooldown = new Map();
     const last = ramp.cooldown.get(kart);
@@ -128,7 +130,7 @@ export function checkTrackRamps(kart, track) {
     const localY = -lx * sin + ly * cos;
     if (Math.abs(localX) > ramp.w * 0.5 || Math.abs(localY) > ramp.h * 0.5) continue;
 
-    const speed = Math.hypot(kart.vx, kart.vy);
+    const speed = len2d(kart.vx, kart.vy);
     const minSpeed = ramp.minSpeed ?? (ramp.kind === "bump" ? 2.0 : 3.2);
     if (speed < minSpeed) continue;
 
@@ -167,7 +169,7 @@ export function applyMergeRequestPull(kart, dt) {
 
   const dx = target.x - kart.x;
   const dy = target.y - kart.y;
-  const d = Math.hypot(dx, dy);
+  const d = len2d(dx, dy);
   if (d < 58) {
     kart.mergePullTimer = 0;
     kart.mergePullTarget = null;
@@ -189,7 +191,7 @@ export function applyMergeRequestPull(kart, dt) {
 
   kart.mergePullTimer -= dt;
 
-  if (game.particles && Math.random() < 0.35 * dt) {
+  if (game.particles && simRandom() < 0.35 * dt) {
     game.particles.add({
       type: "line",
       x: kart.x + rand(-4, 4),
@@ -204,7 +206,7 @@ export function applyMergeRequestPull(kart, dt) {
     });
   }
 
-  if (game.particles && Math.random() < 0.25 * dt) {
+  if (game.particles && simRandom() < 0.25 * dt) {
     game.particles.add({
       type: "line",
       x: target.x + rand(-4, 4),
@@ -317,7 +319,7 @@ export class Kart {
     const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
     return this.vx * fx + this.vy * fy;
   }
-  speed() { return Math.hypot(this.vx, this.vy); }
+  speed() { return len2d(this.vx, this.vy); }
 
   useItem() {
     if (this.itemState !== "active") return;
@@ -587,7 +589,7 @@ export class Kart {
       }
 
       // Drift sparks generation from rear wheels
-      if (Math.random() < TUNING.DRIFT_SPARK_CHANCE * dt) {
+      if (simRandom() < TUNING.DRIFT_SPARK_CHANCE * dt) {
         let sparkColor = null;
         if (this.driftCharge >= TUNING.DRIFT_TIER3) {
           sparkColor = pick(["#ff4d6d", "#7b75ff", "#ff00ff"]); // Purple/Pink (Tier 3)
@@ -665,7 +667,7 @@ export class Kart {
 
         // Generate smoke puffs on drift release snapback
         for (let i = 0; i < 8; i++) {
-          const ang = Math.random() * TAU;
+          const ang = simRandom() * TAU;
           const sp = rand(1, 3);
           game.particles.add({
             type: "spark",
@@ -731,9 +733,9 @@ export class Kart {
           this.vy -= ny * 0.8 * dt;
         }
 
-        if (performance.now() - this.lastBumpAt > 1100) {
+        if (simNow() - this.lastBumpAt > 1100) {
           runtime.triggerQuote(this, "crash");
-          this.lastBumpAt = performance.now();
+          this.lastBumpAt = simNow();
           if (this.isPlayer) {
             Sound.bump();
             game.shake = Math.max(game.shake, 5);
@@ -748,7 +750,7 @@ export class Kart {
 
       // Generate pink exhaust flame trails if ultra boost is active
       if (this.ultraBoostActive) {
-        if (Math.random() < 0.8 * dt) {
+        if (simRandom() < 0.8 * dt) {
           game.particles.add({
             type: "spark",
             x: this.x - fx * 18 + rand(-4, 4),
@@ -766,7 +768,7 @@ export class Kart {
       this.ultraBoostActive = false;
 
       // Idle exhaust puffs when driving without boost
-      if (Math.abs(vF) > 2.5 && Math.random() < 0.12 * dt) {
+      if (Math.abs(vF) > 2.5 && simRandom() < 0.12 * dt) {
         game.particles.add({
           type: "spark",
           x: this.x - fx * 16 + rand(-2, 2),
@@ -841,8 +843,8 @@ export class Kart {
       }
 
       // Wind-tunnel blue overlay trails
-      if (this.draftTimer > 15 && Math.random() < 0.5 * dt) {
-        const side = Math.random() < 0.5 ? -1 : 1;
+      if (this.draftTimer > 15 && simRandom() < 0.5 * dt) {
+        const side = simRandom() < 0.5 ? -1 : 1;
         game.particles.add({
           type: "line",
           x: this.x + lx * side * rand(6, 12) - fx * 15,
@@ -1381,7 +1383,7 @@ export class Kart {
         this.offRoadAudioTimer = rand(8, 16);
         Sound.spatialNoise(this.x, this.y, 0.10, 0.04, 700);
       }
-      if (Math.random() < 0.4 * dt) {
+      if (simRandom() < 0.4 * dt) {
         const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
         const lx = -fy, ly = fx;
         for (const side of [-1, 1]) {
@@ -1426,7 +1428,7 @@ export class Kart {
 
     if (this.boostTimer > 0) {
       if (this.isPlayer) {
-        if (Math.random() < 0.6 * dt) {
+        if (simRandom() < 0.6 * dt) {
           const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
           game.particles.add({
             type: "spark",
@@ -1440,7 +1442,7 @@ export class Kart {
             drag: 0.9,
           });
         }
-        if (Math.random() < 0.5 * dt) {
+        if (simRandom() < 0.5 * dt) {
           const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
           game.particles.add({
             type: "line",
@@ -1453,7 +1455,7 @@ export class Kart {
             drag: 0.95
           });
         }
-      } else if (Math.random() < 0.25 * dt) {
+      } else if (simRandom() < 0.25 * dt) {
         const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
         game.particles.add({
           type: "line",

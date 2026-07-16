@@ -12,6 +12,7 @@ import {
   spawnCompassRevokeFx, spawnApprovalTransferToken, spawnCompassRamFx,
 } from "../entities/particles.js";
 import { DoubleBlindCloud } from "../entities/items.js";
+import { simRandom } from "../core/rng.js";
 
 function clampApprovals(v) {
   const n = Math.round(Number(v));
@@ -270,11 +271,11 @@ export function startMergeRequestPull(kart) {
 
 
 function makeTypo(str) {
-  if (Math.random() > 0.45) return str;
+  if (simRandom() > 0.45) return str;
   const chars = str.split("");
   if (chars.length < 4) return str;
   const i = Math.floor(rand(1, chars.length - 2));
-  const r = Math.random();
+  const r = simRandom();
   if (r < 0.4) {
     const temp = chars[i];
     chars[i] = chars[i+1];
@@ -338,7 +339,7 @@ function getRivalryQuote(charA, charB) {
   const key = `${charA}|${charB}`;
   const lines = RIVALRY_QUOTES[key];
   if (!lines || !lines.length) return null;
-  if (Math.random() < 0.55) return pick(lines);
+  if (simRandom() < 0.55) return pick(lines);
   return null;
 }
 

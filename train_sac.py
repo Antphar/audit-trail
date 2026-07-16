@@ -15,6 +15,7 @@ Run with uv:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import random
@@ -38,6 +39,7 @@ from rl_common import (
     ReplayBuffer,
     Transition,
     TurboKartEnv,
+    make_env,
     format_float,
     launch_chromium,
     load_league_models,
@@ -163,14 +165,7 @@ def evaluate_sac(
                 obs, reward, done, last_info = env.step(action.tolist())
                 total_reward += reward
             finishes += int(bool(last_info.get("finished")))
-            ranking = env.page.evaluate(
-                """() => (
-                    window.__lastRlRanking ||
-                    (typeof rankAll === 'function'
-                      ? rankAll().map(k => ({ name: k.name, charId: k.charId, finished: !!k.finished }))
-                      : [])
-                )"""
-            )
+            ranking = env.get_last_ranking()
             if ranking:
                 winner = ranking[0].get("charId") or ranking[0].get("name") or "unknown"
                 winner_chars[winner] = winner_chars.get(winner, 0) + 1
@@ -318,12 +313,16 @@ def train(args: argparse.Namespace) -> None:
     if not index_path.exists():
         raise FileNotFoundError(index_path)
 
-    with sync_playwright() as p:
-        browser = launch_chromium(p, args.auto_install_browser)
-        page = browser.new_page()
-        env = TurboKartEnv(
-            page=page,
+    browser_ctx = None
+    if args.backend == "browser":
+        browser_ctx = sync_playwright()
+    with browser_ctx if browser_ctx is not None else contextlib.nullcontext() as p:
+        browser = launch_chromium(p, args.auto_install_browser) if args.backend == "browser" else None
+        page = browser.new_page() if browser is not None else None
+        env = make_env(
+            args.backend,
             index_path=index_path,
+            page=page,
             map_id=args.map,
             character=args.character,
             frames=args.frames,
@@ -342,10 +341,11 @@ def train(args: argparse.Namespace) -> None:
             opponent_models=sample_league_opponents(args, league),
         )
 
-        eval_page = browser.new_page()
-        eval_env = TurboKartEnv(
-            page=eval_page,
+        eval_page = browser.new_page() if browser is not None else None
+        eval_env = make_env(
+            args.backend,
             index_path=index_path,
+            page=eval_page,
             map_id=args.map,
             character=args.character,
             frames=args.frames,
@@ -391,7 +391,7 @@ def train(args: argparse.Namespace) -> None:
         recent_alpha: deque[float] = deque(maxlen=1000)
         reference_metrics = (
             waypoint_references(browser, index_path, args)
-            if args.reference_episodes > 0 and not is_battle
+            if args.reference_episodes > 0 and not is_battle and args.backend == "browser"
             else {}
         )
 
@@ -679,13 +679,23 @@ def train(args: argparse.Namespace) -> None:
             if final_attribution:
                 print_attribution_table(console, "Final SmoothGrad Attribution", final_attribution)
             console.print(f"[green]Exported model:[/green] {args.out}")
-        eval_page.close()
-        browser.close()
+        eval_env.close()
+        env.close()
+        if eval_page is not None:
+            eval_page.close()
+        if browser is not None:
+            browser.close()
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--index", default="index.html")
+    parser.add_argument(
+        "--backend",
+        choices=["browser", "node"],
+        default="browser",
+        help="Simulation backend: Playwright Chromium (browser) or Node stdio sim-server (node).",
+    )
     parser.add_argument(
         "--mode",
         choices=["race", "battle"],

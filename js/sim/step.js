@@ -2,6 +2,8 @@ import { TUNING } from "../config/tuning.js";
 import { DEFAULT_KART_COLLISION_RADIUS } from "../config/characters.js";
 import { clamp, dist, lerp, rand, angleDiff, pick } from "../core/math.js";
 import { TAU } from "../core/math.js";
+import { simRandom } from "../core/rng.js";
+import { simNow } from "../core/clock.js";
 import { keysP1, keysP2 } from "../core/input.js";
 import { bus } from "../core/events.js";
 import {
@@ -41,7 +43,7 @@ export function simulationStep(dt, time) {
   const racingSim = game.state === STATE.RACING ||
     (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.RACING);
   if (countdownSim) {
-    const elapsed = performance.now() - game.countdownStart;
+    const elapsed = simNow() - game.countdownStart;
     const prevText = game.countdownText;
     if (elapsed < 900) game.countdownText = "3";
     else if (elapsed < 1800) game.countdownText = "2";
@@ -74,7 +76,7 @@ export function simulationStep(dt, time) {
     }
 
     // Rev engine particles during countdown when holding gas
-    if (game.rocketStartP1.holding && game.player && Math.random() < 0.3) {
+    if (game.rocketStartP1.holding && game.player && simRandom() < 0.3) {
       const k = game.player;
       const fx = Math.cos(k.heading), fy = Math.sin(k.heading);
       game.particles.add({
@@ -87,7 +89,7 @@ export function simulationStep(dt, time) {
     }
   }
   if (racingSim) {
-    game.raceTime = (performance.now() - game.startTime) / 1000;
+    game.raceTime = (simNow() - game.startTime) / 1000;
 
     if (isBattleMode()) {
       if (isUntimedHumanBattle()) {
@@ -309,7 +311,7 @@ export function simulationStep(dt, time) {
         const intensity = Math.max(raceProgress, lapProgress);
         if (isDragonAuthority) game.dragonWarnTimer -= dt;
         if (isDragonAuthority && game.dragonWarnTimer <= 0) {
-          game.dragonWarnTimer = (7 + Math.random() * 7) / (1 + intensity * 0.5);
+          game.dragonWarnTimer = (7 + simRandom() * 7) / (1 + intensity * 0.5);
           const targets = activeKarts.filter(k => k.spinoutTimer <= 0 && !k.finished && !k.eliminated);
           if (targets.length > 0) {
             const target = getDragonTarget() || pick(targets);
@@ -330,7 +332,7 @@ export function simulationStep(dt, time) {
             const fireLx = -fireFy;
             const fireLy = fireFx;
             // Occasional "fire wall" at higher intensity: vertical curtain
-            const isFireWall = intensity > 0.35 && Math.random() < intensity * 0.45;
+            const isFireWall = intensity > 0.35 && simRandom() < intensity * 0.45;
             if (isFireWall) {
               const wallCount = 5 + Math.floor(intensity * 7); // 5–12
               for (let i = 0; i < wallCount; i++) {
@@ -368,7 +370,7 @@ export function simulationStep(dt, time) {
             if (kart.spinoutTimer > 0 || kart.finished) continue;
             if (isKartAirborne(kart)) continue;
             if (dist(kart.x, kart.y, obj.x, obj.y) < obj.r + getKartCollisionRadius(kart) - 1) {
-              const now = performance.now();
+              const now = simNow();
               const lastHit = obj.cooldown?.get(kart) || 0;
               if (now - lastHit < 700) continue;
               obj.cooldown?.set(kart, now);

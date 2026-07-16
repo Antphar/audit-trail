@@ -1,31 +1,21 @@
 import { clamp, TAU } from "../core/math.js";
+import { simRandom, seedSimRng } from "../core/rng.js";
+// Arena waypoints are computed at module load, before headless mode installs
+// the deterministic Math patch — use the engine-independent ports directly so
+// browser and Node build bit-identical tracks.
+import { dsin, dcos } from "../core/det-math.js";
 
-// Seeded PRNG (mulberry32) for deterministic dragon trail generation
-function seededRng(seed) {
-  let s = seed | 0;
-  return function() {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = Math.imul(s ^ (s >>> 15), 1 | s);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-let _dragonTrailSeed = Math.floor(Math.random() * 2147483647);
-
-function generateDragonTrail(seed) {
-  if (seed !== undefined) _dragonTrailSeed = seed;
-  const rng = seededRng(_dragonTrailSeed);
+function generateDragonTrail() {
   const wp = [];
   let x = 400, y = 1200;
   wp.push({ x, y });
   const xmax = 490000;
   let i = 0;
   while (x < xmax) {
-    const segLen = 350 + rng() * 400;
+    const segLen = 350 + simRandom() * 400;
     let targetY = 1000 + Math.sin(i * 0.07) * 300 + Math.cos(i * 0.12) * 180 + Math.sin(i * 0.19) * 80;
     if (i % 40 > 35) {
-      targetY = 300 + rng() * 1200;
+      targetY = 300 + simRandom() * 1200;
     }
     let dy = (targetY - y) * 0.12 + Math.sin(i * 0.3) * 40;
     dy = clamp(dy, -200, 200);
@@ -34,11 +24,11 @@ function generateDragonTrail(seed) {
     x += segLen;
     wp.push({ x: Math.round(x), y: Math.round(y) });
     i++;
-    if (rng() < 0.015 && x < xmax - 2000) {
-      const backSteps = 2 + Math.floor(rng() * 3);
+    if (simRandom() < 0.015 && x < xmax - 2000) {
+      const backSteps = 2 + Math.floor(simRandom() * 3);
       for (let b = 0; b < backSteps; b++) {
         x += segLen * 0.3;
-        y += (rng() > 0.5 ? 1 : -1) * (200 + rng() * 300);
+        y += (simRandom() > 0.5 ? 1 : -1) * (200 + simRandom() * 300);
         y = clamp(y, 400, 1600);
         wp.push({ x: Math.round(x), y: Math.round(y) });
         i++;
@@ -333,7 +323,7 @@ const MAPS = [
       const pts = [];
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * TAU - Math.PI / 2;
-        pts.push({ x: c + r * Math.cos(a), y: c + r * Math.sin(a) });
+        pts.push({ x: c + r * dcos(a), y: c + r * dsin(a) });
       }
       return pts;
     })(),
@@ -371,7 +361,7 @@ const MAPS = [
       const pts = [];
       for (let i = 0; i < 10; i++) {
         const a = (i / 10) * TAU;
-        pts.push({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) });
+        pts.push({ x: cx + rx * dcos(a), y: cy + ry * dsin(a) });
       }
       return pts;
     })(),
@@ -409,8 +399,9 @@ function clampAiCount(v) {
 }
 
 function regenerateDragonTrail(seed) {
+  if (seed !== undefined) seedSimRng(seed >>> 0);
   const dragonMap = MAPS.find(m => m.id === "dragon_escape");
-  if (dragonMap) dragonMap.waypoints = generateDragonTrail(seed);
+  if (dragonMap) dragonMap.waypoints = generateDragonTrail();
 }
 
 export { MAPS, GRAND_PRIX_ID, clampLaps, clampGrandPrixRaces, clampAiCount, regenerateDragonTrail };

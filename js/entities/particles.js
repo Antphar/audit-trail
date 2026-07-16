@@ -1,6 +1,7 @@
 import { TAU, lerp, clamp, rand, pick } from "../core/math.js";
 import { COMPASS_VISUAL } from "../config/themes.js";
 import { game } from "../core/state.js";
+import { simRandom } from "../core/rng.js";
 
 export function kartVisualZOffset(kart) {
   return (kart?.z || 0) * 0.65;
@@ -276,7 +277,7 @@ export class ParticleSystem {
   }
   burst(x, y, color, count = 12, opts = {}) {
     for (let i = 0; i < count; i++) {
-      const ang = Math.random() * TAU;
+      const ang = simRandom() * TAU;
       const sp = rand(opts.spdMin || 1.5, opts.spdMax || 4.5);
       const admitted = admitParticle(this.list, {
         type: opts.type || "spark",

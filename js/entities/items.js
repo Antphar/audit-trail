@@ -1,4 +1,5 @@
 import { TAU, clamp } from "../core/math.js";
+import { simRandom } from "../core/rng.js";
 
 function roundRect(c, x, y, w, h, r) {
   c.beginPath();
@@ -25,7 +26,7 @@ export class MergeConflict {
     this.y = y;
     this.owner = owner;
     this.r = 15;
-    this.spin = Math.random() * Math.PI * 2;
+    this.spin = simRandom() * Math.PI * 2;
     this.active = true;
     this.ignoreOwnerTimer = 28;
   }
@@ -69,7 +70,7 @@ export class PlaceboPill {
     this.y = y;
     this.owner = owner;
     this.r = 15;
-    this.spin = Math.random() * TAU;
+    this.spin = simRandom() * TAU;
     this.active = true;
   }
 
@@ -114,7 +115,7 @@ export class DoubleBlindCloud {
     this.r = 48;
     this.life = 240;
     this.active = true;
-    this.phase = Math.random() * TAU;
+    this.phase = simRandom() * TAU;
   }
 
   update(dt) {
@@ -161,7 +162,7 @@ export class RegulatoryProjectile {
     this.vx = Math.cos(heading) * this.speed;
     this.vy = Math.sin(heading) * this.speed;
     this.r = enraged ? 20 : 17;
-    this.spin = Math.random() * TAU;
+    this.spin = simRandom() * TAU;
     this.life = 300;
     this.active = true;
     this.kind = "regulatory_projectile";
@@ -220,7 +221,7 @@ export class DossierProjectile {
     this.vx = Math.cos(heading) * this.speed;
     this.vy = Math.sin(heading) * this.speed;
     this.r = 12;
-    this.spin = Math.random() * Math.PI * 2;
+    this.spin = simRandom() * Math.PI * 2;
     this.active = true;
     this.life = 360;
     this.ignoreOwnerTimer = 20;
@@ -311,7 +312,7 @@ export class DragonFire {
     this.r = 18;
     this.active = true;
     this.life = 420;
-    this.pulsePhase = Math.random() * Math.PI * 2;
+    this.pulsePhase = simRandom() * Math.PI * 2;
     this.sizePhase = 0;
   }
 
@@ -364,7 +365,7 @@ export class DragonFire {
     ctx.fill();
 
     // ---- Core ember body ----
-    ctx.fillStyle = `rgba(255, ${180 + Math.floor(Math.random() * 75)}, ${40 + Math.floor(Math.random() * 60)}, 0.92)`;
+    ctx.fillStyle = `rgba(255, ${180 + Math.floor(simRandom() * 75)}, ${40 + Math.floor(simRandom() * 60)}, 0.92)`;
     ctx.beginPath();
     ctx.arc(0, 0, baseR * 0.65, 0, TAU);
     ctx.fill();
@@ -398,9 +399,9 @@ export class DragonFire {
     ctx.fillStyle = "rgba(255, 255, 200, 0.7)";
     for (let i = 0; i < 3; i++) {
       const spkAng = (this.sizePhase * 2 + i * 2.1) % TAU;
-      const spkDist = baseR * (0.3 + 0.3 * Math.random());
+      const spkDist = baseR * (0.3 + 0.3 * simRandom());
       ctx.beginPath();
-      ctx.arc(Math.cos(spkAng) * spkDist, Math.sin(spkAng) * spkDist, 1.5 + Math.random() * 2, 0, TAU);
+      ctx.arc(Math.cos(spkAng) * spkDist, Math.sin(spkAng) * spkDist, 1.5 + simRandom() * 2, 0, TAU);
       ctx.fill();
     }
 

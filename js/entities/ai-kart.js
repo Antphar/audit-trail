@@ -10,6 +10,7 @@ import {
 } from "../core/state.js";
 import { Kart } from "./kart.js";
 import { runtime } from "./runtime.js";
+import { simRandom } from "../core/rng.js";
 
 export class AIKart extends Kart {
   constructor(x, y, heading, char, skill = 1.0) {
@@ -161,7 +162,7 @@ export class AIKart extends Kart {
         } else if (this.itemSlot === "shield" || this.itemSlot === "handling") {
           shouldUse = td < 170;
         } else {
-          shouldUse = Math.random() < 0.01 * dt;
+          shouldUse = simRandom() < 0.01 * dt;
         }
       } else if (this.itemSlot === "conflict") {
         const rearLookDist = 180;
@@ -180,7 +181,7 @@ export class AIKart extends Kart {
             }
           }
         }
-        if (playerBehind || Math.random() < 0.005 * dt) shouldUse = true;
+        if (playerBehind || simRandom() < 0.005 * dt) shouldUse = true;
       } else if (this.itemSlot === "dossier") {
         const frontLookDist = 250;
         let playerAhead = false;
@@ -198,13 +199,13 @@ export class AIKart extends Kart {
             }
           }
         }
-        if (playerAhead || Math.random() < 0.005 * dt) shouldUse = true;
+        if (playerAhead || simRandom() < 0.005 * dt) shouldUse = true;
       } else if (this.itemSlot === "placebo" || this.itemSlot === "doubleblind") {
-        shouldUse = rank <= 3 || Math.random() < 0.01 * dt;
+        shouldUse = rank <= 3 || simRandom() < 0.01 * dt;
       } else if (this.itemSlot === "boost" || this.itemSlot === "handling" || this.itemSlot === "fasttrack") {
         if (curvature < 0.25) shouldUse = true;
       } else if (this.itemSlot === "shield") {
-        if (rank <= 2 || Math.random() < 0.02 * dt) shouldUse = true;
+        if (rank <= 2 || simRandom() < 0.02 * dt) shouldUse = true;
       } else if (this.itemSlot === "deauth") {
         shouldUse = getActiveKarts().some(k => k !== this && !k.finished && dist(this.x, this.y, k.x, k.y) < 150);
       } else if (this.itemSlot === "mergerequest") {
@@ -219,7 +220,7 @@ export class AIKart extends Kart {
     if (this.ultReady && this.ultActiveTimer <= 0) {
       const aiRank = runtime.rankAll().indexOf(this) + 1;
       const useChance = aiRank >= 3 ? 0.015 : aiRank >= 2 ? 0.008 : 0.004;
-      if (Math.random() < useChance * dt) {
+      if (simRandom() < useChance * dt) {
         runtime.activateUltimate(this);
       }
     }

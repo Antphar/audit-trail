@@ -22,6 +22,7 @@ import {
   TrainedAIKart,
   HeadlessExternalKart,
   makeHeadlessConfig,
+  applyHeadlessEpisodeSeed,
   configureHeadlessEpisode,
   headlessRlStepOnce,
   headlessExternalTerminal,
@@ -49,6 +50,8 @@ import {
 } from "../net/p2p.js";
 
 import { setTimeOfDay } from "../ui/menus.js";
+import { simNow } from "../core/clock.js";
+import { installDeterministicMath } from "../core/det-math.js";
 let testHooks = {};
 
 export function installTestHooks(hooks = {}) {
@@ -56,6 +59,9 @@ export function installTestHooks(hooks = {}) {
 }
 
 export function setupExternalRlApi() {
+  // Bit-exact browser/Node parity: V8 versions differ in Math.sin/cos/atan2/
+  // exp/log/pow rounding, so headless episodes use pure-JS fdlibm ports.
+  installDeterministicMath();
   window.rlActions = HEADLESS_DQN_ACTIONS;
   window.rlObservationKeys = HEADLESS_OBS_KEYS;
   window.rlReset = (overrides = {}) => {
@@ -74,6 +80,7 @@ export function setupExternalRlApi() {
     game.rlHits = 0;
     selectHeadlessCharacter(config.character);
     const map = selectHeadlessMap(config.map);
+    applyHeadlessEpisodeSeed(config);
     rlRuntime.hideAll();
     rlRuntime.buildRace();
     const agent = enableHeadlessAgent("external");
@@ -81,7 +88,7 @@ export function setupExternalRlApi() {
     game.particles = noopParticleSystem();
     game.skidMarks = [];
     game.state = STATE.RACING;
-    game.startTime = performance.now();
+    game.startTime = simNow();
     game.raceTime = 0;
     const obs = getHeadlessObservation(game.player);
     return {

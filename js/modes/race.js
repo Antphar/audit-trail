@@ -1,7 +1,9 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS, DEFAULT_KART_COLLISION_RADIUS, getVehicleProfile } from "../config/characters.js";
 import { MAPS, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
-import { clamp, dist, rand, pointSegProjection, pick, lerp, angleDiff } from "../core/math.js";
+import { clamp, dist, len2d, rand, pointSegProjection, pick, lerp, angleDiff } from "../core/math.js";
+import { simRandom } from "../core/rng.js";
+import { simNow } from "../core/clock.js";
 import { bus } from "../core/events.js";
 import {
   STATE, game, isBattleMode, isGrandPrixActive, getActiveKarts,
@@ -205,7 +207,7 @@ export function buildRaceSim() {
 }
 export function startRaceSim() {
   game.state = STATE.RACING;
-  game.startTime = performance.now();
+  game.startTime = simNow();
   if (game.p2pMode && game.p2pRole === "guest") {
     game.p2pLastHostSyncReceivedAt = performance.now();
   }
@@ -314,7 +316,7 @@ export function areAllHumansDone() {
 export function finishRaceSim() {
   if (game.state === STATE.FINISHED) return;
   game.state = STATE.FINISHED;
-  game.raceFinishedAt = performance.now();
+  game.raceFinishedAt = simNow();
 
   // Stop continuous engine, drift, and rumble sounds
 
@@ -424,7 +426,7 @@ export function getWeightedItem(kart) {
 
   const entries = Object.entries(weights);
   const totalWeight = entries.reduce((sum, [, w]) => sum + w, 0);
-  let roll = Math.random() * totalWeight;
+  let roll = simRandom() * totalWeight;
   for (const [item, w] of entries) {
     roll -= w;
     if (roll <= 0) return item;
@@ -434,7 +436,7 @@ export function getWeightedItem(kart) {
 
 export function completeClosedCircuitLap(kart) {
   kart.lap++;
-  const now = performance.now();
+  const now = simNow();
   if (kart.lastLapAt) {
     kart.lapTimes.push((now - kart.lastLapAt) / 1000);
   }
@@ -454,7 +456,7 @@ export function completeClosedCircuitLap(kart) {
   }
   if (kart.lap >= runtime.getTotalLaps()) {
     kart.finished = true;
-    kart.finishTime = (performance.now() - game.startTime) / 1000;
+    kart.finishTime = (simNow() - game.startTime) / 1000;
     if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
     if (kart === game.player && !isDragonEscape() && !game.multiplayer) {
       const bestLapThisRun = kart.lapTimes.length ? Math.min(...kart.lapTimes) : 0;
@@ -466,17 +468,17 @@ export function completeClosedCircuitLap(kart) {
     if (kart.isPlayer) {
       const colors = ["#ff4d6d", "#a4ff80", "#7b75ff", "#ffd86b", "#00f0ff"];
       for (let i = 0; i < 75; i++) {
-        const ang = Math.random() * Math.PI * 2;
+        const ang = simRandom() * Math.PI * 2;
         const sp = rand(3, 10);
         game.particles.add({
           type: "rect", x: kart.x, y: kart.y,
           vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
           life: rand(45, 90), maxLife: 90, size: rand(6, 13),
-          color: colors[Math.floor(Math.random() * colors.length)],
-          drag: 0.95, angle: Math.random() * Math.PI * 2, spin: rand(-0.15, 0.15),
+          color: colors[Math.floor(simRandom() * colors.length)],
+          drag: 0.95, angle: simRandom() * Math.PI * 2, spin: rand(-0.15, 0.15),
         });
       }
-      game.slowMoEnd = performance.now() + 1500;
+      game.slowMoEnd = simNow() + 1500;
       let allHumanFinished = true;
       if (game.player && !game.player.finished) allHumanFinished = false;
       if (game.multiplayer && game.player2 && !game.player2.finished) allHumanFinished = false;
@@ -606,7 +608,7 @@ export function checkItems(kart) {
   // Boost pads
   for (const p of game.track.boostPads) {
     if (dist(kart.x, kart.y, p.x, p.y) < kartPickupThreshold(28, kart)) {
-      const now = performance.now();
+      const now = simNow();
       const last = p.cooldown.get(kart) || 0;
       if (now - last > 1100) {
         p.cooldown.set(kart, now);
@@ -661,7 +663,7 @@ export function kartCollisions() {
       const rA = getKartCollisionRadius(a);
       const rB = getKartCollisionRadius(b);
       const dx = b.x - a.x, dy = b.y - a.y;
-      const d = Math.hypot(dx, dy);
+      const d = len2d(dx, dy);
       if (d < rA + rB && d > 0.001) {
         const overlap = rA + rB - d;
         const nx = dx / d, ny = dy / d;
@@ -725,7 +727,7 @@ export function kartCollisions() {
         triggerQuote(a, "collide", b);
         triggerQuote(b, "collide", a);
 
-        const now = performance.now();
+        const now = simNow();
         if ((a.isPlayer || b.isPlayer) && now - Math.max(a.lastBumpAt, b.lastBumpAt) > 280) {
           Sound.bump();
           a.lastBumpAt = b.lastBumpAt = now;

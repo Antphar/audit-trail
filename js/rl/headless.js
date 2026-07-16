@@ -1,7 +1,10 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
-import { MAPS, clampAiCount } from "../config/maps.js";
-import { clamp, dist, rand, mulberry32 } from "../core/math.js";
+import { MAPS, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
+import { clamp, dist, rand } from "../core/math.js";
+import { seedSimRng, resetSimRngToNondeterministic, simRandom } from "../core/rng.js";
+import { simNow, setSimClock, useVirtualClock } from "../core/clock.js";
+import { installDeterministicMath } from "../core/det-math.js";
 import { URL_PARAMS, HEADLESS_MODE, headlessFlag } from "../core/env.js";
 import { STATE, game, isBattleMode, getActiveKarts } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
@@ -30,7 +33,7 @@ export class HeadlessRandomKart extends Kart {
     this.randomSteerTimer -= dt;
     if (this.randomSteerTimer <= 0) {
       this.randomSteerTimer = rand(10, 42);
-      const roll = Math.random();
+      const roll = simRandom();
       this.randomSteer = roll < 0.36 ? -1 : roll < 0.72 ? 1 : 0;
     }
 
@@ -473,7 +476,25 @@ export function makeHeadlessConfig(overrides = {}) {
     opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,
     classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
     opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
+    seed: Number.isFinite(Number(overrides.seed)) ? Number(overrides.seed) >>> 0 : undefined,
   };
+}
+
+export function applyHeadlessEpisodeSeed(config) {
+  // Headless episodes always run on the virtual clock so timing-dependent sim
+  // logic (cooldowns, countdown, lap times) never leaks wall-clock time, and
+  // on engine-independent math so browser/Node streams match bit-exactly.
+  installDeterministicMath();
+  useVirtualClock(true);
+  setSimClock(0);
+  if (Number.isFinite(Number(config?.seed))) {
+    const seed = Number(config.seed) >>> 0;
+    seedSimRng(seed);
+    const mapId = String(config.map ?? "");
+    if (mapId === "dragon_escape") regenerateDragonTrail();
+  } else {
+    resetSimRngToNondeterministic();
+  }
 }
 
 export function configureHeadlessEpisode(config) {
@@ -585,6 +606,7 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
   game.rlHits = 0;
   selectHeadlessCharacter(config.character);
   const map = selectHeadlessMap(config.map);
+  applyHeadlessEpisodeSeed(config);
   rlRuntime.hideAll();
   rlRuntime.buildRace();
   const agent = enableHeadlessAgent(config.agent);
@@ -592,7 +614,7 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
   game.particles = noopParticleSystem();
   game.skidMarks = [];
   game.state = STATE.RACING;
-  game.startTime = performance.now();
+  game.startTime = simNow();
   game.raceTime = 0;
 
   const maxFrames = config.frames;
@@ -608,7 +630,7 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
     const beforeLap = game.player.lap || 0;
     const beforeObs = config.trace ? getHeadlessObservation(game.player) : null;
     simSeconds += 1 / 60;
-    game.startTime = performance.now() - simSeconds * 1000;
+    setSimClock(simSeconds * 1000);
     simulationStep(dt, simSeconds * 1000);
     game.skidMarks.length = 0;
     const afterProgress = progressValue(game.player);
@@ -732,7 +754,7 @@ export function headlessRlStepOnce(action) {
     const beforeFinished = !!game.player.finished;
     HEADLESS_EXTERNAL_STATE.simSeconds += 1 / 60;
     HEADLESS_EXTERNAL_STATE.frames++;
-    game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
+    setSimClock(HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
     simulationStep(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
     game.skidMarks.length = 0;
     reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);

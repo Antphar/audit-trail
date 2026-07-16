@@ -1,10 +1,11 @@
 import { MAPS } from "../config/maps.js";
-import { TAU, lerp, clamp, dist, pointSegProjection, rand, pick, hexToRgba, ellipseNormDist } from "../core/math.js";
+import { TAU, lerp, clamp, dist, len2d, pointSegProjection, rand, pick, hexToRgba, ellipseNormDist } from "../core/math.js";
 import { COMPASS_VISUAL, getMapDayPalette } from "../config/themes.js";
 import { game, isBattleMode, isDayMode, getActiveKarts, STATE } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
 import { runtime } from "./runtime.js";
 import { RegulatoryProjectile } from "./items.js";
+import { simRandom } from "../core/rng.js";
 
 export let WORLD_W = 3400;
 export let WORLD_H = 2400;
@@ -123,7 +124,7 @@ export class Track {
         b = this.waypoints[(i + 1) % this.n];
       }
       const dx = b.x - a.x, dy = b.y - a.y;
-      const len = Math.hypot(dx, dy);
+      const len = len2d(dx, dy);
       if (len < 0.1) continue;
       const nx = -dy / len, ny = dx / len; // left normal
       const wScale = (segWidthConfig[i] || 1);
@@ -300,16 +301,16 @@ export class Track {
         const cx = s.a.x + s.dx * t;
         const cy = s.a.y + s.dy * t;
         const side = (i % 2 === 0) ? 1 : -1;
-        const offDist = s.halfW + 60 + Math.random() * 120;
+        const offDist = s.halfW + 60 + simRandom() * 120;
         decor.push({
           x: cx + s.nx * offDist * side,
           y: cy + s.ny * offDist * side,
           r: rand(8, 16),
           h: rand(40, 70),
           color: pick(colors),
-          pulseOffset: Math.random() * Math.PI * 2,
+          pulseOffset: simRandom() * Math.PI * 2,
           isJapanese: true,
-          type: Math.random() < 0.3 ? "lantern" : (Math.random() < 0.5 ? "torii" : "sakura")
+          type: simRandom() < 0.3 ? "lantern" : (simRandom() < 0.5 ? "torii" : "sakura")
         });
       }
       return decor;
@@ -331,7 +332,7 @@ export class Track {
           r: rand(10, 18),
           h: rand(35, 60),
           color: pick(colors),
-          pulseOffset: Math.random() * Math.PI * 2,
+          pulseOffset: simRandom() * Math.PI * 2,
           isJapanese: false,
           type: "pillar"
         });
@@ -347,13 +348,13 @@ export class Track {
     const colors = ["#ff4d6d", "#7b75ff", "#fd9927", "#a4ff80", "#57f2ff", "#b983ff", "#ff6b35", "#ffd86b"];
     // Place small clusters of spectators along track edges
     for (let i = 0; i < this.segments.length; i += 4) {
-      if (Math.random() > 0.45) continue;
+      if (simRandom() > 0.45) continue;
       const s = this.segments[i];
       if (!s) continue;
       const t = rand(0.2, 0.8);
       const cx = s.a.x + s.dx * t;
       const cy = s.a.y + s.dy * t;
-      const side = Math.random() < 0.5 ? 1 : -1;
+      const side = simRandom() < 0.5 ? 1 : -1;
       const offDist = s.halfW + rand(18, 35);
       const clusterSize = Math.floor(rand(2, 5));
       for (let c = 0; c < clusterSize; c++) {
@@ -361,7 +362,7 @@ export class Track {
           x: cx + s.nx * offDist * side + rand(-12, 12),
           y: cy + s.ny * offDist * side + rand(-8, 8),
           color: pick(colors),
-          phase: Math.random() * TAU,
+          phase: simRandom() * TAU,
           height: rand(6, 9),
           cheerThreshold: rand(80, 160),
         });
@@ -429,7 +430,7 @@ export class Track {
           x: cx + s.nx * off,
           y: cy + s.ny * off,
           collected: false,
-          spin: Math.random() * TAU,
+          spin: simRandom() * TAU,
           respawn: 0,
         });
       }
@@ -474,7 +475,7 @@ export class Track {
         const t = 0.5;
         boxes.push({
           x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
-          active: true, respawn: 0, spin: Math.random() * TAU,
+          active: true, respawn: 0, spin: simRandom() * TAU,
         });
       }
       return boxes;
@@ -485,7 +486,7 @@ export class Track {
       const t = 0.5;
       boxes.push({
         x: s.a.x + s.dx * t, y: s.a.y + s.dy * t,
-        active: true, respawn: 0, spin: Math.random() * TAU,
+        active: true, respawn: 0, spin: simRandom() * TAU,
       });
     }
     return boxes;
@@ -607,8 +608,8 @@ export class Track {
     const baseAng = Math.atan2(leadY - muzzleY, leadX - muzzleX);
     const spread = enraged ? 0.16 : 0.08;
     game.hazards.push(new RegulatoryProjectile(muzzleX, muzzleY, baseAng + rand(-spread, spread), enraged ? 9.4 : 8.4, enraged));
-    if (enraged && Math.random() < 0.45) {
-      const side = Math.random() < 0.5 ? -1 : 1;
+    if (enraged && simRandom() < 0.45) {
+      const side = simRandom() < 0.5 ? -1 : 1;
       game.hazards.push(new RegulatoryProjectile(muzzleX, muzzleY, baseAng + side * rand(0.18, 0.28), 8.6, true));
     }
     Sound.spatialTone(muzzleX, muzzleY, enraged ? 82 : 120, 0.22, "sawtooth", enraged ? 0.17 : 0.13, 36);

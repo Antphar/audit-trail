@@ -743,6 +743,7 @@ class TurboKartEnv(_KartEnvConfigMixin):
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int | None = None,
         opponent_count: int | None = None,
+        seed: int | None = None,
     ) -> np.ndarray:
         if map_id is not None:
             self.map_id = map_id
@@ -755,7 +756,10 @@ class TurboKartEnv(_KartEnvConfigMixin):
         # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
         # into subsequent baseline evals on the same env.
         self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
-        result = self.page.evaluate("""(cfg) => window.rlReset(cfg)""", self._build_reset_config())
+        cfg = self._build_reset_config()
+        if seed is not None:
+            cfg["seed"] = int(seed) & 0xFFFFFFFF
+        result = self.page.evaluate("""(cfg) => window.rlReset(cfg)""", cfg)
         return self._apply_reset_result(result)
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
@@ -902,6 +906,7 @@ class NodeSimEnv(_KartEnvConfigMixin):
         opponent_models: list[dict[str, Any]] | None = None,
         classic_opponent_slots: int | None = None,
         opponent_count: int | None = None,
+        seed: int | None = None,
     ) -> np.ndarray:
         if map_id is not None:
             self.map_id = map_id
@@ -912,7 +917,10 @@ class NodeSimEnv(_KartEnvConfigMixin):
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
         self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
-        result = self._client.rpc("reset", self._build_reset_config())
+        cfg = self._build_reset_config()
+        if seed is not None:
+            cfg["seed"] = int(seed) & 0xFFFFFFFF
+        result = self._client.rpc("reset", cfg)
         return self._apply_reset_result(result)
 
     def step(self, action) -> tuple[np.ndarray, float, bool, dict[str, Any]]:
