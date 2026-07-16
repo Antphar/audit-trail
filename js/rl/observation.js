@@ -1,7 +1,8 @@
 import { TUNING } from "../config/tuning.js";
 import { clamp, dist, angleDiff } from "../core/math.js";
 import { game, STATE, isBattleMode, getActiveKarts } from "../core/state.js";
-import { rlRuntime } from "./rl-runtime.js";
+import { getRayObjectRadius, getKartCollisionRadius, progressValue, rankAll } from "../modes/race.js";
+import { qualifiesApprovalRam, activateUltimate } from "../modes/battle.js";
 
 // Mode-agnostic "self" features shared by every agent (race + arena/battle).
 // Kept as an identical PREFIX of both observation vectors so a battle policy can
@@ -115,7 +116,7 @@ export function normalizedObjectRayDistance(kart, relAngle, objects, defaultRadi
     const forward = ox * fx + oy * fy;
     if (forward <= 0 || forward > HEADLESS_RAY_RANGE) continue;
     const lateral = Math.abs(ox * lx + oy * ly);
-    const radius = rlRuntime.getRayObjectRadius(obj, defaultRadius) + rlRuntime.getKartCollisionRadius(kart);
+    const radius = getRayObjectRadius(obj, defaultRadius) + getKartCollisionRadius(kart);
     if (lateral <= radius) best = Math.min(best, Math.max(0, forward - radius));
   }
 
@@ -211,7 +212,7 @@ export function getHeadlessBattleTail(kart) {
     const inv = Math.max(0.001, rivals[0].d);
     const dirx = (def.x - kart.x) / inv;
     const diry = (def.y - kart.y) / inv;
-    if (rlRuntime.qualifiesApprovalRam(kart, def, dirx, diry)) ram = 1;
+    if (qualifiesApprovalRam(kart, def, dirx, diry)) ram = 1;
   }
   const values = [clamp((kart.approvals || 0) / 5, 0, 1), survivors, timeLeft, ram];
   for (let i = 0; i < HEADLESS_BATTLE_RIVAL_COUNT; i++) {
@@ -256,7 +257,7 @@ export function normalizeHeadlessAction(action = {}) {
 export function applyHeadlessAction(kart, track, dt, action) {
   const a = normalizeHeadlessAction(action);
   if (a.item && kart.itemState === "active" && kart.itemSlot) kart.useItem();
-  if (a.ultimate && kart.ultReady) rlRuntime.activateUltimate(kart);
+  if (a.ultimate && kart.ultReady) activateUltimate(kart);
   const input = {
     forward: a.throttle >= 0.5,
     back: a.brake >= 0.5,
@@ -272,7 +273,7 @@ export function applyHeadlessAction(kart, track, dt, action) {
 }
 
 export function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, beforeFinished) {
-  const afterProgress = rlRuntime.progressValue(kart);
+  const afterProgress = progressValue(kart);
   let reward = (afterProgress - beforeProgress) * 10;
   if ((kart.lap || 0) > beforeLap) reward += 50;
   if (!beforeFinished && kart.finished) reward += 200;
@@ -306,7 +307,7 @@ export function computeHeadlessBattleReward(kart) {
   if (game.state === STATE.FINISHED && !kart._rlWinCounted) {
     kart._rlWinCounted = true;
     const alive = getActiveKarts().filter(k => k && !k.eliminated);
-    if (!kart.eliminated && (alive.length <= 1 || rlRuntime.rankAll()[0] === kart)) reward += 20;
+    if (!kart.eliminated && (alive.length <= 1 || rankAll()[0] === kart)) reward += 20;
     else if (!kart.eliminated) reward -= 5; // surviving to a timeout without leading is a soft loss
   }
   return reward;

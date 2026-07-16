@@ -37,6 +37,11 @@ import { STATE } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
 import { rlRuntime } from "./rl-runtime.js";
 import {
+  isUntimedHumanBattle, qualifiesApprovalRam, resolveFreshBattleAttribution,
+  popApproval, tryApprovalRam, checkBattleEnd, startMergeRequestPull,
+} from "../modes/battle.js";
+import { isGroundHazardImmuneWhenAirborne } from "../modes/race.js";
+import {
   serializeKartCompact,
   serializeKartState,
   applyKartState,
@@ -181,23 +186,23 @@ export function installWindowExports() {
   window.game = game;
   window.update = rlRuntime.update;
   window.handleP2pData = handleP2pData;
-  window.startMergeRequestPull = rlRuntime.startMergeRequestPull;
+  window.startMergeRequestPull = startMergeRequestPull;
   window.Track = Track;
   window.PlayerKart = PlayerKart;
   window.AIKart = AIKart;
   window.CHARACTERS = CHARACTERS;
-  window.isUntimedHumanBattle = testHooks.isUntimedHumanBattle;
-  window.qualifiesApprovalRam = testHooks.qualifiesApprovalRam;
-  window.resolveFreshBattleAttribution = testHooks.resolveFreshBattleAttribution;
-  window.popApproval = testHooks.popApproval;
-  window.tryApprovalRam = testHooks.tryApprovalRam;
-  window.checkBattleEnd = testHooks.checkBattleEnd;
+  window.isUntimedHumanBattle = isUntimedHumanBattle;
+  window.qualifiesApprovalRam = qualifiesApprovalRam;
+  window.resolveFreshBattleAttribution = resolveFreshBattleAttribution;
+  window.popApproval = popApproval;
+  window.tryApprovalRam = tryApprovalRam;
+  window.checkBattleEnd = checkBattleEnd;
+  window.isGroundHazardImmuneWhenAirborne = isGroundHazardImmuneWhenAirborne;
   window.isKartAirborne = isKartAirborne;
   window.integrateKartVertical = integrateKartVertical;
   window.checkTrackRamps = checkTrackRamps;
   window.constrainArenaKart = constrainArenaKart;
   window.kartVisualZOffset = kartVisualZOffset;
-  window.isGroundHazardImmuneWhenAirborne = testHooks.isGroundHazardImmuneWhenAirborne;
   window.serializeKartCompact = serializeKartCompact;
   window.serializeKartState = serializeKartState;
   window.applyKartState = applyKartState;

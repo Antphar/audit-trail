@@ -8,6 +8,9 @@ import { Sound } from "../audio/sound.js";
 import { Kart } from "../entities/kart.js";
 import { AIKart } from "../entities/ai-kart.js";
 import { rlRuntime } from "./rl-runtime.js";
+import { simulationStep } from "../sim/step.js";
+import { gridSlot, rankAll, progressValue, areAllHumansDone, finishRaceSim, BATTLE_ARENA_ID, AI_DIFFICULTIES } from "../modes/race.js";
+import { initBattleKartState } from "../modes/battle.js";
 import {
   HEADLESS_DQN_ACTIONS, HEADLESS_OBS_KEYS, HEADLESS_BATTLE_OBS_KEYS,
   headlessObsKeys, getHeadlessObservation, applyHeadlessAction,
@@ -503,7 +506,7 @@ export function configureHeadlessEpisode(config) {
       const baseSkills = [0.95, 0.97, 0.99, 1.01];
       const diffMult = rlRuntime.AI_DIFFICULTIES[rlRuntime.aiDifficulty] || 1.0;
       for (let idx = game.ais.length; idx < targetOpponents; idx++) {
-        const pos = rlRuntime.gridSlot(idx + 1);
+        const pos = gridSlot(idx + 1);
         const x = sx + fx * pos.f + lx * pos.l;
         const y = sy + fy * pos.f + ly * pos.l;
         game.ais.push(new AIKart(x, y, ang, aiChars[idx % aiChars.length], baseSkills[idx % baseSkills.length] * diffMult));
@@ -535,17 +538,17 @@ export function configureHeadlessEpisode(config) {
   game.headlessNoHazards = !!config.noHazards;
   // Re-init battle lives: the agent kart (and self-play opponents) replaced the karts
   // that rlRuntime.buildRace() originally initialized, leaving their `approvals` undefined.
-  if (isBattleMode()) rlRuntime.initBattleKartState();
+  if (isBattleMode()) initBattleKartState();
 }
 
 export function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0) {
-  const ranking = rlRuntime.rankAll().map((kart, idx) => ({
+  const ranking = rankAll().map((kart, idx) => ({
     place: idx + 1,
     name: kart.name,
     charId: kart.charId,
     lap: kart.lap,
     nextCheckpoint: kart.nextCheckpoint,
-    progress: Math.round(rlRuntime.progressValue(kart) * 1000) / 1000,
+    progress: Math.round(progressValue(kart) * 1000) / 1000,
     finished: !!kart.finished,
     eliminated: !!kart.eliminated,
     finishTime: Math.round((kart.finishTime || game.raceTime) * 1000) / 1000,
@@ -600,15 +603,15 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
   let totalReward = 0;
 
   for (; frames < maxFrames && game.state !== STATE.FINISHED; frames++) {
-    const beforeProgress = rlRuntime.progressValue(game.player);
+    const beforeProgress = progressValue(game.player);
     const beforeFinished = !!game.player.finished;
     const beforeLap = game.player.lap || 0;
     const beforeObs = config.trace ? getHeadlessObservation(game.player) : null;
     simSeconds += 1 / 60;
     game.startTime = performance.now() - simSeconds * 1000;
-    rlRuntime.update(dt, simSeconds * 1000);
+    simulationStep(dt, simSeconds * 1000);
     game.skidMarks.length = 0;
-    const afterProgress = rlRuntime.progressValue(game.player);
+    const afterProgress = progressValue(game.player);
     const reward = computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
     totalReward += reward;
     if (config.trace && frames % config.traceEvery === 0) {
@@ -624,8 +627,8 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
         y: Math.round(game.player.y * 10) / 10,
       });
     }
-    if (rlRuntime.areAllHumansDone()) {
-      rlRuntime.finishRace();
+    if (areAllHumansDone()) {
+      finishRaceSim();
     }
   }
 
@@ -724,25 +727,25 @@ export function headlessRlStepOnce(action) {
   const repeat = Math.max(1, Math.floor(config.frameSkip || 1));
   for (let i = 0; i < repeat; i++) {
     if (game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames) break;
-    const beforeProgress = rlRuntime.progressValue(game.player);
+    const beforeProgress = progressValue(game.player);
     const beforeLap = game.player.lap || 0;
     const beforeFinished = !!game.player.finished;
     HEADLESS_EXTERNAL_STATE.simSeconds += 1 / 60;
     HEADLESS_EXTERNAL_STATE.frames++;
     game.startTime = performance.now() - HEADLESS_EXTERNAL_STATE.simSeconds * 1000;
-    rlRuntime.update(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
+    simulationStep(1, HEADLESS_EXTERNAL_STATE.simSeconds * 1000);
     game.skidMarks.length = 0;
     reward += computeHeadlessStepReward(game.player, beforeProgress, beforeLap, beforeFinished);
-    if (rlRuntime.areAllHumansDone()) rlRuntime.finishRace();
+    if (areAllHumansDone()) finishRaceSim();
   }
   const done = game.state === STATE.FINISHED || game.player.finished || game.player.eliminated || HEADLESS_EXTERNAL_STATE.frames >= config.frames;
   const obs = getHeadlessObservation(game.player);
-  window.__lastRlRanking = rlRuntime.rankAll().map(k => ({
+  window.__lastRlRanking = rankAll().map(k => ({
     name: k.name,
     charId: k.charId,
     finished: !!k.finished,
     eliminated: !!k.eliminated,
-    progress: rlRuntime.progressValue(k),
+    progress: progressValue(k),
   }));
   return {
     obs: obs.values,
@@ -752,7 +755,7 @@ export function headlessRlStepOnce(action) {
       frame: HEADLESS_EXTERNAL_STATE.frames,
       simSeconds: HEADLESS_EXTERNAL_STATE.simSeconds,
       raceTime: game.raceTime,
-      progress: rlRuntime.progressValue(game.player),
+      progress: progressValue(game.player),
       lap: game.player.lap,
       finished: !!game.player.finished,
       totalReward: HEADLESS_EXTERNAL_STATE.reward,
