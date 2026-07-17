@@ -289,6 +289,15 @@ export function racePositionTerminalBonus(kart) {
   return -10;
 }
 
+function battleTimePressurePerFrame() {
+  const duration = game.battleDuration || 120;
+  const elapsed = game.raceTime || 0;
+  const flatEnd = duration * (2 / 3);
+  if (elapsed <= flatEnd) return 0.001;
+  const rampProgress = Math.min(1, Math.max(0, (elapsed - flatEnd) / Math.max(0.001, duration - flatEnd)));
+  return 0.001 + rampProgress * 0.003; // ramp to -0.004/frame in the final third (~-12 worst case)
+}
+
 export function computeHeadlessBattleReward(kart) {
   const steals = game.rlSteals || 0;
   const losses = game.rlLosses || 0;
@@ -299,7 +308,7 @@ export function computeHeadlessBattleReward(kart) {
   // Aggression-shaped: pops/steals pay far more than passive survival, and every frame
   // costs a little so running out the clock is never the best policy.
   let reward = 3.0 * steals - 1.5 * losses + 1.5 * hits;
-  reward -= 0.001; // time pressure: ~-7.2 over a full 120s match
+  reward -= battleTimePressurePerFrame();
   const uses = kart.itemUseCount || 0;
   if (uses > (kart._rlPrevItemUses || 0)) reward += 0.3 * (uses - (kart._rlPrevItemUses || 0));
   kart._rlPrevItemUses = uses;
@@ -316,8 +325,10 @@ export function computeHeadlessBattleReward(kart) {
   if (game.state === STATE.FINISHED && !kart._rlWinCounted) {
     kart._rlWinCounted = true;
     const alive = getActiveKarts().filter(k => k && !k.eliminated);
-    if (!kart.eliminated && (alive.length <= 1 || rankAll()[0] === kart)) reward += 20;
-    else if (!kart.eliminated) reward -= 5; // surviving to a timeout without leading is a soft loss
+    // Terminal band stays within ±20: knockout win > timeout win > draw > elimination.
+    if (!kart.eliminated && alive.length <= 1) reward += 20;
+    else if (!kart.eliminated && rankAll()[0] === kart) reward += 12;
+    else if (!kart.eliminated) reward -= 6.5;
   }
   return reward;
 }

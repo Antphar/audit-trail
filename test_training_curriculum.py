@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 import unittest
-from collections import Counter
+from collections import Counter, deque
 
 from rl_common import (
     BATTLE_OPPONENT_CURRICULUM_DEFAULT,
@@ -12,7 +12,14 @@ from rl_common import (
     parse_battle_opponent_curriculum,
     resolve_battle_opponent_count,
     sample_battle_opponents,
+    sample_race_opponents,
     validate_battle_opponents_fixed,
+)
+from train_dqn import (
+    StagedSelfPlayState,
+    is_classic_only_matchup,
+    is_classic_only_setup,
+    live_ranked_first_in_matchup,
 )
 
 
@@ -126,6 +133,68 @@ class SampleBattleOpponentsTests(unittest.TestCase):
         opponents, classic = sample_battle_opponents([], [], total_slots=7, rng=random.Random(3))
         self.assertEqual(len(opponents) + classic, 7)
         self.assertEqual(classic, 7)
+
+
+class ForcedClassicSlotsTests(unittest.TestCase):
+    def test_battle_forced_all_classic(self) -> None:
+        pool = [{"name": f"ckpt-{i}", "payload": {"type": "dqn"}} for i in range(3)]
+        opponents, classic = sample_battle_opponents(
+            [], pool, total_slots=5, forced_classic_slots=5, rng=random.Random(1)
+        )
+        self.assertEqual(opponents, [])
+        self.assertEqual(classic, 5)
+
+    def test_battle_forced_model_cap(self) -> None:
+        pool = [{"name": f"ckpt-{i}", "payload": {"type": "dqn"}} for i in range(5)]
+        opponents, classic = sample_battle_opponents(
+            [],
+            pool,
+            total_slots=7,
+            forced_classic_slots=4,
+            max_model_slots=3,
+            anchor_prob=0.0,
+            rng=random.Random(2),
+        )
+        self.assertEqual(len(opponents), 3)
+        self.assertEqual(classic, 4)
+
+    def test_race_forced_all_classic(self) -> None:
+        pool = [{"name": "ckpt-1", "payload": {"type": "dqn"}}]
+        opponents, classic = sample_race_opponents(
+            pool, total_slots=3, forced_classic_slots=3, rng=random.Random(4)
+        )
+        self.assertEqual(opponents, [])
+        self.assertEqual(classic, 3)
+
+
+class StagedSelfPlayStateTests(unittest.TestCase):
+    def test_trigger_requires_full_window(self) -> None:
+        state = StagedSelfPlayState(outcomes=deque(maxlen=5))
+        for _ in range(4):
+            state.record_classic_outcome(True)
+        self.assertFalse(state.try_trigger(100, 0.7))
+        state.record_classic_outcome(True)
+        self.assertTrue(state.try_trigger(100, 0.7))
+        self.assertEqual(state.trigger_step, 100)
+
+    def test_model_fraction_ramp(self) -> None:
+        state = StagedSelfPlayState(outcomes=deque(maxlen=3))
+        for _ in range(3):
+            state.record_classic_outcome(True)
+        state.try_trigger(1000, 0.5)
+        self.assertAlmostEqual(state.model_fraction(1000, 2000), 0.25)
+        self.assertAlmostEqual(state.model_fraction(2000, 2000), 0.625)
+        self.assertAlmostEqual(state.model_fraction(3000, 2000), 1.0)
+
+    def test_matchup_helpers(self) -> None:
+        labels = ["live@0", "classic", "classic"]
+        self.assertTrue(is_classic_only_matchup(labels, "live@0"))
+        self.assertTrue(live_ranked_first_in_matchup(labels, "live@0"))
+        mixed = ["live@0", "ckpt-1000", "classic"]
+        self.assertFalse(is_classic_only_matchup(mixed, "live@0"))
+        setup = {"slot_labels": ["classic", "classic", "classic"]}
+        self.assertTrue(is_classic_only_setup(setup))
+        self.assertFalse(is_classic_only_setup({"slot_labels": ["classic", "ckpt-1000"]}))
 
 
 if __name__ == "__main__":

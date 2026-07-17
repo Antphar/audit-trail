@@ -1355,6 +1355,22 @@ def sample_league_opponents(args: Any, league: list[dict[str, Any]]) -> list[dic
     return opponents
 
 
+def _sample_checkpoint_pool_payload(
+    checkpoint_pool: list[dict[str, Any]],
+    r: random.Random,
+    pfsp_weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    if pfsp_weights is not None and r.random() < 0.5:
+        weights = [max(0.0001, pfsp_weights.get(entry["name"], 1.0)) for entry in checkpoint_pool]
+        return r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"]
+    if r.random() < 0.5:
+        # Recency-weighted: fight your recent self (pool is oldest-first).
+        weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
+        return r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"]
+    # Uniform over full history: keep beating old play styles too.
+    return r.choice(checkpoint_pool)["payload"]
+
+
 def sample_battle_opponents(
     anchors: list[dict[str, Any]],
     checkpoint_pool: list[dict[str, Any]],
@@ -1362,7 +1378,10 @@ def sample_battle_opponents(
     total_slots: int = 4,
     classic_prob: float = 0.35,
     anchor_prob: float = 0.35,
+    pfsp_weights: dict[str, float] | None = None,
     rng: random.Random | None = None,
+    forced_classic_slots: int | None = None,
+    max_model_slots: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Sample battle self-play opponents for one episode.
 
@@ -1372,21 +1391,30 @@ def sample_battle_opponents(
     is a fixed anchor model (e.g. v5/v1). While the checkpoint pool is still
     empty (early training), remaining slots fall back to classic AI so the
     curriculum starts easy.
+
+    When ``forced_classic_slots`` is set, that exact classic count is used
+    (ignoring ``classic_prob``). ``max_model_slots`` caps checkpoint/anchor
+    slots — excess slots become classic.
     """
     r = rng or random
-    classic_slots = 1 if r.random() < classic_prob else 0
+    if forced_classic_slots is not None:
+        classic_slots = max(0, min(forced_classic_slots, total_slots))
+    else:
+        classic_slots = 1 if r.random() < classic_prob else 0
+
+    model_slot_cap = total_slots - classic_slots
+    if max_model_slots is not None:
+        model_slot_cap = min(model_slot_cap, max_model_slots)
+
     opponents: list[dict[str, Any]] = []
-    if anchors and r.random() < anchor_prob:
+    if model_slot_cap > 0 and anchors and r.random() < anchor_prob:
         opponents.append(r.choice(anchors)["payload"])
     while len(opponents) + classic_slots < total_slots:
+        if len(opponents) >= model_slot_cap:
+            classic_slots += 1
+            continue
         if checkpoint_pool:
-            if r.random() < 0.5:
-                # Recency-weighted: fight your recent self (pool is oldest-first).
-                weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]
-                opponents.append(r.choices(checkpoint_pool, weights=weights, k=1)[0]["payload"])
-            else:
-                # Uniform over full history: keep beating old play styles too.
-                opponents.append(r.choice(checkpoint_pool)["payload"])
+            opponents.append(_sample_checkpoint_pool_payload(checkpoint_pool, r, pfsp_weights))
         else:
             classic_slots += 1
     return opponents, classic_slots
@@ -1398,17 +1426,33 @@ def sample_race_opponents(
     total_slots: int = 3,
     classic_prob: float = 0.25,
     rng: random.Random | None = None,
+    forced_classic_slots: int | None = None,
+    max_model_slots: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Sample race self-play opponents for one episode.
 
     Like ``sample_battle_opponents`` but without anchor models — anchors are
     Elo eval-only and never enter the training opponent pool. While the
     checkpoint pool is empty, remaining slots fall back to classic AI.
+
+    When ``forced_classic_slots`` is set, that exact classic count is used
+    (ignoring ``classic_prob``). ``max_model_slots`` caps checkpoint slots.
     """
     r = rng or random
-    classic_slots = 1 if r.random() < classic_prob else 0
+    if forced_classic_slots is not None:
+        classic_slots = max(0, min(forced_classic_slots, total_slots))
+    else:
+        classic_slots = 1 if r.random() < classic_prob else 0
+
+    model_slot_cap = total_slots - classic_slots
+    if max_model_slots is not None:
+        model_slot_cap = min(model_slot_cap, max_model_slots)
+
     opponents: list[dict[str, Any]] = []
     while len(opponents) + classic_slots < total_slots:
+        if len(opponents) >= model_slot_cap:
+            classic_slots += 1
+            continue
         if checkpoint_pool:
             if r.random() < 0.5:
                 weights = [0.6 ** (len(checkpoint_pool) - 1 - i) for i in range(len(checkpoint_pool))]

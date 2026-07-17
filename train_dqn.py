@@ -768,6 +768,57 @@ def load_anchor_models(
     return anchors
 
 
+@dataclass
+class StagedSelfPlayState:
+    """Rolling classic-only win tracker and self-play ramp phase."""
+
+    outcomes: deque[int]
+    triggered: bool = False
+    trigger_step: int | None = None
+
+    def classic_winrate(self) -> float | None:
+        if not self.outcomes:
+            return None
+        return sum(self.outcomes) / len(self.outcomes)
+
+    def record_classic_outcome(self, ranked_first: bool) -> None:
+        if self.triggered:
+            return
+        self.outcomes.append(1 if ranked_first else 0)
+
+    def try_trigger(self, step: int, trigger_winrate: float) -> bool:
+        if self.triggered:
+            return False
+        if len(self.outcomes) < self.outcomes.maxlen:
+            return False
+        winrate = self.classic_winrate()
+        if winrate is None or winrate < trigger_winrate:
+            return False
+        self.triggered = True
+        self.trigger_step = step
+        return True
+
+    def model_fraction(self, step: int, ramp_steps: int) -> float:
+        if not self.triggered or self.trigger_step is None:
+            return 0.0
+        progress = (step - self.trigger_step) / max(1, ramp_steps)
+        return min(1.0, 0.25 + 0.75 * progress)
+
+
+def is_classic_only_matchup(labels: list[str], live_label: str) -> bool:
+    opponent_labels = [label for label in labels if label != live_label]
+    return bool(opponent_labels) and all(label == "classic" for label in opponent_labels)
+
+
+def is_classic_only_setup(setup: dict[str, Any]) -> bool:
+    slot_labels = setup.get("slot_labels") or []
+    return bool(slot_labels) and all(label == "classic" for label in slot_labels)
+
+
+def live_ranked_first_in_matchup(labels: list[str], live_label: str) -> bool:
+    return bool(labels) and labels[0] == live_label
+
+
 def resolve_training_opponents(
     args: argparse.Namespace,
     *,
@@ -776,8 +827,42 @@ def resolve_training_opponents(
     anchors: list[dict[str, Any]],
     checkpoint_pool: list[dict[str, Any]],
     total_slots: int = 4,
+    pfsp_weights: dict[str, float] | None = None,
     rng: random.Random | None = None,
+    staged_state: StagedSelfPlayState | None = None,
+    step: int = 0,
 ) -> tuple[list[dict[str, Any]], int | None]:
+    use_checkpoint_pool = args.self_play and not args.race_league
+    if args.staged_selfplay and staged_state is not None and use_checkpoint_pool:
+        if not staged_state.triggered:
+            return [], total_slots
+
+        model_fraction = staged_state.model_fraction(step, args.staged_ramp_steps)
+        model_slots = max(1, round(model_fraction * total_slots))
+        forced_classic = total_slots - model_slots
+        if is_battle:
+            opponent_models, classic_slots = common.sample_battle_opponents(
+                anchors,
+                checkpoint_pool,
+                total_slots=total_slots,
+                classic_prob=0.0,
+                anchor_prob=args.train_anchor_prob,
+                pfsp_weights=pfsp_weights if args.pfsp else None,
+                rng=rng,
+                forced_classic_slots=forced_classic,
+                max_model_slots=model_slots,
+            )
+            return opponent_models, classic_slots
+        opponent_models, classic_slots = common.sample_race_opponents(
+            checkpoint_pool,
+            total_slots=total_slots,
+            classic_prob=0.0,
+            rng=rng,
+            forced_classic_slots=forced_classic,
+            max_model_slots=model_slots,
+        )
+        return opponent_models, classic_slots
+
     if is_battle and args.self_play:
         opponent_models, classic_slots = common.sample_battle_opponents(
             anchors,
@@ -785,6 +870,7 @@ def resolve_training_opponents(
             total_slots=total_slots,
             classic_prob=args.train_classic_prob,
             anchor_prob=args.train_anchor_prob,
+            pfsp_weights=pfsp_weights if args.pfsp else None,
             rng=rng,
         )
         return opponent_models, classic_slots
@@ -1499,6 +1585,89 @@ def append_matchup_record(
         handle.write(json.dumps(line) + "\n")
 
 
+def update_live_vs_opponent(
+    live_vs_opponent: dict[str, list[int]],
+    ranking: list[str],
+    live_label: str,
+) -> None:
+    try:
+        live_rank = ranking.index(live_label)
+    except ValueError:
+        return
+    for label in ranking:
+        if not label.startswith("ckpt-"):
+            continue
+        record = live_vs_opponent.setdefault(label, [0, 0])
+        record[1] += 1
+        try:
+            opp_rank = ranking.index(label)
+        except ValueError:
+            continue
+        if live_rank < opp_rank:
+            record[0] += 1
+
+
+def build_pfsp_weights(
+    checkpoint_pool: list[dict[str, Any]],
+    live_vs_opponent: dict[str, list[int]],
+) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for entry in checkpoint_pool:
+        name = str(entry["name"])
+        wins, games = live_vs_opponent.get(name, [0, 0])
+        if games >= 5:
+            winrate = wins / games
+            weights[name] = (1.0 - winrate) ** 2 + 0.05
+        else:
+            weights[name] = 1.0
+    return weights
+
+
+def log_pfsp_weights(
+    console: Console,
+    checkpoint_pool: list[dict[str, Any]],
+    live_vs_opponent: dict[str, list[int]],
+    pfsp_weights: dict[str, float],
+    *,
+    step: int,
+) -> None:
+    if not checkpoint_pool:
+        console.print(f"[bold]PFSP weights @ step {step}[/bold]: (empty checkpoint pool)")
+        return
+    rows: list[str] = []
+    for entry in checkpoint_pool:
+        name = str(entry["name"])
+        wins, games = live_vs_opponent.get(name, [0, 0])
+        winrate = wins / games if games >= 5 else None
+        weight = pfsp_weights.get(name, 1.0)
+        winrate_note = f"{winrate:.2f}" if winrate is not None else "-"
+        rows.append(f"{name} winrate={winrate_note} weight={weight:.3f}")
+    console.print(f"[bold]PFSP weights @ step {step}[/bold]: " + "; ".join(rows))
+
+
+def log_staged_selfplay_progress(
+    console: Console,
+    staged_state: StagedSelfPlayState,
+    *,
+    step: int,
+    ramp_steps: int,
+) -> None:
+    if not staged_state.triggered:
+        winrate = staged_state.classic_winrate()
+        winrate_note = f"{winrate:.2f}" if winrate is not None else "-"
+        window = staged_state.outcomes.maxlen or 0
+        console.print(
+            f"[bold]Staged curriculum @ step {step}[/bold]: phase 1 classic-only "
+            f"({len(staged_state.outcomes)}/{window} episodes, winrate {winrate_note})"
+        )
+        return
+    model_fraction = staged_state.model_fraction(step, ramp_steps)
+    console.print(
+        f"[bold]Staged curriculum @ step {step}[/bold]: phase 2 self-play ramp "
+        f"(model_fraction={model_fraction:.2f}, trigger_step={staged_state.trigger_step})"
+    )
+
+
 def compute_matchup_stats(matchups_path: Path) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
     if not matchups_path.exists():
         return {}, {}
@@ -2161,7 +2330,11 @@ def train(args: argparse.Namespace) -> None:
         classic_baseline_progression: list[dict[str, float]] = []
         ladder_history: list[dict[str, Any]] = []
         current_episode_setup: dict[str, Any] | None = None
+        live_vs_opponent: dict[str, list[int]] = {}
         self_play_instrumented = args.self_play and not args.race_league
+        staged_state: StagedSelfPlayState | None = None
+        if args.staged_selfplay and self_play_instrumented:
+            staged_state = StagedSelfPlayState(outcomes=deque(maxlen=args.staged_window))
         classic_eval_every = resolve_classic_eval_every(args) if self_play_instrumented else 0
         matchups_path = Path("runs") / f"{args.model_id}-matchups.jsonl"
         if self_play_instrumented:
@@ -2212,7 +2385,12 @@ def train(args: argparse.Namespace) -> None:
                 anchors=anchors,
                 checkpoint_pool=checkpoint_pool,
                 total_slots=total_slots,
+                pfsp_weights=build_pfsp_weights(checkpoint_pool, live_vs_opponent)
+                if is_battle and args.self_play and args.pfsp
+                else None,
                 rng=opponent_sample_rng,
+                staged_state=staged_state,
+                step=step,
             )
             kwargs: dict[str, Any] = {
                 "map_id": common.sample_map(args),
@@ -2407,6 +2585,7 @@ def train(args: argparse.Namespace) -> None:
                         "[bold]Battle curriculum[/bold]: "
                         f"{args.battle_opponent_curriculum_parsed.summary()}"
                     )
+                panel_lines.append(f"[bold]PFSP[/bold]: {'on' if args.pfsp else 'off'}")
             elif args.self_play and not is_battle:
                 if args.race_league:
                     panel_lines.append(f"[bold]Race self-play[/bold]: league ({args.league_opponents} slots)")
@@ -2484,12 +2663,28 @@ def train(args: argparse.Namespace) -> None:
                         step=step,
                         checkpoint_every=args.checkpoint_every,
                     )
+                    live_label = live_checkpoint_label(step, args.checkpoint_every)
                     append_matchup_record(
                         matchups_path,
                         step=step,
                         map_id=env.map_id,
                         ranking=labels,
                     )
+                    update_live_vs_opponent(
+                        live_vs_opponent,
+                        labels,
+                        live_label,
+                    )
+                    if staged_state is not None and is_classic_only_setup(current_episode_setup):
+                        staged_state.record_classic_outcome(
+                            live_ranked_first_in_matchup(labels, live_label)
+                        )
+                        if staged_state.try_trigger(step, args.staged_trigger_winrate):
+                            winrate = staged_state.classic_winrate() or 0.0
+                            console.print(
+                                "[bold green]Staged curriculum: classic mastered "
+                                f"@ step {step} (winrate {winrate:.2f}) — starting self-play ramp[/bold green]"
+                            )
                 if episode_count % args.log_every_episodes == 0:
                     episode_payload = {
                         "event": "episode",
@@ -2722,6 +2917,21 @@ def train(args: argparse.Namespace) -> None:
                     console=console,
                 )
                 common.save_elo_store(elo_path, elo_store)
+                if is_battle and args.self_play and args.pfsp:
+                    log_pfsp_weights(
+                        console,
+                        checkpoint_pool,
+                        live_vs_opponent,
+                        build_pfsp_weights(checkpoint_pool, live_vs_opponent),
+                        step=step,
+                    )
+                if staged_state is not None:
+                    log_staged_selfplay_progress(
+                        console,
+                        staged_state,
+                        step=step,
+                        ramp_steps=args.staged_ramp_steps,
+                    )
                 if self_play_instrumented:
                     ladder_entry = run_checkpoint_ladder(
                         eval_env,
@@ -3202,6 +3412,41 @@ def parse_args() -> argparse.Namespace:
         "0 = never train against anchors; they remain Elo eval opponents only.",
     )
     parser.add_argument(
+        "--pfsp",
+        dest="pfsp",
+        action="store_true",
+        help="Prioritized fictitious self-play opponent weighting in battle self-play (default on).",
+    )
+    parser.add_argument(
+        "--no-pfsp",
+        dest="pfsp",
+        action="store_false",
+        help="Disable PFSP checkpoint-pool weighting in battle self-play.",
+    )
+    parser.add_argument(
+        "--staged-selfplay",
+        action="store_true",
+        help="Classic-only warmup then linear self-play ramp after rolling winrate threshold.",
+    )
+    parser.add_argument(
+        "--staged-trigger-winrate",
+        type=float,
+        default=0.7,
+        help="Mean classic-only winrate over --staged-window episodes to start self-play ramp.",
+    )
+    parser.add_argument(
+        "--staged-window",
+        type=int,
+        default=30,
+        help="Rolling episode window for classic-only winrate before self-play ramp.",
+    )
+    parser.add_argument(
+        "--staged-ramp-steps",
+        type=int,
+        default=200_000,
+        help="Training steps over which model opponent fraction ramps from 0.25 to 1.0.",
+    )
+    parser.add_argument(
         "--battle-opponent-curriculum",
         default=common.BATTLE_OPPONENT_CURRICULUM_DEFAULT,
         help="Comma-separated phase schedule <fraction>:<count> for battle self-play opponent counts.",
@@ -3214,7 +3459,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-auto-install-browser", dest="auto_install_browser", action="store_false")
     parser.add_argument("--install-browser-only", action="store_true")
-    parser.set_defaults(auto_install_browser=True, orthogonal_init=True)
+    parser.set_defaults(auto_install_browser=True, orthogonal_init=True, pfsp=True)
     return parser.parse_args()
 
 
