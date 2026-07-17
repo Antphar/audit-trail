@@ -677,7 +677,8 @@ class _KartEnvConfigMixin(_RlObsStackMixin):
         self.no_hazards = no_hazards
         self.frame_skip = max(1, int(frame_skip))
         self.opponent_models = opponent_models or []
-        self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self._default_classic_opponent_slots = max(0, int(classic_opponent_slots))
+        self.classic_opponent_slots = self._default_classic_opponent_slots
         self.race_position_reward = bool(race_position_reward)
         self.opponent_count: int | None = None
         self.last_reset_info: dict[str, Any] = {}
@@ -760,6 +761,8 @@ class TurboKartEnv(_KartEnvConfigMixin):
             self.opponent_models = opponent_models
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        else:
+            self.classic_opponent_slots = self._default_classic_opponent_slots
         if race_position_reward is not None:
             self.race_position_reward = bool(race_position_reward)
         # Per-call, not sticky: a 1v1 rating duel must not leak its opponent count
@@ -843,6 +846,9 @@ class TurboKartEnv(_KartEnvConfigMixin):
             """() => rankAll().map(k => ({
                 name: k.name,
                 charId: k.charId,
+                slot: Number.isFinite(Number(k._rlSlotIdx)) && Number(k._rlSlotIdx) >= 0
+                  ? Number(k._rlSlotIdx)
+                  : null,
                 finished: !!k.finished,
                 eliminated: !!k.eliminated,
                 progress: progressValue(k),
@@ -928,6 +934,8 @@ class NodeSimEnv(_KartEnvConfigMixin):
             self.opponent_models = opponent_models
         if classic_opponent_slots is not None:
             self.classic_opponent_slots = max(0, int(classic_opponent_slots))
+        else:
+            self.classic_opponent_slots = self._default_classic_opponent_slots
         if race_position_reward is not None:
             self.race_position_reward = bool(race_position_reward)
         self.opponent_count = max(0, int(opponent_count)) if opponent_count is not None else None
@@ -982,6 +990,15 @@ class NodeSimEnv(_KartEnvConfigMixin):
 
     def get_episode_ranking(self) -> list[dict[str, Any]]:
         return list(self._client.rpc("get_episode_ranking") or [])
+
+
+def episode_seed(base_seed: int, episode_index: int, *, step: int = 0) -> int:
+    """Deterministic per-episode sim seed from base seed, global step, and episode index."""
+    return (
+        (int(base_seed) & 0xFFFFFFFF)
+        ^ ((int(step) * 2654435761) & 0xFFFFFFFF)
+        ^ ((int(episode_index) * 1597334677) & 0xFFFFFFFF)
+    )
 
 
 def make_env(

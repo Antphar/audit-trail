@@ -91,6 +91,7 @@ def evaluate_model_node(root: Path, model_path: str, map_id: str, args: argparse
             "frameSkip": args.frame_skip,
             "trace": bool(args.html_report),
             "traceEvery": args.trace_every,
+            "seed": args.seed,
         },
     )
 
@@ -110,6 +111,7 @@ def evaluate_model(page: Any, base_url: str, model_path: str, map_id: str, args:
         + f"&noItems={1 if args.no_items else 0}"
         + f"&noHazards={1 if args.no_hazards else 0}"
         + f"&frameSkip={args.frame_skip}"
+        + f"&seed={args.seed}"
         + ("&trace=1" if args.html_report else "")
         + f"&traceEvery={args.trace_every}"
     )
@@ -317,6 +319,7 @@ def main() -> None:
     parser.add_argument("--with-hazards", dest="no_hazards", action="store_false")
     parser.add_argument("--html-report", default=None, help="Write an HTML ghost-path visualization report")
     parser.add_argument("--trace-every", type=int, default=20)
+    parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--no-auto-install-browser", dest="auto_install_browser", action="store_false")
     parser.set_defaults(auto_install_browser=True)
     args = parser.parse_args()

@@ -40,6 +40,8 @@ from rich.table import Table
 
 BATTLE_DEFAULT_ANCHORS = "dqn-arena-v5,dqn-arena"
 RACE_DEFAULT_ANCHORS = "dqn-15act-h64-tanh-ortho-300k"
+CHARACTER_IDS = ("anton", "artur", "rissal", "pia", "florian")
+MATCHUP_ELO_K = 16.0
 
 
 @dataclass
@@ -626,6 +628,19 @@ def rollout_seed(base_seed: int, batch_start_step: int) -> int:
     return (int(base_seed) & 0xFFFFFFFF) ^ ((int(batch_start_step) * 2654435761) & 0xFFFFFFFF)
 
 
+def flip_duel_score(score: float) -> float:
+    """Convert a duel score from player-kart perspective to the opponent's perspective."""
+    if score >= 1.0:
+        return 0.0
+    if score <= 0.0:
+        return 1.0
+    return 0.5
+
+
+def live_model_duel_payload(model: DQN, env: Any) -> dict[str, Any]:
+    return build_dqn_payload(model, env.obs_keys, env.actions)
+
+
 def update_model_manifest(manifest_path: Path, model_path: Path, payload: dict[str, Any]) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     if manifest_path.exists():
@@ -877,33 +892,46 @@ def export_training_checkpoint(
     return checkpoint_path
 
 
+RACE_DUEL_PROGRESS_EPS = 1e-4
+
+
 @torch.no_grad()
-def score_battle_duel(
+def _score_battle_duel_episode(
     env: Any,
     model: DQN,
     *,
     map_id: str,
     character: str,
     opponent_payload: dict[str, Any] | None,
+    live_payload: dict[str, Any] | None,
+    live_is_player: bool,
+    seed: int | None = None,
 ) -> float:
-    """Run a 1v1 duel; return 1.0 win, 0.5 draw, 0.0 loss.
-
-    Scoring: elimination is a loss; ``battleWin`` with player atop ``__lastRlRanking``
-    is a win; otherwise ranking order decides (timer/survival), with equal approvals
-    as a draw.
-    """
-    obs = env.reset_with(
-        map_id=map_id,
-        character=character,
-        opponent_models=[opponent_payload] if opponent_payload else [],
-        classic_opponent_slots=0 if opponent_payload else 1,
-        opponent_count=1,
-    )
+    """Run one battle duel; return 1.0 win, 0.5 draw, 0.0 loss from player-kart perspective."""
+    if live_is_player:
+        opponent_models = [opponent_payload] if opponent_payload else []
+        classic_opponent_slots = 0 if opponent_payload else 1
+    else:
+        opponent_models = [live_payload] if live_payload else []
+        classic_opponent_slots = 0 if live_payload else 1
+    reset_kwargs: dict[str, Any] = {
+        "map_id": map_id,
+        "character": character,
+        "opponent_models": opponent_models,
+        "classic_opponent_slots": classic_opponent_slots,
+        "opponent_count": 1,
+    }
+    if seed is not None:
+        reset_kwargs["seed"] = seed
+    obs = env.reset_with(**reset_kwargs)
     done = False
     last_info: dict[str, Any] = {}
     while not done:
-        q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
-        action = int(torch.argmax(q_vals, dim=1).item())
+        if live_is_player or opponent_payload is None:
+            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            action = int(torch.argmax(q_vals, dim=1).item())
+        else:
+            action = env.decide_headless_action(opponent_payload)
         obs, _, done, last_info = env.step(action)
 
     if last_info.get("eliminated"):
@@ -927,36 +955,67 @@ def score_battle_duel(
     return 1.0 if player_idx < opp_idx else 0.0
 
 
-RACE_DUEL_PROGRESS_EPS = 1e-4
-
-
 @torch.no_grad()
-def score_race_duel(
+def score_battle_duel(
     env: Any,
     model: DQN,
     *,
     map_id: str,
     character: str,
     opponent_payload: dict[str, Any] | None,
+    seed: int | None = None,
 ) -> float:
-    """Run a 1v1 race duel; return 1.0 win, 0.5 draw, 0.0 loss.
-
-    Winner is the first kart to finish; if neither finishes within the frame
-    budget, higher ``progressValue`` wins; ties within a tiny epsilon are draws.
-    """
-    obs = env.reset_with(
+    """Run a 1v1 duel; return 1.0 win, 0.5 draw, 0.0 loss from the live model perspective."""
+    return _score_battle_duel_episode(
+        env,
+        model,
         map_id=map_id,
         character=character,
-        opponent_models=[opponent_payload] if opponent_payload else [],
-        classic_opponent_slots=0 if opponent_payload else 1,
-        opponent_count=1,
-        race_position_reward=False,
+        opponent_payload=opponent_payload,
+        live_payload=None,
+        live_is_player=True,
+        seed=seed,
     )
+
+
+@torch.no_grad()
+def _score_race_duel_episode(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+    live_payload: dict[str, Any] | None,
+    live_is_player: bool,
+    seed: int | None = None,
+) -> float:
+    """Run one race duel; return 1.0 win, 0.5 draw, 0.0 loss from player-kart perspective."""
+    if live_is_player:
+        opponent_models = [opponent_payload] if opponent_payload else []
+        classic_opponent_slots = 0 if opponent_payload else 1
+    else:
+        opponent_models = [live_payload] if live_payload else []
+        classic_opponent_slots = 0 if live_payload else 1
+    reset_kwargs: dict[str, Any] = {
+        "map_id": map_id,
+        "character": character,
+        "opponent_models": opponent_models,
+        "classic_opponent_slots": classic_opponent_slots,
+        "opponent_count": 1,
+        "race_position_reward": False,
+    }
+    if seed is not None:
+        reset_kwargs["seed"] = seed
+    obs = env.reset_with(**reset_kwargs)
     done = False
     last_info: dict[str, Any] = {}
     while not done:
-        q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
-        action = int(torch.argmax(q_vals, dim=1).item())
+        if live_is_player or opponent_payload is None:
+            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            action = int(torch.argmax(q_vals, dim=1).item())
+        else:
+            action = env.decide_headless_action(opponent_payload)
         obs, _, done, last_info = env.step(action)
 
     ranking = env.get_last_ranking()
@@ -986,6 +1045,132 @@ def score_race_duel(
     if abs(diff) <= RACE_DUEL_PROGRESS_EPS:
         return 0.5
     return 1.0 if diff > 0 else 0.0
+
+
+@torch.no_grad()
+def score_race_duel(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+    seed: int | None = None,
+) -> float:
+    """Run a 1v1 race duel; return 1.0 win, 0.5 draw, 0.0 loss from the live model perspective."""
+    return _score_race_duel_episode(
+        env,
+        model,
+        map_id=map_id,
+        character=character,
+        opponent_payload=opponent_payload,
+        live_payload=None,
+        live_is_player=True,
+        seed=seed,
+    )
+
+
+@torch.no_grad()
+def score_duel_pair(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+    is_battle: bool,
+    base_seed: int,
+    step: int,
+    duel_index: int,
+) -> list[float]:
+    """Run one live-as-player and one opponent-as-player duel; scores are from live model perspective."""
+    score_episode = _score_battle_duel_episode if is_battle else _score_race_duel_episode
+    live_seed = common.episode_seed(base_seed, duel_index * 2, step=step)
+    live_score = score_episode(
+        env,
+        model,
+        map_id=map_id,
+        character=character,
+        opponent_payload=opponent_payload,
+        live_payload=None,
+        live_is_player=True,
+        seed=live_seed,
+    )
+    if opponent_payload is None:
+        return [live_score]
+    live_payload = live_model_duel_payload(model, env)
+    opp_seed = common.episode_seed(base_seed, duel_index * 2 + 1, step=step)
+    opp_player_score = score_episode(
+        env,
+        model,
+        map_id=map_id,
+        character=character,
+        opponent_payload=opponent_payload,
+        live_payload=live_payload,
+        live_is_player=False,
+        seed=opp_seed,
+    )
+    return [live_score, flip_duel_score(opp_player_score)]
+
+
+@torch.no_grad()
+def collect_balanced_duel_scores(
+    env: Any,
+    model: DQN,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+    is_battle: bool,
+    num_duels: int,
+    base_seed: int,
+    step: int = 0,
+) -> list[float]:
+    """Run num_duels episodes with alternating player roles when a model opponent is available."""
+    scores: list[float] = []
+    pair_index = 0
+    while len(scores) < num_duels:
+        remaining = num_duels - len(scores)
+        if opponent_payload is not None and remaining >= 2:
+            scores.extend(
+                score_duel_pair(
+                    env,
+                    model,
+                    map_id=map_id,
+                    character=character,
+                    opponent_payload=opponent_payload,
+                    is_battle=is_battle,
+                    base_seed=base_seed,
+                    step=step,
+                    duel_index=pair_index,
+                )
+            )
+            pair_index += 1
+        else:
+            seed = common.episode_seed(base_seed, len(scores), step=step)
+            if is_battle:
+                scores.append(
+                    score_battle_duel(
+                        env,
+                        model,
+                        map_id=map_id,
+                        character=character,
+                        opponent_payload=opponent_payload,
+                        seed=seed,
+                    )
+                )
+            else:
+                scores.append(
+                    score_race_duel(
+                        env,
+                        model,
+                        map_id=map_id,
+                        character=character,
+                        opponent_payload=opponent_payload,
+                        seed=seed,
+                    )
+                )
+    return scores[:num_duels]
 
 
 def run_elo_rating_round(
@@ -1023,23 +1208,18 @@ def run_elo_rating_round(
     records: dict[str, str] = {}
     for opp_name, opp_payload in opponents:
         wins = losses = draws = 0
-        for _ in range(args.rating_episodes):
-            if is_battle:
-                score = score_battle_duel(
-                    eval_env,
-                    model,
-                    map_id=duel_map,
-                    character=args.character,
-                    opponent_payload=opp_payload,
-                )
-            else:
-                score = score_race_duel(
-                    eval_env,
-                    model,
-                    map_id=duel_map,
-                    character=args.character,
-                    opponent_payload=opp_payload,
-                )
+        duel_scores = collect_balanced_duel_scores(
+            eval_env,
+            model,
+            map_id=duel_map,
+            character=args.character,
+            opponent_payload=opp_payload,
+            is_battle=is_battle,
+            num_duels=args.rating_episodes,
+            base_seed=args.seed,
+            step=step,
+        )
+        for score in duel_scores:
             if score >= 1.0:
                 wins += 1
             elif score <= 0.0:
@@ -1134,6 +1314,431 @@ def print_elo_ascii_chart(console: Console, history: list[dict[str, Any]], *, wi
     console.print(f"        step {step_lo:,} … {step_hi:,}   final Elo {ratings[-1]:.1f}")
 
 
+def resolve_classic_eval_every(args: argparse.Namespace) -> int:
+    if args.classic_eval_every > 0:
+        return args.classic_eval_every
+    return args.elo_every
+
+
+def live_checkpoint_label(step: int, checkpoint_every: int) -> str:
+    rounded = (step // max(1, checkpoint_every)) * max(1, checkpoint_every)
+    return f"live@{rounded}"
+
+
+def payload_to_ckpt_label(payload: dict[str, Any]) -> str:
+    meta = payload.get("meta") or {}
+    ckpt_step = meta.get("step")
+    if ckpt_step is not None:
+        return f"ckpt-{int(ckpt_step)}"
+    model_id = str(meta.get("id", ""))
+    if "-step-" in model_id:
+        return f"ckpt-{model_id.rsplit('-step-', 1)[-1]}"
+    return "ckpt-unknown"
+
+
+def payload_meta_id(payload: dict[str, Any]) -> str:
+    return str((payload.get("meta") or {}).get("id", ""))
+
+
+def payload_in_checkpoint_pool(
+    payload: dict[str, Any],
+    checkpoint_pool: list[dict[str, Any]],
+) -> str | None:
+    meta_id = payload_meta_id(payload)
+    meta_step = (payload.get("meta") or {}).get("step")
+    for entry in checkpoint_pool:
+        pool_payload = entry.get("payload") or {}
+        pool_meta = pool_payload.get("meta") or {}
+        if meta_id and meta_id == str(pool_meta.get("id", "")):
+            return str(entry["name"])
+        if meta_step is not None and pool_meta.get("step") == meta_step:
+            return str(entry["name"])
+    return None
+
+
+def payload_to_slot_label(
+    payload: dict[str, Any],
+    *,
+    checkpoint_pool: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+) -> str:
+    pool_name = payload_in_checkpoint_pool(payload, checkpoint_pool)
+    if pool_name:
+        return pool_name
+    meta_id = payload_meta_id(payload)
+    for anchor in anchors:
+        anchor_payload = anchor.get("payload") or {}
+        if meta_id and meta_id == payload_meta_id(anchor_payload):
+            return f"anchor:{anchor['name']}"
+    if meta_id:
+        return f"anchor:{meta_id}"
+    return payload_to_ckpt_label(payload)
+
+
+def duel_map_for_eval(args: argparse.Namespace) -> str:
+    return args.arena_map if args.mode == "battle" else args.elo_map
+
+
+@torch.no_grad()
+def score_checkpoint_duel(
+    env: Any,
+    model: DQN,
+    args: argparse.Namespace,
+    *,
+    map_id: str,
+    character: str,
+    opponent_payload: dict[str, Any] | None,
+) -> float:
+    if args.mode == "battle":
+        return score_battle_duel(
+            env,
+            model,
+            map_id=map_id,
+            character=character,
+            opponent_payload=opponent_payload,
+        )
+    return score_race_duel(
+        env,
+        model,
+        map_id=map_id,
+        character=character,
+        opponent_payload=opponent_payload,
+    )
+
+
+def opponent_slot_char_ids(player_char: str, n_opponents: int) -> list[str]:
+    try:
+        player_idx = CHARACTER_IDS.index(player_char)
+    except ValueError:
+        player_idx = 0
+    ai_chars = [char_id for idx, char_id in enumerate(CHARACTER_IDS) if idx != player_idx]
+    return [ai_chars[idx % len(ai_chars)] for idx in range(n_opponents)]
+
+
+def build_episode_opponent_setup(
+    *,
+    player_char: str,
+    opponent_models: list[dict[str, Any]],
+    classic_slots: int,
+    opponent_count: int,
+    step: int,
+    checkpoint_every: int,
+    checkpoint_pool: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    slot_char_ids = opponent_slot_char_ids(player_char, opponent_count)
+    slot_labels: list[str] = []
+    for idx in range(opponent_count):
+        if idx < classic_slots:
+            slot_labels.append("classic")
+        elif opponent_models:
+            model_idx = (idx - classic_slots) % len(opponent_models)
+            slot_labels.append(
+                payload_to_slot_label(
+                    opponent_models[model_idx],
+                    checkpoint_pool=checkpoint_pool,
+                    anchors=anchors,
+                )
+            )
+        else:
+            slot_labels.append("classic")
+    return {
+        "player_char": player_char,
+        "live_label": live_checkpoint_label(step, checkpoint_every),
+        "slot_char_ids": slot_char_ids,
+        "slot_labels": slot_labels,
+        "classic_slots": classic_slots,
+        "opponent_count": opponent_count,
+    }
+
+
+def ranking_to_labels(
+    ranking: list[dict[str, Any]],
+    setup: dict[str, Any],
+    *,
+    step: int,
+    checkpoint_every: int,
+) -> list[str]:
+    player_char = setup["player_char"]
+    slot_char_ids = setup["slot_char_ids"]
+    slot_labels = setup["slot_labels"]
+    live_label = live_checkpoint_label(step, checkpoint_every)
+    used_slots: set[int] = set()
+    labels: list[str] = []
+    for kart in ranking:
+        char_id = kart.get("charId")
+        slot = kart.get("slot")
+        if char_id == player_char:
+            labels.append(live_label)
+            continue
+        if isinstance(slot, int) and 0 <= slot < len(slot_labels):
+            labels.append(slot_labels[slot])
+            continue
+        candidates = [
+            idx for idx, slot_char in enumerate(slot_char_ids) if slot_char == char_id and idx not in used_slots
+        ]
+        if candidates:
+            slot_idx = candidates[0]
+            used_slots.add(slot_idx)
+            labels.append(slot_labels[slot_idx])
+        else:
+            labels.append("unknown")
+    return labels
+
+
+def append_matchup_record(
+    matchups_path: Path,
+    *,
+    step: int,
+    map_id: str,
+    ranking: list[str],
+) -> None:
+    matchups_path.parent.mkdir(parents=True, exist_ok=True)
+    line = {"step": step, "map": map_id, "ranking": ranking}
+    with matchups_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(line) + "\n")
+
+
+def compute_matchup_stats(matchups_path: Path) -> tuple[dict[str, dict[str, float]], dict[str, float]]:
+    if not matchups_path.exists():
+        return {}, {}
+    records: list[dict[str, Any]] = []
+    for raw_line in matchups_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    model_controlled = lambda label: (
+        label.startswith("live@") or label.startswith("ckpt-") or label.startswith("anchor:")
+    )
+    stats: dict[str, dict[str, float]] = {}
+    elo: dict[str, float] = {}
+
+    for record in records:
+        ranking = record.get("ranking") or []
+        if not ranking:
+            continue
+        present = {label for label in ranking if label != "unknown"}
+        for label in present:
+            entry = stats.setdefault(label, {"races": 0, "model_wins": 0})
+            entry["races"] += 1
+            model_ranking = [label for label in ranking if model_controlled(label)]
+            if model_ranking and model_ranking[0] == label:
+                entry["model_wins"] += 1
+
+        for winner_idx, winner in enumerate(ranking):
+            if winner == "unknown":
+                continue
+            elo.setdefault(winner, 1000.0)
+            for loser in ranking[winner_idx + 1 :]:
+                if loser == "unknown":
+                    continue
+                elo.setdefault(loser, 1000.0)
+                new_winner, new_loser = common.elo_update(
+                    elo[winner], elo[loser], 1.0, MATCHUP_ELO_K
+                )
+                elo[winner] = new_winner
+                elo[loser] = new_loser
+
+    for entry in stats.values():
+        races = max(1.0, entry["races"])
+        entry["win_rate"] = entry["model_wins"] / races
+    return stats, elo
+
+
+def print_matchup_ranking_table(console: Console, stats: dict[str, dict[str, float]], elo: dict[str, float]) -> None:
+    if not stats:
+        return
+    table = Table(title="Matchup ranking (multiplayer Elo + win rate)")
+    table.add_column("Label", style="cyan")
+    table.add_column("Elo", justify="right", style="green")
+    table.add_column("Races", justify="right")
+    table.add_column("Win rate", justify="right")
+    rows = sorted(
+        stats.keys(),
+        key=lambda label: (-elo.get(label, 1000.0), -stats[label].get("win_rate", 0.0), label),
+    )
+    for label in rows:
+        entry = stats[label]
+        table.add_row(
+            label,
+            f"{elo.get(label, 1000.0):.1f}",
+            str(int(entry.get("races", 0))),
+            f"{entry.get('win_rate', 0.0):.2f}",
+        )
+    console.print(table)
+
+
+@torch.no_grad()
+def run_classic_baseline_eval(
+    eval_env: Any,
+    model: DQN,
+    args: argparse.Namespace,
+    *,
+    step: int,
+    console: Console,
+) -> dict[str, float]:
+    is_battle = args.mode == "battle"
+    eval_map = duel_map_for_eval(args)
+    opponent_count = (args.battle_opponents or 3) if is_battle else args.race_opponents
+    wins = 0
+    places: list[float] = []
+    for ep_idx in range(args.classic_eval_episodes):
+        reset_kwargs: dict[str, Any] = {
+            "map_id": eval_map,
+            "character": args.character,
+            "opponent_models": [],
+            "classic_opponent_slots": opponent_count,
+            "opponent_count": opponent_count,
+            "seed": common.episode_seed(args.seed, ep_idx, step=step),
+        }
+        if not is_battle:
+            reset_kwargs["race_position_reward"] = False
+        obs = eval_env.reset_with(**reset_kwargs)
+        done = False
+        while not done:
+            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            action = int(torch.argmax(q_vals, dim=1).item())
+            obs, _, done, _ = eval_env.step(action)
+        ranking = eval_env.get_episode_ranking()
+        player_rank = next(
+            (idx + 1 for idx, kart in enumerate(ranking) if kart.get("charId") == args.character),
+            float(len(ranking) + 1),
+        )
+        places.append(float(player_rank))
+        if player_rank == 1:
+            wins += 1
+    episodes = max(1, args.classic_eval_episodes)
+    metrics = {
+        "step": step,
+        "win_rate": wins / episodes,
+        "avg_place": float(np.mean(places)) if places else 0.0,
+    }
+    mode_tag = f" ({args.mode})" if is_battle else ""
+    console.print(
+        f"Classic baseline{mode_tag} @ step {step}: "
+        f"win_rate={metrics['win_rate']:.2f} avg_place={metrics['avg_place']:.1f}"
+    )
+    return metrics
+
+
+def print_classic_baseline_ascii_chart(
+    console: Console,
+    progression: list[dict[str, float]],
+    *,
+    mode: str | None = None,
+    width: int = 64,
+    height: int = 12,
+) -> None:
+    if len(progression) < 2:
+        return
+    points = sorted((int(p["step"]), float(p["win_rate"])) for p in progression)
+    win_rates = [rate for _, rate in points]
+    lo, hi = min(win_rates + [0.0]), max(win_rates + [1.0])
+    if hi - lo < 1e-9:
+        hi = lo + 0.1
+    pad = (hi - lo) * 0.08
+    lo, hi = max(0.0, lo - pad), min(1.0, hi + pad)
+
+    grid = [[" "] * width for _ in range(height)]
+
+    def col(i: int) -> int:
+        return round(i * (width - 1) / max(1, len(points) - 1))
+
+    def row(rate: float) -> int:
+        return (height - 1) - round((rate - lo) / (hi - lo) * (height - 1))
+
+    prev = None
+    for i, (_, rate) in enumerate(points):
+        x, y = col(i), row(rate)
+        if prev is not None:
+            px, py = prev
+            step_dir = 1 if y > py else -1
+            for yy in range(py + step_dir, y, step_dir):
+                grid[yy][px] = "|"
+        grid[y][x] = "●"
+        prev = (x, y)
+
+    mode_note = f" ({mode})" if mode else ""
+    console.print(
+        f"[bold]Classic baseline progression{mode_note}[/bold] (● win rate vs classic-only opponents)"
+    )
+    for y, line in enumerate(grid):
+        label = f"{hi - (hi - lo) * y / (height - 1):5.2f} " if y in (0, height - 1) else "      "
+        console.print(label + "".join(line), highlight=False)
+    step_lo, step_hi = points[0][0], points[-1][0]
+    console.print(f"      step {step_lo:,} … {step_hi:,}   final win_rate {win_rates[-1]:.2f}")
+
+
+@torch.no_grad()
+def run_checkpoint_ladder(
+    eval_env: Any,
+    model: DQN,
+    args: argparse.Namespace,
+    *,
+    step: int,
+    checkpoint_pool: list[dict[str, Any]],
+    console: Console,
+) -> dict[str, Any] | None:
+    if args.ladder_duels <= 0:
+        return None
+    newest_name = f"ckpt-{step}"
+    prev_ckpts = [entry for entry in checkpoint_pool if entry["name"] != newest_name]
+    if not prev_ckpts:
+        return None
+    previous = prev_ckpts[-1]
+    wins = losses = draws = 0
+    duel_map = duel_map_for_eval(args)
+    duel_scores = collect_balanced_duel_scores(
+        eval_env,
+        model,
+        map_id=duel_map,
+        character=args.character,
+        opponent_payload=previous["payload"],
+        is_battle=args.mode == "battle",
+        num_duels=args.ladder_duels,
+        base_seed=args.seed,
+        step=step,
+    )
+    for score in duel_scores:
+        if score >= 1.0:
+            wins += 1
+        elif score <= 0.0:
+            losses += 1
+        else:
+            draws += 1
+    record = f"{wins}-{losses}-{draws}"
+    beats = wins > losses
+    console.print(f"Ladder: {newest_name} vs {previous['name']} -> {record}")
+    return {
+        "newest": newest_name,
+        "previous": previous["name"],
+        "record": record,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "beats_predecessor": beats,
+    }
+
+
+def print_ladder_table(console: Console, ladder_history: list[dict[str, Any]]) -> None:
+    if not ladder_history:
+        return
+    table = Table(title="Checkpoint ladder (newest vs previous)")
+    table.add_column("Matchup", style="cyan")
+    table.add_column("W-L-D", justify="right")
+    table.add_column("Beats predecessor", justify="right", style="green")
+    for entry in ladder_history:
+        matchup = f"{entry['newest']} vs {entry['previous']}"
+        beats = "yes" if entry.get("beats_predecessor") else "no"
+        table.add_row(matchup, entry.get("record", "-"), beats)
+    console.print(table)
+
+
 def check_self_play_applied(
     env: Any, args: argparse.Namespace, console: Console, checked: bool, requested_models: int = -1
 ) -> bool:
@@ -1179,11 +1784,20 @@ def evaluate(
     characters: list[str] | None = None,
     solo: bool,
     opponent_models: list[dict[str, Any]] | None = None,
+    opponent_count: int | None = None,
+    classic_opponent_slots: int | None = None,
+    base_seed: int = 0,
+    eval_step: int = 0,
+    race_position_reward: bool | None = None,
 ) -> dict[str, Any]:
     old_solo = env.solo
     old_opponents = env.opponent_models
     env.solo = solo
     env.opponent_models = opponent_models or []
+    if opponent_count is None:
+        opponent_count = 0 if solo else len(env.opponent_models)
+    if classic_opponent_slots is None:
+        classic_opponent_slots = opponent_count if not solo else 0
     finishes = 0
     rewards = []
     laps = []
@@ -1199,9 +1813,19 @@ def evaluate(
     winner_chars: dict[str, int] = {}
     player_wins = 0
     try:
-        for _ in range(episodes):
+        for ep_idx in range(episodes):
             eval_char = random.choice(characters) if characters else character
-            obs = env.reset_with(map_id=map_id, character=eval_char, opponent_models=env.opponent_models)
+            reset_kwargs: dict[str, Any] = {
+                "map_id": map_id,
+                "character": eval_char,
+                "opponent_models": env.opponent_models,
+                "classic_opponent_slots": classic_opponent_slots,
+                "opponent_count": opponent_count,
+                "seed": common.episode_seed(base_seed, ep_idx, step=eval_step),
+            }
+            if race_position_reward is not None:
+                reset_kwargs["race_position_reward"] = race_position_reward
+            obs = env.reset_with(**reset_kwargs)
             done = False
             total_reward = 0.0
             last_info: dict[str, Any] = {}
@@ -1252,10 +1876,11 @@ def evaluate(
     }
 
 
-def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace) -> dict[str, Any]:
+def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace, *, eval_step: int = 0) -> dict[str, Any]:
     per_track: dict[str, Any] = {}
     eval_maps = parse_csv(args.eval_maps)
     is_battle = getattr(args, "mode", "race") == "battle"
+    opponent_count = (args.battle_opponents or 3) if is_battle else args.race_opponents
     for map_id in eval_maps:
         char = args.character
         eval_chars = parse_csv(args.characters) if args.random_character else None
@@ -1271,6 +1896,10 @@ def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace) -> dict[str,
                     characters=eval_chars,
                     solo=False,
                     opponent_models=[],
+                    opponent_count=opponent_count,
+                    classic_opponent_slots=opponent_count,
+                    base_seed=args.seed,
+                    eval_step=eval_step,
                 ),
             }
         else:
@@ -1284,6 +1913,11 @@ def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace) -> dict[str,
                     characters=eval_chars,
                     solo=True,
                     opponent_models=[],
+                    opponent_count=0,
+                    classic_opponent_slots=0,
+                    base_seed=args.seed,
+                    eval_step=eval_step,
+                    race_position_reward=False,
                 ),
                 "classic": evaluate(
                     env,
@@ -1294,6 +1928,11 @@ def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace) -> dict[str,
                     characters=eval_chars,
                     solo=False,
                     opponent_models=[],
+                    opponent_count=opponent_count,
+                    classic_opponent_slots=opponent_count,
+                    base_seed=args.seed,
+                    eval_step=eval_step,
+                    race_position_reward=False,
                 ),
             }
     primary = "battle" if is_battle else "classic"
@@ -1519,8 +2158,45 @@ def train(args: argparse.Namespace) -> None:
         latest_eval_report: dict[str, Any] | None = None
         latest_eval_metrics: dict[str, Any] | None = None
         latest_attribution: dict[str, float] | None = None
+        classic_baseline_progression: list[dict[str, float]] = []
+        ladder_history: list[dict[str, Any]] = []
+        current_episode_setup: dict[str, Any] | None = None
+        self_play_instrumented = args.self_play and not args.race_league
+        classic_eval_every = resolve_classic_eval_every(args) if self_play_instrumented else 0
+        matchups_path = Path("runs") / f"{args.model_id}-matchups.jsonl"
+        if self_play_instrumented:
+            matchups_path.parent.mkdir(parents=True, exist_ok=True)
+            if matchups_path.exists():
+                matchups_path.unlink()
 
-        def training_reset_kwargs(step: int) -> dict[str, Any]:
+        def default_opponent_count() -> int:
+            if is_battle:
+                return args.battle_opponents or 3
+            return args.race_opponents
+
+        def capture_episode_setup(step: int, reset_kwargs: dict[str, Any]) -> None:
+            nonlocal current_episode_setup
+            if not self_play_instrumented:
+                current_episode_setup = None
+                return
+            opponent_models = reset_kwargs.get("opponent_models") or []
+            classic_slots = int(reset_kwargs.get("classic_opponent_slots") or 0)
+            opponent_count = int(reset_kwargs.get("opponent_count") or default_opponent_count())
+            if opponent_count <= 0:
+                current_episode_setup = None
+                return
+            current_episode_setup = build_episode_opponent_setup(
+                player_char=str(reset_kwargs.get("character") or env.character),
+                opponent_models=opponent_models,
+                classic_slots=classic_slots,
+                opponent_count=opponent_count,
+                step=step,
+                checkpoint_every=args.checkpoint_every,
+                checkpoint_pool=checkpoint_pool,
+                anchors=anchors,
+            )
+
+        def training_reset_kwargs(step: int, episode_index: int) -> dict[str, Any]:
             opp_count = battle_training_opponent_count(args, step, curriculum_rng)
             if opp_count is not None:
                 total_slots = opp_count
@@ -1542,9 +2218,16 @@ def train(args: argparse.Namespace) -> None:
                 "map_id": common.sample_map(args),
                 "character": common.sample_character(args),
                 "opponent_models": opponents,
+                "seed": common.episode_seed(args.seed, episode_index, step=step),
             }
             if classic_slots is not None:
                 kwargs["classic_opponent_slots"] = classic_slots
+            elif opp_count is not None:
+                kwargs["classic_opponent_slots"] = 0
+            elif args.self_play and not is_battle and not args.race_league:
+                kwargs["classic_opponent_slots"] = 0
+            else:
+                kwargs["classic_opponent_slots"] = 0
             if opp_count is not None:
                 kwargs["opponent_count"] = opp_count
                 recent_opponent_counts.append(opp_count)
@@ -1552,8 +2235,9 @@ def train(args: argparse.Namespace) -> None:
                 kwargs["race_position_reward"] = True
             return kwargs
 
-        reset_kwargs = training_reset_kwargs(0)
+        reset_kwargs = training_reset_kwargs(0, 0)
         obs = env.reset_with(**reset_kwargs)
+        capture_episode_setup(0, reset_kwargs)
         self_play_checked = check_self_play_applied(
             env, args, console, self_play_checked, len(reset_kwargs["opponent_models"])
         )
@@ -1788,6 +2472,24 @@ def train(args: argparse.Namespace) -> None:
 
             if done:
                 episode_count += 1
+                if (
+                    self_play_instrumented
+                    and current_episode_setup is not None
+                    and current_episode_setup.get("opponent_count", 0) > 0
+                ):
+                    ranking = env.get_episode_ranking()
+                    labels = ranking_to_labels(
+                        ranking,
+                        current_episode_setup,
+                        step=step,
+                        checkpoint_every=args.checkpoint_every,
+                    )
+                    append_matchup_record(
+                        matchups_path,
+                        step=step,
+                        map_id=env.map_id,
+                        ranking=labels,
+                    )
                 if episode_count % args.log_every_episodes == 0:
                     episode_payload = {
                         "event": "episode",
@@ -1828,8 +2530,9 @@ def train(args: argparse.Namespace) -> None:
                 recent_chars.append(env.character)
                 if args.self_play and not is_battle and args.race_league:
                     league = common.load_league_models(Path(args.league_manifest), args.league_limit, mode=args.mode)
-                ep_reset_kwargs = training_reset_kwargs(step)
+                ep_reset_kwargs = training_reset_kwargs(step, episode_count)
                 obs = env.reset_with(**ep_reset_kwargs)
+                capture_episode_setup(step, ep_reset_kwargs)
                 buffer.start_episode(env.last_base_obs)
                 self_play_checked = check_self_play_applied(
                     env, args, console, self_play_checked, len(ep_reset_kwargs["opponent_models"])
@@ -1932,6 +2635,7 @@ def train(args: argparse.Namespace) -> None:
             run_checkpoint = common.should_run_interval(step, args.checkpoint_every)
             run_eval = common.should_run_interval(step, args.eval_every)
             run_elo = args.self_play and common.should_run_interval(step, args.elo_every)
+            run_classic_eval = self_play_instrumented and common.should_run_interval(step, classic_eval_every)
 
             if run_checkpoint or run_elo:
                 meta_overrides: dict[str, Any] = {}
@@ -1955,7 +2659,7 @@ def train(args: argparse.Namespace) -> None:
 
             if run_eval:
                 eval_event_count += 1
-                eval_report = evaluate_tracks(eval_env, q, args)
+                eval_report = evaluate_tracks(eval_env, q, args, eval_step=step)
                 track_report = eval_report["tracks"].get(args.map) or next(iter(eval_report["tracks"].values()))
                 metrics = track_report[primary_key]
                 latest_eval_report = eval_report
@@ -2018,6 +2722,22 @@ def train(args: argparse.Namespace) -> None:
                     console=console,
                 )
                 common.save_elo_store(elo_path, elo_store)
+                if self_play_instrumented:
+                    ladder_entry = run_checkpoint_ladder(
+                        eval_env,
+                        q,
+                        args,
+                        step=step,
+                        checkpoint_pool=checkpoint_pool,
+                        console=console,
+                    )
+                    if ladder_entry is not None:
+                        ladder_history.append(ladder_entry)
+
+            if run_classic_eval:
+                classic_baseline_progression.append(
+                    run_classic_baseline_eval(eval_env, q, args, step=step, console=console)
+                )
 
         step = 0
         last_policy_sync_step: int | None = None
@@ -2084,8 +2804,9 @@ def train(args: argparse.Namespace) -> None:
                     reuse_cached_policy=True,
                 )
                 if rollout_result.stopped_reason == "alreadyDone":
-                    ep_reset_kwargs = training_reset_kwargs(step)
+                    ep_reset_kwargs = training_reset_kwargs(step, episode_count)
                     obs = env.reset_with(**ep_reset_kwargs)
+                    capture_episode_setup(step, ep_reset_kwargs)
                     buffer.start_episode(env.last_base_obs)
                     self_play_checked = check_self_play_applied(
                         env, args, console, self_play_checked, len(ep_reset_kwargs["opponent_models"])
@@ -2117,7 +2838,7 @@ def train(args: argparse.Namespace) -> None:
             if str(h.get("name", "")).startswith("ckpt-")
         ]
         final_elo = ckpt_history[-1][1] if ckpt_history else 1000.0
-        final_eval_report = evaluate_tracks(eval_env, q, args)
+        final_eval_report = evaluate_tracks(eval_env, q, args, eval_step=args.steps)
         final_track_report = final_eval_report["tracks"].get(args.map) or next(
             iter(final_eval_report["tracks"].values())
         )
@@ -2209,6 +2930,46 @@ def train(args: argparse.Namespace) -> None:
                     console.print(f"[green]Elo chart written:[/green] {elo_png}")
                 except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
                     console.print(f"[yellow]Could not render Elo chart PNG: {exc}[/yellow]")
+            if classic_baseline_progression:
+                progression_text = ", ".join(
+                    f"({p['step']},{p['win_rate']:.2f})" for p in classic_baseline_progression
+                )
+                console.print(f"[green]Classic baseline progression:[/green] {progression_text}")
+                print_classic_baseline_ascii_chart(
+                    console, classic_baseline_progression, mode=args.mode
+                )
+                classic_data_path = Path(f"classic-baseline-{args.model_id}.json")
+                classic_data_path.write_text(
+                    json.dumps({"progression": classic_baseline_progression}, indent=2),
+                    encoding="utf-8",
+                )
+                classic_png = f"classic-baseline-{args.model_id}.png"
+                try:
+                    subprocess.run(
+                        [
+                            "uv",
+                            "run",
+                            "plot_classic_baseline.py",
+                            "--data",
+                            str(classic_data_path),
+                            "--out",
+                            classic_png,
+                        ],
+                        check=True,
+                        capture_output=True,
+                        timeout=300,
+                    )
+                    console.print(f"[green]Classic baseline chart written:[/green] {classic_png}")
+                except (subprocess.SubprocessError, FileNotFoundError, OSError) as exc:
+                    console.print(f"[yellow]Could not render classic baseline chart PNG: {exc}[/yellow]")
+                finally:
+                    with contextlib.suppress(OSError):
+                        classic_data_path.unlink()
+            if ladder_history:
+                print_ladder_table(console, ladder_history)
+            if self_play_instrumented and matchups_path.exists():
+                matchup_stats, matchup_elo = compute_matchup_stats(matchups_path)
+                print_matchup_ranking_table(console, matchup_stats, matchup_elo)
         eval_env.close()
         env.close()
         if eval_page is not None:
@@ -2303,6 +3064,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every", type=int, default=100_000)
     parser.add_argument("--episodes-eval", type=int, default=1)
     parser.add_argument("--elo-every", type=int, default=100_000, help="Interim Elo interval; 0 disables.")
+    parser.add_argument(
+        "--classic-eval-every",
+        type=int,
+        default=0,
+        help="Classic-only baseline eval interval in race self-play; 0 uses --elo-every.",
+    )
+    parser.add_argument(
+        "--classic-eval-episodes",
+        type=int,
+        default=8,
+        help="Episodes per classic baseline eval (greedy policy vs classic-only opponents).",
+    )
+    parser.add_argument(
+        "--ladder-duels",
+        type=int,
+        default=6,
+        help="1v1 duels between newest and previous checkpoint each Elo round; 0 disables.",
+    )
     parser.add_argument(
         "--smoothgrad-every",
         type=int,

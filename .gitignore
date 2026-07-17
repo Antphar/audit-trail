@@ -23,6 +23,8 @@ __pycache__/
 
 # Local DQN training artifacts
 models/checkpoints/
+runs/
 logs/
 *.log
 elo-*.png
+classic-baseline-*.png

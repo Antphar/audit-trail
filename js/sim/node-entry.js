@@ -34,6 +34,7 @@ import {
   runHeadlessDqn,
   runHeadlessSac,
   validateModelPayload,
+  headlessRankingEntry,
 } from "../rl/headless.js";
 import { getHeadlessObservation } from "../rl/observation.js";
 
@@ -105,13 +106,7 @@ try {
 setupExternalRlApi();
 
 export function getRanking() {
-  return globalThis.__lastRlRanking || rankAll().map((k) => ({
-    name: k.name,
-    charId: k.charId,
-    finished: !!k.finished,
-    eliminated: !!k.eliminated,
-    progress: progressValue(k),
-  }));
+  return globalThis.__lastRlRanking || rankAll().map((k) => headlessRankingEntry(k));
 }
 
 export function getOpponentApprovals(playerChar) {
@@ -130,11 +125,7 @@ export function decideHeadlessAction(weights) {
 
 export function getEpisodeRanking() {
   return rankAll().map((k) => ({
-    name: k.name,
-    charId: k.charId,
-    finished: !!k.finished,
-    eliminated: !!k.eliminated,
-    progress: progressValue(k),
+    ...headlessRankingEntry(k),
     lap: k.lap,
     coins: k.coinsCollected || 0,
     itemUses: k.itemUseCount || 0,
@@ -167,8 +158,13 @@ export function runHeadlessModelEval(params = {}) {
 
   const episodes = [];
   const episodeCount = Math.max(1, Number(params.episodes || 1));
+  const baseSeed = Number.isFinite(Number(params.seed)) ? Number(params.seed) >>> 0 : undefined;
   for (let i = 0; i < episodeCount; i++) {
-    episodes.push(runHeadlessEpisode(config, i));
+    const epConfig = { ...config };
+    if (Number.isFinite(Number(baseSeed))) {
+      epConfig.seed = (baseSeed ^ (i * 1597334677)) >>> 0;
+    }
+    episodes.push(runHeadlessEpisode(epConfig, i));
   }
 
   const totalFrames = episodes.reduce((sum, e) => sum + e.frames, 0);

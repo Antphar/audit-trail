@@ -477,7 +477,9 @@ export function makeHeadlessConfig(overrides = {}) {
     classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
     opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
     racePositionReward: !!overrides.racePositionReward,
-    seed: Number.isFinite(Number(overrides.seed)) ? Number(overrides.seed) >>> 0 : undefined,
+    seed: Number.isFinite(Number(overrides.seed ?? URL_PARAMS.get("seed")))
+      ? Number(overrides.seed ?? URL_PARAMS.get("seed")) >>> 0
+      : undefined,
   };
 }
 
@@ -561,6 +563,28 @@ export function configureHeadlessEpisode(config) {
   // Re-init battle lives: the agent kart (and self-play opponents) replaced the karts
   // that rlRuntime.buildRace() originally initialized, leaving their `approvals` undefined.
   if (isBattleMode()) initBattleKartState();
+  if (game.player) game.player._rlSlotIdx = -1;
+  if (game.ais?.length) {
+    game.ais.forEach((ai, idx) => {
+      ai._rlSlotIdx = idx;
+    });
+  }
+}
+
+export function headlessRankingSlot(kart) {
+  const idx = Number(kart?._rlSlotIdx);
+  return Number.isFinite(idx) && idx >= 0 ? idx : null;
+}
+
+export function headlessRankingEntry(kart) {
+  return {
+    name: kart.name,
+    charId: kart.charId,
+    slot: headlessRankingSlot(kart),
+    finished: !!kart.finished,
+    eliminated: !!kart.eliminated,
+    progress: progressValue(kart),
+  };
 }
 
 export function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0) {
@@ -568,6 +592,7 @@ export function summarizeHeadlessEpisode(map, frames, simSeconds, episodeIdx = 0
     place: idx + 1,
     name: kart.name,
     charId: kart.charId,
+    slot: headlessRankingSlot(kart),
     lap: kart.lap,
     nextCheckpoint: kart.nextCheckpoint,
     progress: Math.round(progressValue(kart) * 1000) / 1000,
@@ -669,8 +694,13 @@ export function runHeadlessSimulation() {
   const config = makeHeadlessConfig();
   const startedAt = performance.now();
   const episodes = [];
+  const baseSeed = config.seed;
   for (let i = 0; i < config.episodes; i++) {
-    episodes.push(runHeadlessEpisode(config, i));
+    const epConfig = { ...config };
+    if (Number.isFinite(Number(baseSeed))) {
+      epConfig.seed = (Number(baseSeed) ^ (i * 1597334677)) >>> 0;
+    }
+    episodes.push(runHeadlessEpisode(epConfig, i));
   }
   const elapsedMs = performance.now() - startedAt;
   const last = episodes[episodes.length - 1];
@@ -767,13 +797,7 @@ export function headlessRlStepOnce(action) {
     reward += racePositionTerminalBonus(game.player);
   }
   const obs = getHeadlessObservation(game.player);
-  window.__lastRlRanking = rankAll().map(k => ({
-    name: k.name,
-    charId: k.charId,
-    finished: !!k.finished,
-    eliminated: !!k.eliminated,
-    progress: progressValue(k),
-  }));
+  window.__lastRlRanking = rankAll().map(k => headlessRankingEntry(k));
   return {
     obs: obs.values,
     reward,

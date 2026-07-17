@@ -21,7 +21,7 @@ from playwright.sync_api import sync_playwright
 from rich.console import Console
 from rich.table import Table
 
-from rl_common import make_env, parse_csv
+from rl_common import episode_seed, make_env, parse_csv
 
 
 def load_manifest(path: Path) -> list[dict[str, Any]]:
@@ -35,6 +35,9 @@ def model_entry(manifest: list[dict[str, Any]], selector: str) -> dict[str, Any]
     for entry in manifest:
         if selector in {entry.get("id"), entry.get("name"), entry.get("path")}:
             return entry
+    # Fall back to a raw model JSON file (e.g. training checkpoints not in the manifest).
+    if Path(selector).exists():
+        return {"id": selector, "name": Path(selector).stem, "path": selector}
     raise ValueError(f"Model not found in manifest: {selector}")
 
 
@@ -54,17 +57,22 @@ def run_episode(
     map_id: str,
     character: str,
     classic_opponents: int,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     env.solo = False
     env.no_items = False
     # Arena has no dragon hazards; race head-to-head also runs hazard-free for comparability.
     env.no_hazards = True
-    env.reset_with(
-        map_id=map_id,
-        character=character,
-        opponent_models=[opponent_payload],
-        classic_opponent_slots=classic_opponents,
-    )
+    reset_kwargs: dict[str, Any] = {
+        "map_id": map_id,
+        "character": character,
+        "opponent_models": [opponent_payload],
+        "classic_opponent_slots": classic_opponents,
+        "opponent_count": 1,
+    }
+    if seed is not None:
+        reset_kwargs["seed"] = seed
+    env.reset_with(**reset_kwargs)
     done = False
     total_reward = 0.0
     info: dict[str, Any] = {}
@@ -208,7 +216,7 @@ def main() -> None:
         env.load()
         rows_a: list[dict[str, Any]] = []
         rows_b: list[dict[str, Any]] = []
-        for _ in range(args.episodes):
+        for ep_idx in range(args.episodes):
             map_id = random.choice(maps)
             char_a = random.choice(characters)
             rows_a.append(
@@ -219,6 +227,7 @@ def main() -> None:
                     map_id=map_id,
                     character=char_a,
                     classic_opponents=args.classic_opponents,
+                    seed=episode_seed(args.seed, ep_idx * 2),
                 )
             )
             char_b = random.choice([c for c in characters if c != char_a] or characters)
@@ -230,6 +239,7 @@ def main() -> None:
                     map_id=map_id,
                     character=char_b,
                     classic_opponents=args.classic_opponents,
+                    seed=episode_seed(args.seed, ep_idx * 2 + 1),
                 )
             )
         env.close()
@@ -252,9 +262,14 @@ def main() -> None:
     table.add_column("Drifts", justify="right")
     table.add_column("Approvals", justify="right")
     table.add_column("Survival", justify="right")
-    add_summary_row(table, entry_a.get("name") or args.model_a, summarize(rows_a))
-    add_summary_row(table, entry_b.get("name") or args.model_b, summarize(rows_b))
+    summary_a = summarize(rows_a)
+    summary_b = summarize(rows_b)
+    add_summary_row(table, entry_a.get("name") or args.model_a, summary_a)
+    add_summary_row(table, entry_b.get("name") or args.model_b, summary_b)
     console.print(table)
+    # Plain-text summaries survive narrow/piped terminals where the rich table truncates.
+    for label, summary in ((args.model_a, summary_a), (args.model_b, summary_b)):
+        print(f"SUMMARY {label}: " + " ".join(f"{k}={v:.3f}" for k, v in summary.items()))
 
 
 if __name__ == "__main__":
