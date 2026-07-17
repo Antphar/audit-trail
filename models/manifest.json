@@ -1,6 +1,19 @@
 {
   "models": [
     {
+      "id": "dqn-race-v4",
+      "name": "DQN Racer v4 (600k)",
+      "path": "models/dqn-race-v4.json",
+      "map": "core_mainframe",
+      "character": "florian",
+      "format": "turbo-kart-headless-dqn-v2",
+      "observationKeyCount": 216,
+      "actionCount": 15,
+      "frameStack": 4,
+      "frameSkip": 6,
+      "updatedAt": 1784272084
+    },
+    {
       "id": "dqn-arena-v5",
       "name": "DQN Arena v5 (step 375k)",
       "path": "models/dqn-arena-v5.json",
