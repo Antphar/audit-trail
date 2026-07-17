@@ -4,6 +4,7 @@ import { MAPS, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
 import { clamp, dist, len2d, rand, pointSegProjection, pick, lerp, angleDiff } from "../core/math.js";
 import { simRandom } from "../core/rng.js";
 import { simNow } from "../core/clock.js";
+import { HEADLESS_MODE } from "../core/env.js";
 import { bus } from "../core/events.js";
 import {
   STATE, game, isBattleMode, isGrandPrixActive, getActiveKarts,
@@ -482,7 +483,11 @@ export function completeClosedCircuitLap(kart) {
       let allHumanFinished = true;
       if (game.player && !game.player.finished) allHumanFinished = false;
       if (game.multiplayer && game.player2 && !game.player2.finished) allHumanFinished = false;
-      if (allHumanFinished) setTimeout(() => runtime.finishRace(), 1500);
+      // Wall-clock timer is presentation-only. In headless training the sim runs
+      // much faster than real time, so a stale timer from a finished episode would
+      // fire mid-way through the NEXT episode and force-finish it, corrupting
+      // training data and eval results. Headless loops call finishRaceSim themselves.
+      if (allHumanFinished && !HEADLESS_MODE) setTimeout(() => runtime.finishRace(), 1500);
     }
   }
 }
