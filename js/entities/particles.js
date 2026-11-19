@@ -7,7 +7,7 @@ export function kartVisualZOffset(kart) {
   return (kart?.z || 0) * 0.65;
 }
 
-export const PARTICLE_2D_MAX = 360;
+export const PARTICLE_2D_MAX = 450;
 export const PARTICLE_2D_IMPORTANT_RESERVE = 80;
 export const SKID_2D_MAX = 400;
 export const COMPASS_FX_3D_OVERLAY_MAX = 24;
@@ -52,7 +52,9 @@ export function admitParticle(list, p) {
       }
     }
     if (evictIndex < 0) return false;
-    list.splice(evictIndex, 1);
+    const last = list.length - 1;
+    if (evictIndex !== last) list[evictIndex] = list[last];
+    list.pop();
   }
   list.push(p);
   return true;
@@ -187,7 +189,12 @@ export class ParticleSystem {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const p = this.list[i];
       p.life -= dt;
-      if (p.life <= 0) { this.list.splice(i, 1); continue; }
+      if (p.life <= 0) {
+        const last = this.list.length - 1;
+        if (i !== last) this.list[i] = this.list[last];
+        this.list.pop();
+        continue;
+      }
       if (p.type !== "approvalToken") {
         p.x += p.vx * dt;
         p.y += p.vy * dt;
@@ -289,6 +296,49 @@ export class ParticleSystem {
         compassFx: !!opts.compassFx,
       });
       if (!admitted && !opts.compassFx) break;
+    }
+  }
+  burstDriftTier(x, y, tier = 1) {
+    const palette = tier >= 3
+      ? ["#ff4dff", "#ff99ff", "#ffffff"]
+      : tier === 2
+        ? ["#fd9927", "#ffd86b", "#ffffff"]
+        : ["#57f2ff", "#a4f8ff", "#ffffff"];
+    const count = tier >= 3 ? 24 : tier === 2 ? 17 : 12;
+    const spdMin = tier >= 3 ? 2.6 : tier === 2 ? 2.0 : 1.5;
+    const spdMax = tier >= 3 ? 6.8 : tier === 2 ? 5.6 : 4.4;
+
+    admitParticle(this.list, {
+      type: "ring",
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      life: 14 + tier * 3,
+      maxLife: 14 + tier * 3,
+      size: 6,
+      startSize: 16 + tier * 6,
+      color: palette[0],
+      drag: 1,
+    });
+
+    for (let i = 0; i < count; i++) {
+      const ang = (i / count) * TAU + rand(-0.22, 0.22);
+      const sp = rand(spdMin, spdMax);
+      const col = i % 4 === 0 ? palette[2] : i % 2 === 0 ? palette[0] : palette[1];
+      const admitted = admitParticle(this.list, {
+        type: i % 3 === 0 ? "line" : "spark",
+        x,
+        y,
+        vx: Math.cos(ang) * sp,
+        vy: Math.sin(ang) * sp,
+        life: rand(12, 22 + tier * 4),
+        maxLife: 22 + tier * 4,
+        size: i % 3 === 0 ? 2.2 : rand(2.2, 4.4 + tier * 0.4),
+        color: col,
+        drag: 0.91,
+      });
+      if (!admitted) break;
     }
   }
 }

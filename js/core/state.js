@@ -123,6 +123,10 @@ export function getActiveKarts() {
   ].filter(Boolean);
 }
 
+export function getActiveHumanKarts() {
+  return getActiveKarts().filter(k => k && k.isPlayer && !k.finished && !k.eliminated);
+}
+
 export function getKartById(id) {
   if (!id) return null;
   if (game.p2pMode && game.p2pKartById && game.p2pKartById[id]) {

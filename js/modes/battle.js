@@ -3,7 +3,7 @@ import { HEADLESS_MODE } from "../core/env.js";
 import { bus } from "../core/events.js";
 import { rand, dist, angleDiff, pick } from "../core/math.js";
 import {
-  STATE, game, isBattleMode, getActiveKarts, canResolveBattleCombat,
+  STATE, game, isBattleMode, getActiveKarts, getActiveHumanKarts, canResolveBattleCombat,
 } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
 import { runtime } from "../entities/runtime.js";
@@ -78,7 +78,8 @@ export function setTransferAttribution(victim, attacker) {
 export function qualifiesApprovalRam(att, def, dirx, diry) {
   if (!att || !def) return false;
   if (isKartAirborne(att) || isKartAirborne(def)) return false;
-  const attSpeed = att.speed();
+  const weightBonus = Math.max(0, ((att.weight || 22) - 22) * 0.06);
+  const attSpeed = att.speed() + weightBonus;
   const defSpeed = def.speed();
   if (attSpeed < APPROVAL_RAM_MIN_SPEED) return false;
   if (attSpeed - defSpeed < APPROVAL_RAM_SPEED_MARGIN) return false;
@@ -95,7 +96,8 @@ export function applyDeauthShockwave(sourceKart) {
   let affected = 0;
 
   for (const kart of getActiveKarts()) {
-    if (!kart || kart === sourceKart || kart.finished) continue;
+    if (!kart || kart === sourceKart || kart.finished || kart.eliminated) continue;
+    if ((kart.invuln || 0) > 0 || (kart.recoverGraceTimer || 0) > 0) continue;
     const d = dist(sourceKart.x, sourceKart.y, kart.x, kart.y);
     if (d > radius) continue;
 
@@ -115,6 +117,7 @@ export function applyDeauthShockwave(sourceKart) {
       kart.spinAngle = 0;
       kart.lastAttacker = sourceKart;
       kart.lastAttackerAt = game.raceTime;
+      registerBattleHit(sourceKart);
       triggerQuote(kart, "crash");
       if (kart.isPlayer) triggerHitFlash("DE-AUTH!", "#ff3366", 80, kart);
       if (game.particles) {
@@ -217,24 +220,28 @@ export function startMergeRequestPull(kart) {
     return;
   }
 
+  if (target.shieldTimer > 0) {
+    target.shieldTimer = 0;
+    if (game.particles) {
+      game.particles.burst(target.x, target.y, "#78dcff", 18, { type: "spark", spdMin: 1.5, spdMax: 4 });
+      game.particles.add({
+        type: "text", text: "BLOCKED", x: target.x, y: target.y - 28,
+        vx: 0, vy: -0.9, life: 40, maxLife: 40, size: 15, color: "#78dcff", drag: 0.98,
+      });
+    }
+    return;
+  }
+
   kart.mergePullTarget = target;
   kart.mergePullTargetId = runtime.getKartId(target);
   kart.mergePullTimer = 110;
   target.mergePullVictimTimer = 110;
-  if (isBattleMode() && !kart.mergeBattleStole) {
+  if (isBattleMode() && !kart.mergeBattleStole && (target.invuln || 0) <= 0 && (target.recoverGraceTimer || 0) <= 0) {
     kart.mergeBattleStole = true;
-    if (target.shieldTimer > 0) {
-      if (game.particles) {
-        game.particles.add({
-          type: "text", text: "BLOCKED", x: target.x, y: target.y - 28,
-          vx: 0, vy: -0.9, life: 40, maxLife: 40, size: 15, color: "#78dcff", drag: 0.98,
-        });
-      }
-    } else {
-      target.lastAttacker = kart;
-      target.lastAttackerAt = game.raceTime;
-      popApproval(target, { explicitTransferSource: kart });
-    }
+    target.lastAttacker = kart;
+    target.lastAttackerAt = game.raceTime;
+    registerBattleHit(kart);
+    popApproval(target, { explicitTransferSource: kart });
   }
   triggerQuote(kart, "boost");
   if (target.isPlayer) {
@@ -453,8 +460,20 @@ export function activateUltimate(kart) {
     let slamHits = 0;
     for (const k of getActiveKarts()) {
       if (k === kart || k.finished || k.eliminated) continue;
+      if ((k.invuln || 0) > 0 || (k.recoverGraceTimer || 0) > 0) continue;
       const d = dist(kart.x, kart.y, k.x, k.y);
       if (d > radius) continue;
+      if (k.shieldTimer > 0) {
+        k.shieldTimer = 0;
+        if (game.particles) {
+          game.particles.burst(k.x, k.y, "#78dcff", 18, { type: "spark", spdMin: 1.5, spdMax: 4 });
+          game.particles.add({
+            type: "text", text: "BLOCKED", x: k.x, y: k.y - 28,
+            vx: 0, vy: -0.9, life: 40, maxLife: 40, size: 15, color: "#78dcff", drag: 0.98,
+          });
+        }
+        continue;
+      }
       const falloff = 1 - d / radius;
       const nx = (k.x - kart.x) / Math.max(0.001, d);
       const ny = (k.y - kart.y) / Math.max(0.001, d);
@@ -464,6 +483,7 @@ export function activateUltimate(kart) {
       k.spinAngle = 0;
       k.lastAttacker = kart;
       k.lastAttackerAt = game.raceTime;
+      registerBattleHit(kart);
       triggerQuote(k, "crash");
       if (k.isPlayer) triggerHitFlash("THINKPAD SLAM!", "#9d4dff", 85, k);
       slamHits++;
@@ -515,15 +535,6 @@ export function activateUltimate(kart) {
     triggerQuote(kart, "boost");
   }
 }
-
-function getActiveHumanKarts() {
-  return getActiveKarts().filter(k => k && k.isPlayer && !k.finished && !k.eliminated);
-}
-
-
-
-
-
 
 export function eliminateKart(kart, label = "ELIMINATED!", x = null, y = null, color = "#ff3366", killer = null) {
   if (!kart || kart.eliminated) return;

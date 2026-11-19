@@ -41,6 +41,7 @@ export const Sound = {
   // Player 1 oscillators & gains
   engineOscP1: null,
   engineGainP1: null,
+  engineFilterP1: null,
   driftOscP1: null,
   driftGainP1: null,
   rumbleOscP1: null,
@@ -49,10 +50,80 @@ export const Sound = {
   // Player 2 oscillators & gains
   engineOscP2: null,
   engineGainP2: null,
+  engineFilterP2: null,
   driftOscP2: null,
   driftGainP2: null,
   rumbleOscP2: null,
   rumbleGainP2: null,
+
+  _noiseBuffer: null,
+  _delayBus: null,
+  _switchTrackTimer: null,
+
+  _getNoiseBuffer() {
+    if (!this.ctx) return null;
+    if (!this._noiseBuffer || this._noiseBuffer.sampleRate !== this.ctx.sampleRate) {
+      const len = Math.max(1, Math.floor(this.ctx.sampleRate * 1.5));
+      const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      this._noiseBuffer = buffer;
+    }
+    return this._noiseBuffer;
+  },
+
+  ensureDelayBus() {
+    if (!this.ctx || !this.musicGain) return null;
+    if (this._delayBus && this._delayBus.musicGain === this.musicGain) {
+      return this._delayBus;
+    }
+    if (this._delayBus) {
+      try {
+        this._delayBus.delay.disconnect();
+        this._delayBus.feedback.disconnect();
+        this._delayBus.wetFilter.disconnect();
+        this._delayBus.wetGain.disconnect();
+        this._delayBus.panner?.disconnect();
+      } catch (e) {}
+      this._delayBus = null;
+    }
+    const stepDur = 60.0 / (this.tempo || 124) / 4.0;
+    const delay = this.ctx.createDelay(2.0);
+    delay.delayTime.value = clamp(stepDur * 3, 0.05, 1.5);
+    const wetFilter = this.ctx.createBiquadFilter();
+    wetFilter.type = "lowpass";
+    wetFilter.frequency.value = 3400;
+    const feedback = this.ctx.createGain();
+    feedback.gain.value = 0.25;
+    const wetGain = this.ctx.createGain();
+    wetGain.gain.value = 0.65;
+
+    delay.connect(wetFilter);
+    wetFilter.connect(feedback);
+    feedback.connect(delay);
+
+    let panner = null;
+    if (this.ctx.createStereoPanner) {
+      panner = this.ctx.createStereoPanner();
+      panner.pan.value = 0.25;
+      wetFilter.connect(panner);
+      panner.connect(wetGain);
+    } else {
+      wetFilter.connect(wetGain);
+    }
+    wetGain.connect(this.musicGain);
+
+    this._delayBus = {
+      musicGain: this.musicGain,
+      input: delay,
+      delay,
+      feedback,
+      wetFilter,
+      wetGain,
+      panner,
+    };
+    return this._delayBus;
+  },
 
   ensure() {
     if (this.ctx) return;
@@ -130,6 +201,14 @@ export const Sound = {
     if (this.musicGain) {
       this.musicGain.gain.value = this.musicBaseGain * this.musicVolume;
     }
+    if (this.ctx && this.titleThemeNodes && this.titleThemeNodes.length) {
+      const now = this.ctx.currentTime;
+      for (const node of this.titleThemeNodes) {
+        try {
+          node.gain.setTargetAtTime(0.15 * this.musicVolume, now, 0.03);
+        } catch (e) {}
+      }
+    }
     if (opts.persist !== false) env().saveSettings({ musicVolume: this.musicVolume });
   },
   setSfxVolume(v, opts = {}) {
@@ -166,18 +245,20 @@ export const Sound = {
 
   noise(dur = 0.18, vol = 0.18, hpFreq = 600, pan = 0) {
     if (!this.ctx || this.muted) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const t = this.ctx.currentTime;
-    const len = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-    const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+    const safeDur = clamp(dur, 0.01, 1.45);
+    const maxOffset = Math.max(0, 1.5 - safeDur - 0.02);
+    const offset = Math.random() * maxOffset;
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const filter = this.ctx.createBiquadFilter();
     filter.type = "highpass";
     filter.frequency.value = hpFreq;
     const g = this.ctx.createGain();
-    g.gain.value = vol;
+    g.gain.setValueAtTime(Math.max(0.0001, vol), t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + safeDur);
 
     if (this.ctx.createStereoPanner && pan !== 0) {
       const panner = this.ctx.createStereoPanner();
@@ -191,7 +272,7 @@ export const Sound = {
       filter.connect(g);
       g.connect(this.sfxGain);
     }
-    src.start(t);
+    src.start(t, offset, safeDur);
   },
 
   _spatialParams(x, y, vol) {
@@ -617,15 +698,43 @@ export const Sound = {
     this.noise(0.06, 0.08, 300);
   },
 
+  playDriftTier(tier) {
+    if (!this.ctx || this.muted) return;
+    const t = this.ctx.currentTime;
+    const scheduleChime = (freq, startAt, dur, type = "triangle", vol = 0.15) => {
+      const osc = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, startAt);
+      g.gain.setValueAtTime(0.0001, startAt);
+      g.gain.linearRampToValueAtTime(vol, startAt + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, startAt + dur);
+      osc.connect(g);
+      g.connect(this.sfxGain);
+      osc.start(startAt);
+      osc.stop(startAt + dur + 0.02);
+    };
+    if (tier === 1) {
+      scheduleChime(659.25, t, 0.14, "triangle", 0.14); // E5
+    } else if (tier === 2) {
+      scheduleChime(830.61, t, 0.16, "triangle", 0.16); // G#5
+    } else if (tier >= 3) {
+      scheduleChime(987.77, t, 0.18, "triangle", 0.16); // B5
+      scheduleChime(1318.51, t + 0.045, 0.22, "sine", 0.15); // E6 sparkle
+    }
+  },
+
   // Dual Synthesizer Engines
   startEngine(playerIdx) {
     if (!this.ctx || this.muted) return;
+    const existing = playerIdx === 1 ? this.engineOscP1 : this.engineOscP2;
+    if (existing) return;
     try {
       const t = this.ctx.currentTime;
       const osc = this.ctx.createOscillator();
       const g = this.ctx.createGain();
 
-      osc.type = type;
+      osc.type = "sawtooth";
       osc.frequency.setValueAtTime(65, t); // low rumble
       g.gain.setValueAtTime(0.001, t);
 
@@ -652,9 +761,11 @@ export const Sound = {
       if (playerIdx === 1) {
         this.engineOscP1 = osc;
         this.engineGainP1 = g;
+        this.engineFilterP1 = filter;
       } else {
         this.engineOscP2 = osc;
         this.engineGainP2 = g;
+        this.engineFilterP2 = filter;
       }
     } catch (e) {
       console.warn("Failed to start engine " + playerIdx, e);
@@ -663,34 +774,52 @@ export const Sound = {
 
   updateEngine(playerIdx, speed, maxSpeed, isBoosting) {
     if (!this.ctx || this.muted) return;
-    const osc = playerIdx === 1 ? this.engineOscP1 : this.engineOscP2;
-    const gain = playerIdx === 1 ? this.engineGainP1 : this.engineGainP2;
+    let osc = playerIdx === 1 ? this.engineOscP1 : this.engineOscP2;
+    let gain = playerIdx === 1 ? this.engineGainP1 : this.engineGainP2;
+    let filter = playerIdx === 1 ? this.engineFilterP1 : this.engineFilterP2;
 
+    if (!osc || !gain) {
+      this.startEngine(playerIdx);
+      osc = playerIdx === 1 ? this.engineOscP1 : this.engineOscP2;
+      gain = playerIdx === 1 ? this.engineGainP1 : this.engineGainP2;
+      filter = playerIdx === 1 ? this.engineFilterP1 : this.engineFilterP2;
+    }
     if (!osc || !gain) return;
     try {
       const t = this.ctx.currentTime;
-      const frac = clamp(speed / maxSpeed, 0, 1.5);
-      const targetFreq = 50 + frac * 115 + (isBoosting ? 40 : 0);
+      const ratio = clamp(speed / Math.max(0.1, maxSpeed || 1), 0, 1.5);
+      const targetFreq = 50 + ratio * 115 + (isBoosting ? 40 : 0);
       osc.frequency.setTargetAtTime(targetFreq, t, 0.06);
 
-      const targetGain = 0.035 + frac * 0.07 + (isBoosting ? 0.03 : 0);
+      if (filter) {
+        const targetCutoff = 140 + ratio * 420 + (isBoosting ? 180 : 0);
+        filter.frequency.setTargetAtTime(targetCutoff, t, 0.06);
+      }
+
+      const targetGain = 0.035 + ratio * 0.07 + (isBoosting ? 0.03 : 0);
       gain.gain.setTargetAtTime(targetGain, t, 0.06);
     } catch (e) {}
   },
 
   stopEngine(playerIdx) {
     const osc = playerIdx === 1 ? this.engineOscP1 : this.engineOscP2;
+    const filter = playerIdx === 1 ? this.engineFilterP1 : this.engineFilterP2;
+    const gain = playerIdx === 1 ? this.engineGainP1 : this.engineGainP2;
     if (osc) {
       try {
         osc.stop();
         osc.disconnect();
       } catch (e) {}
+      try { filter?.disconnect(); } catch (e) {}
+      try { gain?.disconnect(); } catch (e) {}
       if (playerIdx === 1) {
         this.engineOscP1 = null;
         this.engineGainP1 = null;
+        this.engineFilterP1 = null;
       } else {
         this.engineOscP2 = null;
         this.engineGainP2 = null;
+        this.engineFilterP2 = null;
       }
     }
   },
@@ -752,7 +881,7 @@ export const Sound = {
       } else {
         const t = this.ctx.currentTime;
         const freq = 820 + Math.sin(t * 55) * 80;
-        osc.frequency.setValueAtTime(freq, t);
+        osc.frequency.setTargetAtTime(freq, t, 0.02);
         const vol = clamp((speed - 1.5) * 0.025, 0, 0.07);
         gain.gain.setTargetAtTime(vol, t, 0.05);
       }
@@ -834,7 +963,7 @@ export const Sound = {
       } else {
         const t = this.ctx.currentTime;
         const freq = 38 + Math.sin(t * 85) * 12;
-        osc.frequency.setValueAtTime(freq, t);
+        osc.frequency.setTargetAtTime(freq, t, 0.02);
         const vol = clamp((speed - 1.5) * 0.045, 0, 0.13);
         gain.gain.setTargetAtTime(vol, t, 0.05);
       }
@@ -1036,21 +1165,43 @@ export const Sound = {
   stopMusic(fade = false) {
     this.isPlayingMusic = false;
     this.stopVinylCrackle();
+    if (this._switchTrackTimer) {
+      clearTimeout(this._switchTrackTimer);
+      this._switchTrackTimer = null;
+    }
     if (this.musicInterval) {
       clearTimeout(this.musicInterval);
       this.musicInterval = null;
     }
+    const oldDelayBus = this._delayBus;
+    this._delayBus = null;
+    const cleanupDelayBus = () => {
+      if (!oldDelayBus) return;
+      try {
+        oldDelayBus.delay.disconnect();
+        oldDelayBus.feedback.disconnect();
+        oldDelayBus.wetFilter.disconnect();
+        oldDelayBus.wetGain.disconnect();
+        oldDelayBus.panner?.disconnect();
+      } catch (e) {}
+    };
     if (this.musicGain) {
       const oldGain = this.musicGain;
       if (fade && this.ctx) {
         const now = this.ctx.currentTime;
         oldGain.gain.setValueAtTime(Math.max(0.0001, oldGain.gain.value), now);
         oldGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
-        setTimeout(() => { try { oldGain.disconnect(); } catch (e) {} }, 200);
+        setTimeout(() => {
+          cleanupDelayBus();
+          try { oldGain.disconnect(); } catch (e) {}
+        }, 200);
       } else {
+        cleanupDelayBus();
         try { oldGain.disconnect(); } catch (e) {}
       }
       this.musicGain = null;
+    } else {
+      cleanupDelayBus();
     }
   },
 
@@ -1064,7 +1215,11 @@ export const Sound = {
     if (env().isPlayerOnFinalLap()) {
       this.tempo = t.tempo + TUNING.FINAL_LAP_TEMPO_BOOST;
     }
-    setTimeout(() => { this.startMusic(); }, 60);
+    if (this._switchTrackTimer) clearTimeout(this._switchTrackTimer);
+    this._switchTrackTimer = setTimeout(() => {
+      this._switchTrackTimer = null;
+      this.startMusic();
+    }, 60);
   },
 
   scheduleStep(step, time) {
@@ -1235,14 +1390,11 @@ export const Sound = {
     // Transition riser at end of loop
     if (bar === 7 && stepInBar >= 12) {
       const progress = (stepInBar - 12) / 4.0;
-      if (this.ctx && this.musicGain) {
-        const dur = stepDur * (4 - (stepInBar - 12));
-        const bufLen = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-        const buf = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
-        const d = buf.getChannelData(0);
-        for (let i = 0; i < bufLen; i++) d[i] = (Math.random() * 2 - 1) * (i / bufLen);
+      const noiseBuf = this._getNoiseBuffer();
+      if (this.ctx && !this.muted && this.musicGain && noiseBuf) {
+        const dur = clamp(stepDur * (4 - (stepInBar - 12)), 0.02, 1.45);
         const src = this.ctx.createBufferSource();
-        src.buffer = buf;
+        src.buffer = noiseBuf;
         const hp = this.ctx.createBiquadFilter();
         hp.type = "highpass";
         hp.frequency.setValueAtTime(800 + progress * 4000, time);
@@ -1255,7 +1407,7 @@ export const Sound = {
         src.connect(hp);
         hp.connect(g);
         g.connect(this.musicGain);
-        src.start(time);
+        src.start(time, 0, dur);
       }
     }
   },
@@ -1478,7 +1630,7 @@ export const Sound = {
   },
 
   playBassNote(freq, time, dur, step) {
-    if (!this.ctx || !freq) return;
+    if (!this.ctx || this.muted || !this.musicGain || !freq) return;
     const bar = Math.floor(step / 16);
     const stepInBar = step % 16;
     const track = this.trackIdx || 0;
@@ -1685,7 +1837,7 @@ export const Sound = {
   },
 
   playJunoPad(freqs, time, dur) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
     const filter = this.ctx.createBiquadFilter();
     filter.type = "lowpass";
     filter.Q.setValueAtTime(1.2, time);
@@ -1697,8 +1849,10 @@ export const Sound = {
     gain.gain.linearRampToValueAtTime(0.038, time + dur * 0.12);
     gain.gain.setValueAtTime(0.032, time + dur * 0.6);
     gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
+    let firstOsc = null;
     freqs.forEach((freq, idx) => {
       const osc = this.ctx.createOscillator();
+      if (!firstOsc) firstOsc = osc;
       osc.type = "sawtooth";
       osc.frequency.setValueAtTime(freq, time);
       osc.detune.setValueAtTime((idx - 1) * 7 + rand(-3, 3), time);
@@ -1713,20 +1867,22 @@ export const Sound = {
       osc2.start(time);
       osc2.stop(time + dur + 0.05);
     });
-    const chorus = this.ctx.createDelay(0.03);
-    chorus.delayTime.setValueAtTime(0.012, time);
-    const chorusLfo = this.ctx.createOscillator();
-    const chorusDepth = this.ctx.createGain();
-    chorusLfo.frequency.value = 0.8;
-    chorusDepth.gain.value = 0.003;
-    chorusLfo.connect(chorusDepth);
-    chorusDepth.connect(chorus.delayTime);
-    chorusLfo.start(time);
-    chorusLfo.stop(time + dur + 0.05);
-    filter.connect(chorus);
-    chorus.connect(gain);
     filter.connect(gain);
     gain.connect(this.musicGain);
+
+    const delayBus = this.ensureDelayBus();
+    let sendGain = null;
+    if (delayBus) {
+      sendGain = this.ctx.createGain();
+      sendGain.gain.setValueAtTime(0.28, time);
+      gain.connect(sendGain);
+      sendGain.connect(delayBus.input);
+    }
+    if (firstOsc) {
+      firstOsc.onended = () => {
+        try { filter.disconnect(); gain.disconnect(); sendGain?.disconnect(); } catch (e) {}
+      };
+    }
   },
 
   playRhodesPad(freqs, time, dur) {
@@ -1881,7 +2037,7 @@ export const Sound = {
   },
 
   playMelodyNote(freq, time, dur) {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
     const track = this.trackIdx || 0;
     const isModern = track === 3;
     const isDowntempo = track === 4;
@@ -1962,32 +2118,30 @@ export const Sound = {
     }
 
     filter.connect(gain);
+    gain.connect(this.musicGain);
 
     const stepDur = 60.0 / this.tempo / 4.0;
-    const delay = this.ctx.createDelay(2.0);
-    delay.delayTime.setValueAtTime(isDowntempo ? stepDur * 6 : stepDur * 3, time);
-
-    const feedbackGain = isDowntempo ? 0.40 : isModern ? 0.30 : 0.22;
-    const delayGain = this.ctx.createGain();
-    delayGain.gain.setValueAtTime(feedbackGain, time);
-    delayGain.gain.exponentialRampToValueAtTime(0.0001, time + dur * (isDowntempo ? 4.0 : 2.5));
-
-    delay.connect(delayGain);
-    delayGain.connect(delay);
-
-    gain.connect(this.musicGain);
-    gain.connect(delay);
-
-    if (this.ctx.createStereoPanner) {
-      const delayPanner = this.ctx.createStereoPanner();
-      delayPanner.pan.setValueAtTime(isDowntempo ? -0.5 : isModern ? -0.35 : 0.4, time);
-      delayGain.connect(delayPanner);
-      delayPanner.connect(this.musicGain);
-    } else {
-      delayGain.connect(this.musicGain);
+    const delayBus = this.ensureDelayBus();
+    let sendGain = null;
+    if (delayBus) {
+      delayBus.delay.delayTime.setTargetAtTime(clamp(isDowntempo ? stepDur * 6 : stepDur * 3, 0.05, 1.5), time, 0.04);
+      delayBus.feedback.gain.setTargetAtTime(isDowntempo ? 0.40 : isModern ? 0.30 : 0.22, time, 0.04);
+      sendGain = this.ctx.createGain();
+      sendGain.gain.setValueAtTime(isDowntempo ? 0.45 : isModern ? 0.34 : 0.24, time);
+      gain.connect(sendGain);
+      sendGain.connect(delayBus.input);
     }
 
     const stopTime = time + dur + 0.02;
+    osc.onended = () => {
+      try {
+        vibrato.disconnect();
+        vibratoGain.disconnect();
+        filter.disconnect();
+        gain.disconnect();
+        sendGain?.disconnect();
+      } catch (e) {}
+    };
     osc.start(time);
     osc.stop(stopTime);
     vibrato.stop(stopTime);
@@ -2051,16 +2205,12 @@ export const Sound = {
   },
 
   playRetroHiHat(time, open = false) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const track = this.trackIdx || 0;
     const dur = open ? 0.09 : (track === 3 ? 0.045 : 0.035);
-    const bufferSize = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      const env = open ? Math.pow(1 - i / bufferSize, 1.5) : (1 - i / bufferSize);
-      data[i] = (Math.random() * 2 - 1) * env;
-    }
+    const offset = Math.random() * Math.max(0, 1.5 - dur - 0.02);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -2079,21 +2229,17 @@ export const Sound = {
     filter.connect(gain);
     gain.connect(this.musicGain);
 
-    src.start(time);
+    src.start(time, offset, dur);
   },
 
   playRetroSnare(time, volScale = 1.0) {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const track = this.trackIdx || 0;
     const isModern = track === 3;
     const dur = isModern ? 0.14 : 0.08;
-    const bufferSize = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      const env = isModern ? Math.pow(1 - i / bufferSize, 1.8) : Math.pow(1 - i / bufferSize, 2);
-      data[i] = (Math.random() * 2 - 1) * env;
-    }
+    const offset = Math.random() * Math.max(0, 1.5 - dur - 0.02);
 
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -2105,7 +2251,7 @@ export const Sound = {
 
     const gain = this.ctx.createGain();
     const baseVol = isModern ? 0.09 : 0.05;
-    gain.gain.setValueAtTime(baseVol * volScale, time);
+    gain.gain.setValueAtTime(Math.max(0.001, baseVol * volScale), time);
     gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
 
     src.connect(filter);
@@ -2127,46 +2273,40 @@ export const Sound = {
     }
 
     gain.connect(this.musicGain);
-    src.start(time);
+    src.start(time, offset, dur);
   },
 
   playClap(time, volScale = 1.0) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const layers = 3;
     for (let l = 0; l < layers; l++) {
-      const offset = l * 0.012;
+      const timeOffset = l * 0.012;
       const dur = 0.065;
-      const bufferSize = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2.5);
-      }
+      const bufOffset = Math.random() * Math.max(0, 1.5 - dur - 0.02);
       const src = this.ctx.createBufferSource();
       src.buffer = buffer;
       const filter = this.ctx.createBiquadFilter();
       filter.type = "bandpass";
-      filter.frequency.setValueAtTime(1400 + l * 400, time + offset);
-      filter.Q.setValueAtTime(2.0, time + offset);
+      filter.frequency.setValueAtTime(1400 + l * 400, time + timeOffset);
+      filter.Q.setValueAtTime(2.0, time + timeOffset);
       const gain = this.ctx.createGain();
-      gain.gain.setValueAtTime(0.06 * volScale, time + offset);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + offset + dur);
+      gain.gain.setValueAtTime(0.06 * volScale, time + timeOffset);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + timeOffset + dur);
       src.connect(filter);
       filter.connect(gain);
       gain.connect(this.musicGain);
-      src.start(time + offset);
+      src.start(time + timeOffset, bufOffset, dur);
     }
   },
 
   playCrashCymbal(time) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const dur = 0.45;
-    const bufferSize = Math.max(1, Math.floor(this.ctx.sampleRate * dur));
-    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 1.8);
-    }
+    const offset = Math.random() * Math.max(0, 1.5 - dur - 0.02);
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const hp = this.ctx.createBiquadFilter();
@@ -2179,21 +2319,17 @@ export const Sound = {
     src.connect(hp);
     hp.connect(gain);
     gain.connect(this.musicGain);
-    src.start(time);
+    src.start(time, offset, dur);
   },
 
   // Dragon fire breath sound
   dragonBreath() {
     if (!this.ctx || this.muted) return;
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const t = this.ctx.currentTime;
     const dur = 0.5;
-    const len = Math.floor(this.ctx.sampleRate * dur);
-    const buffer = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env = 1 - i / len;
-      data[i] = (Math.random() * 2 - 1) * env * (0.3 + 0.7 * (i / len));
-    }
+    const offset = Math.random() * Math.max(0, 1.5 - dur - 0.02);
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
     const filter = this.ctx.createBiquadFilter();
@@ -2202,19 +2338,19 @@ export const Sound = {
     filter.frequency.exponentialRampToValueAtTime(120, t + dur);
     filter.Q.value = 2;
     const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0, t);
+    gain.gain.setValueAtTime(0.0001, t);
     gain.gain.linearRampToValueAtTime(0.25, t + 0.05);
     gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
 
     src.connect(filter);
     filter.connect(gain);
     gain.connect(this.sfxGain);
-    src.start(t);
+    src.start(t, offset, dur);
   },
 
   // Japanese Taiko drum
   playTaiko(time, intensity = 0) {
-    if (!this.ctx || this.muted) return;
+    if (!this.ctx || this.muted || !this.musicGain) return;
     const osc = this.ctx.createOscillator();
     const g = this.ctx.createGain();
     osc.type = "sine";
@@ -2229,13 +2365,11 @@ export const Sound = {
     osc.stop(time + 0.4);
 
     // Noise crack
+    const buffer = this._getNoiseBuffer();
+    if (!buffer) return;
     const ndur = 0.08;
-    const nlen = Math.max(1, Math.floor(this.ctx.sampleRate * ndur));
-    const nbuf = this.ctx.createBuffer(1, nlen, this.ctx.sampleRate);
-    const ndata = nbuf.getChannelData(0);
-    for (let i = 0; i < nlen; i++) ndata[i] = (Math.random() * 2 - 1) * (1 - i / nlen);
     const nsrc = this.ctx.createBufferSource();
-    nsrc.buffer = nbuf;
+    nsrc.buffer = buffer;
     const nfilter = this.ctx.createBiquadFilter();
     nfilter.type = "lowpass";
     nfilter.frequency.value = 400 + intensity * 200;
@@ -2245,7 +2379,7 @@ export const Sound = {
     nsrc.connect(nfilter);
     nfilter.connect(ngain);
     ngain.connect(this.musicGain);
-    nsrc.start(time);
+    nsrc.start(time, 0, ndur);
   },
 
   // Japanese Koto / Shamisen pluck
@@ -2450,7 +2584,7 @@ export const Sound = {
     this._titleLoopCount++;
 
     const outGain = ctx.createGain();
-    outGain.gain.value = 0.15; // Lowered overall volume
+    outGain.gain.value = 0.15 * this.musicVolume; // Controlled by Music slider
     outGain.connect(this.master);
     this.titleThemeNodes.push(outGain);
     setTimeout(() => {

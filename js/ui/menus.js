@@ -2,6 +2,7 @@ import { screens } from "./screens.js";
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
 import { clamp } from "../core/math.js";
+import { resetAllInputs } from "../core/input.js";
 import { MAPS, GRAND_PRIX_ID } from "../config/maps.js";
 import { getMapRecord } from "../core/settings.js";
 import {
@@ -47,6 +48,167 @@ const PROMPTLY_TIPS = [
   "Fast Track through the field — comebacks are always in scope.",
 ];
 let promptlyTipIdx = 0;
+let settingsReturnTo = "title";
+let toastSeq = 0;
+const SUPPORTS_POPOVER = typeof HTMLElement !== "undefined" && Object.hasOwn(HTMLElement.prototype, "popover");
+
+function announceToastMessage(text) {
+  if (!text || typeof document === "undefined") return;
+  if (typeof document.ariaNotify === "function") {
+    try {
+      document.ariaNotify(text);
+      return;
+    } catch (e) {}
+  }
+  const announcer = document.getElementById("sr-announcer");
+  if (!announcer) return;
+  announcer.textContent = "";
+  requestAnimationFrame(() => {
+    announcer.textContent = text;
+  });
+}
+
+function layoutOpenPopoverToasts(region) {
+  if (!SUPPORTS_POPOVER || !region) return;
+  let offset = 18;
+  const children = region.querySelectorAll(".game-toast");
+  for (const el of children) {
+    if (el.matches(":popover-open")) {
+      el.style.setProperty("--toast-top", `${offset}px`);
+      offset += el.offsetHeight + 10;
+    }
+  }
+}
+
+export function showGameToast(message, variant = "info", opts = {}) {
+  if (typeof document === "undefined") return null;
+  const region = document.getElementById("toast-region");
+  if (!region) return null;
+
+  const text = String(message ?? "");
+  const safeVariant = ["info", "success", "warn", "error"].includes(variant) ? variant : "info";
+  const priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  const toast = document.createElement("div");
+  const toastId = `game-toast-${++toastSeq}`;
+  toast.id = toastId;
+  toast.className = `game-toast game-toast--${safeVariant}`;
+  toast.setAttribute("role", safeVariant === "error" ? "alert" : "status");
+  if (SUPPORTS_POPOVER) {
+    toast.setAttribute("popover", "manual");
+  }
+
+  const msgSpan = document.createElement("span");
+  msgSpan.className = "game-toast-msg";
+  msgSpan.textContent = text;
+
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "game-toast-close";
+  closeBtn.setAttribute("aria-label", "Dismiss notification");
+  closeBtn.textContent = "×";
+  if (SUPPORTS_POPOVER) {
+    closeBtn.setAttribute("popovertarget", toastId);
+    closeBtn.setAttribute("popovertargetaction", "hide");
+  }
+
+  toast.append(msgSpan, closeBtn);
+  region.appendChild(toast);
+
+  let dismissed = false;
+  let autoTimer = null;
+  const duration = opts.duration ?? 4500;
+  const shouldAutoDismiss = safeVariant !== "error" && Number.isFinite(duration) && duration > 0;
+
+  const finalizeRemoval = (restoreFocus) => {
+    if (dismissed) return;
+    dismissed = true;
+    if (autoTimer) {
+      clearTimeout(autoTimer);
+      autoTimer = null;
+    }
+    const hadFocus = toast.contains(document.activeElement);
+    if (restoreFocus && hadFocus) {
+      const remaining = Array.from(region.querySelectorAll(".game-toast")).filter((el) => el !== toast);
+      const idx = Array.from(region.querySelectorAll(".game-toast")).indexOf(toast);
+      const nextToast = remaining[idx] || remaining[idx - 1] || remaining[0];
+      const nextBtn = nextToast?.querySelector(".game-toast-close");
+      if (nextBtn instanceof HTMLElement) {
+        nextBtn.focus();
+      } else if (priorFocus && priorFocus.isConnected && typeof priorFocus.focus === "function") {
+        priorFocus.focus();
+      }
+    }
+    if (SUPPORTS_POPOVER) {
+      try {
+        if (toast.matches(":popover-open")) toast.hidePopover();
+      } catch (e) {}
+    } else {
+      toast.classList.remove("toast-open");
+    }
+    toast.remove();
+    layoutOpenPopoverToasts(region);
+  };
+
+  const scheduleAutoDismiss = () => {
+    if (!shouldAutoDismiss || dismissed) return;
+    if (autoTimer) clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => {
+      autoTimer = null;
+      if (dismissed) return;
+      if (toast.contains(document.activeElement)) return;
+      finalizeRemoval(false);
+    }, duration);
+  };
+
+  toast.addEventListener("focusin", () => {
+    if (autoTimer) {
+      clearTimeout(autoTimer);
+      autoTimer = null;
+    }
+  });
+  toast.addEventListener("focusout", () => {
+    requestAnimationFrame(() => {
+      if (!dismissed && !toast.contains(document.activeElement)) {
+        scheduleAutoDismiss();
+      }
+    });
+  });
+
+  if (SUPPORTS_POPOVER) {
+    toast.addEventListener("toggle", (e) => {
+      if (e.newState === "closed" && !dismissed) {
+        finalizeRemoval(true);
+      }
+    });
+  }
+
+  closeBtn.addEventListener("click", (e) => {
+    if (!SUPPORTS_POPOVER) {
+      e.preventDefault();
+      finalizeRemoval(true);
+    }
+  });
+
+  if (SUPPORTS_POPOVER) {
+    try {
+      toast.showPopover();
+      layoutOpenPopoverToasts(region);
+    } catch (e) {
+      toast.classList.add("toast-open");
+    }
+  } else {
+    requestAnimationFrame(() => toast.classList.add("toast-open"));
+  }
+
+  announceToastMessage(text);
+  scheduleAutoDismiss();
+  return toast;
+}
+
+if (typeof window !== "undefined") {
+  window.showGameToast = showGameToast;
+}
 
 function getTotalLaps() { return uiRuntime.getTotalLaps ? uiRuntime.getTotalLaps() : 3; }
 
@@ -337,7 +499,7 @@ export function showFinishScreen() {
       }
     }
   } else {
-    if (nextTrackBtn) nextTrackBtn.style.display = isBattleMode() ? "none" : "";
+    if (nextTrackBtn) nextTrackBtn.style.display = (isBattleMode() || game.p2pMode) ? "none" : "";
     if (restartBtn) {
       restartBtn.style.display = isP2pGuest ? "none" : "";
       if (game.p2pMode && !tournActive) {
@@ -349,6 +511,7 @@ export function showFinishScreen() {
     if (waitHint) waitHint.style.display = isP2pGuest ? "block" : "none";
   }
 
+  resetAllInputs();
   screens.show("finish");
 }
 
@@ -357,6 +520,18 @@ export function hideAll() {
 }
 
 export function showMainMenu() {
+  if (game._finishTimeoutId) {
+    clearTimeout(game._finishTimeoutId);
+    game._finishTimeoutId = null;
+  }
+  if (game._mpStartTimeoutId) {
+    clearTimeout(game._mpStartTimeoutId);
+    game._mpStartTimeoutId = null;
+  }
+  game.finishScheduled = false;
+  game._pauseFromState = null;
+  game._pausedAt = 0;
+  settingsReturnTo = "title";
   Sound.stopAllEngines();
   Sound.stopAllDriftSqueals();
   Sound.stopAllRumbles();
@@ -366,6 +541,7 @@ export function showMainMenu() {
   game.state = STATE.TITLE;
   game.p1Locked = false;
   game.p2Locked = false;
+  resetAllInputs();
   hideAll();
   screens.show("title");
   if (Sound.ctx) Sound.playVocoderTitle();
@@ -413,15 +589,31 @@ export function previewSelectedMapMusic(map) {
   if (!Sound.isPlayingMusic) Sound.startMusic();
 }
 
-export function showSettingsScreen() {
-  Sound.stopTitleTheme(false);
+export function showSettingsScreen({ returnTo = "title" } = {}) {
+  settingsReturnTo = returnTo === "pause" ? "pause" : "title";
+  if (settingsReturnTo !== "pause") Sound.stopTitleTheme(false);
   hideAll();
   renderAudioSettings();
   uiRuntime.renderRaceSetupSettings();
   renderTimeOfDaySettings();
   if (view2dBtn) view2dBtn.classList.toggle("active", game.viewMode !== "3d");
   if (view3dBtn) view3dBtn.classList.toggle("active", game.viewMode === "3d");
+  if (settingsBackBtn) {
+    settingsBackBtn.textContent = settingsReturnTo === "pause" ? "Back to Pause" : "Back to Menu";
+  }
   screens.show("settings");
+}
+
+export function returnFromSettings() {
+  if (settingsReturnTo === "pause" && game.state === STATE.PAUSED) {
+    settingsReturnTo = "title";
+    screens.hide("settings");
+    screens.show("pause");
+    uiRuntime.updatePauseScreenUi?.();
+    return;
+  }
+  settingsReturnTo = "title";
+  showMainMenu();
 }
 
 export function renderTimeOfDaySettings() {
@@ -454,8 +646,8 @@ export function showPromptlyTip() {
 }
 
 export function initMenusUi(deps = {}) {
-  if (settingsBtn) settingsBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); showSettingsScreen(); });
-  if (settingsBackBtn) settingsBackBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); showMainMenu(); });
+  if (settingsBtn) settingsBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); showSettingsScreen({ returnTo: "title" }); });
+  if (settingsBackBtn) settingsBackBtn.addEventListener("click", () => { Sound.ensure(); Sound.resume(); returnFromSettings(); });
   if (musicVolumeInput) {
     musicVolumeInput.addEventListener("input", () => {
       Sound.ensure(); Sound.resume();

@@ -37,6 +37,9 @@ import {
   keysP1,
   keysP2,
   keysGlobal,
+  setActionCode,
+  resetAllInputs,
+  pollGamepads,
   consumePressedGlobal,
   consumePressedP1,
   consumePressedP2,
@@ -213,8 +216,8 @@ import {
   getLocalP2pPlayer,
 } from "./ui/lobby.js";
 import {
-  showFinishScreen, hideAll, showMainMenu, showSettingsScreen,
-  setMusicTrack, previewSelectedMapMusic, setTimeOfDay, initMenusUi,
+  showFinishScreen, hideAll, showMainMenu, showSettingsScreen, returnFromSettings,
+  setMusicTrack, previewSelectedMapMusic, setTimeOfDay, initMenusUi, showGameToast,
 } from "./ui/menus.js";
 import { TrainedAIKart, DqnAIKart } from "./rl/headless.js";
 
@@ -242,6 +245,10 @@ const start2pBtn = document.getElementById("start-2p-btn");
 const startBattleBtn = document.getElementById("start-battle-btn");
 const driveBtn = document.getElementById("drive-btn");
 const selectBackBtn = document.getElementById("select-back-btn");
+const pauseResumeBtn = document.getElementById("pause-resume-btn");
+const pauseRestartBtn = document.getElementById("pause-restart-btn");
+const pauseSettingsBtn = document.getElementById("pause-settings-btn");
+const pauseMenuBtn = document.getElementById("pause-menu-btn");
 const restartBtn = document.getElementById("restart-btn");
 const nextTrackBtn = document.getElementById("next-track-btn");
 const finishMenuBtn = document.getElementById("finish-menu-btn");
@@ -275,6 +282,8 @@ const TRAINED_AI_ENABLED = true;
 let selectedAiModelId = DEFAULT_AI_MODEL_ID;
 let selectedAiModelWeights = null;
 let selectedAiOpponentModels = {};
+let selectedAiOpponentWeights = {};
+let isStartingRace = false;
 
 const savedSettings = loadGameSettings();
 applySavedSettingsBoot(savedSettings);
@@ -506,141 +515,68 @@ resizeCanvas();
    ============================================================ */
 
 window.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const target = e.target;
+  const tag = target && target.tagName ? target.tagName : "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
   const code = e.code;
   const key = e.key;
+  const isGameplayActive = game.state === STATE.COUNTDOWN || game.state === STATE.RACING;
+  const interactiveFocus = !!(target && typeof target.closest === "function" && target.closest("button, a, [role='button']"));
 
-  // Prevent default scroll behavior for navigation keys
-  if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", " "].includes(key) || ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code)) {
+  // Prevent default scroll behavior for navigation keys only during active gameplay
+  if (isGameplayActive && (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", " "].includes(key) || ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code))) {
     e.preventDefault();
   }
 
-  // Global triggers
-  if (key === "p" || key === "P") {
-    keysGlobal.pause = true;
-    keysGlobal.pausePressed = true;
-  }
-  if (key === "r" || key === "R") {
-    keysGlobal.restart = true;
-    keysGlobal.restartPressed = true;
-  }
-  if (key === "m" || key === "M") {
-    keysGlobal.mute = true;
-    keysGlobal.mutePressed = true;
-  }
-  if (key === "n" || key === "N" || code === "KeyN") {
-    if (Sound.isPlayingMusic) {
-      const nextIdx = ((Sound.trackIdx || 0) + 1) % Sound.tracks.length;
-      Sound.switchTrack(nextIdx);
-      Sound.showTrackToast();
+  // Global triggers (ignore repeat for one-shot toggles)
+  if (!e.repeat) {
+    if (key === "p" || key === "P" || code === "KeyP") {
+      setActionCode("global", "pause", code, true);
     }
-  }
-  if (key === "Enter") {
-    keysGlobal.enter = true;
-    keysGlobal.enterPressed = true;
-  }
-  if (key === "Escape" || code === "Escape") {
-    keysGlobal.back = true;
-    keysGlobal.backPressed = true;
+    if (key === "r" || key === "R" || code === "KeyR") {
+      setActionCode("global", "restart", code, true);
+    }
+    if (key === "m" || key === "M" || code === "KeyM") {
+      setActionCode("global", "mute", code, true);
+    }
+    if (key === "n" || key === "N" || code === "KeyN") {
+      if (Sound.isPlayingMusic) {
+        const nextIdx = ((Sound.trackIdx || 0) + 1) % Sound.tracks.length;
+        Sound.switchTrack(nextIdx);
+        Sound.showTrackToast();
+      }
+    }
+    if ((key === "Enter" || code === "Enter") && !interactiveFocus) {
+      setActionCode("global", "enter", code, true);
+    }
+    if (key === "Escape" || code === "Escape") {
+      setActionCode("global", "back", code, true);
+    }
   }
 
   // Player 1 mappings (WASD + Space + LeftShift)
-  if (code === "KeyW") keysP1.up = true;
-  if (code === "KeyS") keysP1.down = true;
-  if (code === "KeyA") {
-    if (!keysP1.left) keysP1.leftPressed = true;
-    keysP1.left = true;
-  }
-  if (code === "KeyD") {
-    if (!keysP1.right) keysP1.rightPressed = true;
-    keysP1.right = true;
-  }
-  if (code === "Space") {
-    if (!keysP1.drift) keysP1.driftPressed = true;
-    keysP1.drift = true;
-  }
-  if (code === "ShiftLeft") {
-    if (!keysP1.item) keysP1.itemPressed = true;
-    keysP1.item = true;
-  }
-  if (code === "KeyQ") {
-    if (!keysP1.ult) keysP1.ultPressed = true;
-    keysP1.ult = true;
-  }
-  if (code === "KeyE") {
-    if (!keysP1.honk) keysP1.honkPressed = true;
-    keysP1.honk = true;
-  }
+  if (code === "KeyW") setActionCode("p1", "up", code, true);
+  if (code === "KeyS") setActionCode("p1", "down", code, true);
+  if (code === "KeyA") setActionCode("p1", "left", code, true);
+  if (code === "KeyD") setActionCode("p1", "right", code, true);
+  if (code === "Space" && !interactiveFocus) setActionCode("p1", "drift", code, true);
+  if (code === "ShiftLeft") setActionCode("p1", "item", code, true);
+  if (code === "KeyQ") setActionCode("p1", "ult", code, true);
+  if (code === "KeyE") setActionCode("p1", "honk", code, true);
 
   // Player 2 mappings — only in local split-screen (not P2P online)
   const isSplitScreen = game.multiplayer && !game.p2pMode;
-  if (code === "ArrowUp") {
-    if (isSplitScreen) {
-      keysP2.up = true;
-    } else {
-      keysP1.up = true;
-    }
-  }
-  if (code === "ArrowDown") {
-    if (isSplitScreen) {
-      keysP2.down = true;
-    } else {
-      keysP1.down = true;
-    }
-  }
-  if (code === "ArrowLeft") {
-    if (isSplitScreen) {
-      if (!keysP2.left) keysP2.leftPressed = true;
-      keysP2.left = true;
-    } else {
-      if (!keysP1.left) keysP1.leftPressed = true;
-      keysP1.left = true;
-    }
-  }
-  if (code === "ArrowRight") {
-    if (isSplitScreen) {
-      if (!keysP2.right) keysP2.rightPressed = true;
-      keysP2.right = true;
-    } else {
-      if (!keysP1.right) keysP1.rightPressed = true;
-      keysP1.right = true;
-    }
-  }
-  if (code === "ShiftRight") {
-    if (isSplitScreen) {
-      if (!keysP2.drift) keysP2.driftPressed = true;
-      keysP2.drift = true;
-    } else {
-      if (!keysP1.drift) keysP1.driftPressed = true;
-      keysP1.drift = true;
-    }
-  }
-  if (code === "Slash" || code === "Period" || key === "/" || key === ".") {
-    if (isSplitScreen) {
-      if (!keysP2.item) keysP2.itemPressed = true;
-      keysP2.item = true;
-    } else {
-      if (!keysP1.item) keysP1.itemPressed = true;
-      keysP1.item = true;
-    }
-  }
-  if (code === "KeyL") {
-    if (isSplitScreen) {
-      if (!keysP2.ult) keysP2.ultPressed = true;
-      keysP2.ult = true;
-    } else {
-      if (!keysP1.ult) keysP1.ultPressed = true;
-      keysP1.ult = true;
-    }
-  }
-  if (code === "KeyK") {
-    if (isSplitScreen) {
-      if (!keysP2.honk) keysP2.honkPressed = true;
-      keysP2.honk = true;
-    } else {
-      if (!keysP1.honk) keysP1.honkPressed = true;
-      keysP1.honk = true;
-    }
-  }
+  const arrowTarget = isSplitScreen ? "p2" : "p1";
+  if (code === "ArrowUp") setActionCode(arrowTarget, "up", code, true);
+  if (code === "ArrowDown") setActionCode(arrowTarget, "down", code, true);
+  if (code === "ArrowLeft") setActionCode(arrowTarget, "left", code, true);
+  if (code === "ArrowRight") setActionCode(arrowTarget, "right", code, true);
+  if (code === "ShiftRight") setActionCode(arrowTarget, "drift", code, true);
+  if (code === "Slash" || code === "Period" || key === "/" || key === ".") setActionCode(arrowTarget, "item", code, true);
+  if (code === "KeyL") setActionCode(arrowTarget, "ult", code, true);
+  if (code === "KeyK") setActionCode(arrowTarget, "honk", code, true);
 
   Sound.ensure(); Sound.resume();
 }, { passive: false });
@@ -649,45 +585,64 @@ window.addEventListener("keyup", (e) => {
   const code = e.code;
   const key = e.key;
 
-  if (key === "Enter") keysGlobal.enter = false;
-  if (key === "Escape" || code === "Escape") keysGlobal.back = false;
+  if (key === "p" || key === "P" || code === "KeyP") setActionCode("global", "pause", code, false);
+  if (key === "r" || key === "R" || code === "KeyR") setActionCode("global", "restart", code, false);
+  if (key === "m" || key === "M" || code === "KeyM") setActionCode("global", "mute", code, false);
+  if (key === "Enter" || code === "Enter") setActionCode("global", "enter", code, false);
+  if (key === "Escape" || code === "Escape") setActionCode("global", "back", code, false);
 
   // Player 1 keyups
-  if (code === "KeyW") keysP1.up = false;
-  if (code === "KeyS") keysP1.down = false;
-  if (code === "KeyA") keysP1.left = false;
-  if (code === "KeyD") keysP1.right = false;
-  if (code === "Space") keysP1.drift = false;
-  if (code === "ShiftLeft") keysP1.item = false;
-  if (code === "KeyQ") keysP1.ult = false;
-  if (code === "KeyE") keysP1.honk = false;
-  if (code === "KeyL") { keysP2.ult = false; keysP1.ult = false; }
-  if (code === "KeyK") { keysP2.honk = false; keysP1.honk = false; }
+  if (code === "KeyW") setActionCode("p1", "up", code, false);
+  if (code === "KeyS") setActionCode("p1", "down", code, false);
+  if (code === "KeyA") setActionCode("p1", "left", code, false);
+  if (code === "KeyD") setActionCode("p1", "right", code, false);
+  if (code === "Space") setActionCode("p1", "drift", code, false);
+  if (code === "ShiftLeft") setActionCode("p1", "item", code, false);
+  if (code === "KeyQ") setActionCode("p1", "ult", code, false);
+  if (code === "KeyE") setActionCode("p1", "honk", code, false);
+  if (code === "KeyL") {
+    setActionCode("p2", "ult", code, false);
+    setActionCode("p1", "ult", code, false);
+  }
+  if (code === "KeyK") {
+    setActionCode("p2", "honk", code, false);
+    setActionCode("p1", "honk", code, false);
+  }
 
-  // Player 2 keyups
+  // Player 2 / P1 fallback keyups
   if (code === "ArrowUp") {
-    keysP2.up = false;
-    keysP1.up = false;
+    setActionCode("p2", "up", code, false);
+    setActionCode("p1", "up", code, false);
   }
   if (code === "ArrowDown") {
-    keysP2.down = false;
-    keysP1.down = false;
+    setActionCode("p2", "down", code, false);
+    setActionCode("p1", "down", code, false);
   }
   if (code === "ArrowLeft") {
-    keysP2.left = false;
-    keysP1.left = false;
+    setActionCode("p2", "left", code, false);
+    setActionCode("p1", "left", code, false);
   }
   if (code === "ArrowRight") {
-    keysP2.right = false;
-    keysP1.right = false;
+    setActionCode("p2", "right", code, false);
+    setActionCode("p1", "right", code, false);
   }
   if (code === "ShiftRight") {
-    keysP2.drift = false;
-    keysP1.drift = false;
+    setActionCode("p2", "drift", code, false);
+    setActionCode("p1", "drift", code, false);
   }
   if (code === "Slash" || code === "Period" || key === "/" || key === ".") {
-    keysP2.item = false;
-    keysP1.item = false;
+    setActionCode("p2", "item", code, false);
+    setActionCode("p1", "item", code, false);
+  }
+});
+
+window.addEventListener("blur", resetAllInputs);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    resetAllInputs();
+    if (!HEADLESS_MODE && !game.p2pMode && (game.state === STATE.RACING || game.state === STATE.COUNTDOWN)) {
+      pauseGame();
+    }
   }
 });
 
@@ -738,7 +693,15 @@ Sound.init({
     return intensity;
   },
 });
-if (!HEADLESS_MODE) registerSoundListeners(bus);
+if (!HEADLESS_MODE) {
+  registerSoundListeners(bus);
+  bus.on("kart:driftTier", ({ kart, tier }) => {
+    if (kart && (kart === game.player || (game.multiplayer && !game.p2pMode && kart === game.player2))) {
+      Sound.playDriftTier(tier);
+    }
+    if (kart) game.particles?.burstDriftTier?.(kart.x, kart.y, tier);
+  });
+}
 
 
 game.particles = new ParticleSystem();
@@ -757,16 +720,65 @@ const view3dBtn = document.getElementById("view-3d-btn");
    ============================================================ */
 
 
+function pauseGame() {
+  if (!(game.state === STATE.RACING || (game.p2pMode && game.state === STATE.COUNTDOWN))) return;
+  game._pauseFromState = game.state;
+  game._pausedAt = performance.now();
+  game.state = STATE.PAUSED;
+  screens.show("pause");
+  updatePauseScreenUi();
+}
+
+function resumeFromPause() {
+  if (game.state !== STATE.PAUSED) return;
+  if (!game.p2pMode && game._pausedAt) {
+    const delta = Math.max(0, performance.now() - game._pausedAt);
+    if (game.startTime) game.startTime += delta;
+    if (game.countdownStart) game.countdownStart += delta;
+    if (game.p2pLastHostSyncReceivedAt) game.p2pLastHostSyncReceivedAt += delta;
+    for (const k of getActiveKarts()) {
+      if (k && k.lastLapAt) k.lastLapAt += delta;
+    }
+  }
+  game._pausedAt = 0;
+  screens.hide("pause");
+  game.state = game._pauseFromState || STATE.RACING;
+  game._pauseFromState = null;
+  updatePauseScreenUi();
+}
+
+function restartCurrentRace() {
+  if (game.p2pMode) return;
+  Sound.stopAllEngines();
+  Sound.stopAllDriftSqueals();
+  Sound.stopAllRumbles();
+  screens.hide("pause");
+  game._pauseFromState = null;
+  game._pausedAt = 0;
+  startSelectedRace().catch(() => showSelectScreen());
+}
+
 function scheduleFinishRace(delay = 900) {
   if (game.finishScheduled || game.state === STATE.FINISHED) return;
+  if (game._finishTimeoutId) clearTimeout(game._finishTimeoutId);
   game.finishScheduled = true;
-  setTimeout(() => {
+  game._finishTimeoutId = setTimeout(() => {
+    game._finishTimeoutId = null;
     game.finishScheduled = false;
-    if (areAllHumansDone()) finishRace();
+    if ([STATE.RACING, STATE.PAUSED].includes(game.state) && areAllHumansDone()) finishRace();
   }, delay);
 }
 
 function buildRace() {
+  if (game._finishTimeoutId) {
+    clearTimeout(game._finishTimeoutId);
+    game._finishTimeoutId = null;
+  }
+  if (game._mpStartTimeoutId) {
+    clearTimeout(game._mpStartTimeoutId);
+    game._mpStartTimeoutId = null;
+  }
+  game.finishScheduled = false;
   ensureSelectedMapMatchesMode();
   const mapConfig = MAPS[game.selectedMapIdx || 0];
   const mapId = mapConfig.id;
@@ -788,7 +800,17 @@ function buildRace() {
   if (game.viewMode === "3d" && THREE_STATE.loaded) {
     if (!THREE_STATE.renderer) init3DScene();
     rebuild3DTrack();
-    THREE_STATE.camSmooth = { x: game.player.x, y: 70, z: game.player.y, lx: game.player.x, ly: 12, lz: game.player.y };
+    const h = game.player.heading || 0;
+    THREE_STATE.camSmooth = {
+      x: game.player.x - Math.cos(h) * 95,
+      y: 44,
+      z: game.player.y - Math.sin(h) * 95,
+      lx: game.player.x + Math.cos(h) * 40,
+      ly: 12,
+      lz: game.player.y + Math.sin(h) * 40,
+      fov: 66,
+      roll: 0,
+    };
   }
 }
 
@@ -935,6 +957,7 @@ uiRuntime.updateSelectionHighlight = updateSelectionHighlight;
 uiRuntime.updateP2pStartButton = updateP2pStartButton;
 uiRuntime.updateP2pBattleLobbyUi = updateP2pBattleLobbyUi;
 uiRuntime.updateDriveButtonLabel = updateDriveButtonLabel;
+uiRuntime.updatePauseScreenUi = updatePauseScreenUi;
 uiRuntime.getP2pReadyCount = getP2pReadyCount;
 uiRuntime.setLocalP2pCharacterIdx = setLocalP2pCharacterIdx;
 uiRuntime.syncP2pSelectionFromRoster = syncP2pSelectionFromRoster;
@@ -966,7 +989,10 @@ netRuntime.createDragonEscapeEntity = createDragonEscapeEntity;
 netRuntime.ensureSelectedMapMatchesMode = ensureSelectedMapMatchesMode;
 netRuntime.clampApprovals = clampApprovals;
 netRuntime.resetP2pLobbyDom = resetP2pLobbyDom;
-netRuntime.grandPrixRaces = grandPrixRaces;
+netRuntime.getGrandPrixRaces = () => grandPrixRaces;
+netRuntime.showToast = showGameToast;
+netRuntime.applyRocketStart = applyRocketStart;
+netRuntime.startRaceSim = startRaceSim;
 
 // ---- rl runtime (headless subsystem callbacks) ----
 rlRuntime.hideAll = hideAll;
@@ -999,17 +1025,29 @@ function loop(t) {
     dt *= 0.3;
   }
 
+  game.lastDt = dt;
   update(dt, t);
-  draw(t);
+  draw(t, dt);
   requestAnimationFrame(loop);
 }
 
 function update(dt, time) {
+  if (!HEADLESS_MODE) {
+    pollGamepads({ splitScreen: game.multiplayer && !game.p2pMode });
+  }
   // Global keys
   if (consumePressed("mute")) {
     Sound.setMuted(!Sound.muted);
   }
   if (consumePressed("back")) {
+    if (screens.isVisible("settings")) {
+      returnFromSettings();
+      return;
+    }
+    if (game.state === STATE.PAUSED) {
+      resumeFromPause();
+      return;
+    }
     if (!screens.isVisible("title")) {
       showMainMenu();
       return;
@@ -1118,31 +1156,38 @@ function update(dt, time) {
   }
 
   if (consumePressed("restart")) {
-    if (game.state !== STATE.TITLE && game.state !== STATE.SELECT) {
-      Sound.stopAllEngines();
-      Sound.stopAllDriftSqueals();
-      Sound.stopAllRumbles();
-      showSelectScreen();
+    if (!game.p2pMode) {
+      if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED) {
+        restartCurrentRace();
+        return;
+      }
+      if (game.state === STATE.FINISHED) {
+        Sound.stopAllEngines();
+        Sound.stopAllDriftSqueals();
+        Sound.stopAllRumbles();
+        showSelectScreen();
+        return;
+      }
     }
   }
   if (consumePressed("pause")) {
     if (game.state === STATE.RACING || (game.p2pMode && game.state === STATE.COUNTDOWN)) {
-      game._pauseFromState = game.state;
-      game.state = STATE.PAUSED;
-      screens.show("pause");
-      updatePauseScreenUi();
+      pauseGame();
     } else if (game.state === STATE.PAUSED) {
-      screens.hide("pause");
-      game.state = game._pauseFromState || STATE.RACING;
-      game._pauseFromState = null;
-      updatePauseScreenUi();
+      if (screens.isVisible("settings")) returnFromSettings();
+      resumeFromPause();
     }
   }
   if (consumePressed("enter")) {
-    if (game.state === STATE.TITLE) {
+    if (game.state === STATE.TITLE && !screens.isVisible("settings") && !screens.isVisible("p2p")) {
+      game.tournament = null;
+      game.mode = "race";
+      game.multiplayer = false;
       showSelectScreen();
     } else if (game.state === STATE.FINISHED) {
-      showSelectScreen();
+      if (!(game.p2pMode && game.p2pRole === "guest")) {
+        showSelectScreen();
+      }
     }
   }
 
@@ -1238,7 +1283,7 @@ function update(dt, time) {
         const sinceHostSync = now - (game.p2pLastHostSyncReceivedAt || 0);
         if (sinceHostSync > 7000) {
           handleP2pDisconnect({ silent: true });
-          alert("Lost connection to host.");
+          showGameToast("Lost connection to host.", "error");
           return;
         }
         game.p2pConnectionUnstable = racingSim && sinceHostSync > 2000;
@@ -1279,16 +1324,22 @@ function update(dt, time) {
    ============================================================ */
 
 async function startSelectedRace() {
-  prepareRaceFormatFromSelection();
-  if (!game.multiplayer) {
-    await loadSelectedAiModel();
+  if (isStartingRace) return;
+  isStartingRace = true;
+  try {
+    prepareRaceFormatFromSelection();
+    if (!game.multiplayer) {
+      await loadSelectedAiModel();
+    }
+    Sound.stopTitleTheme();
+    hideAll();
+    buildRace();
+    startCountdown();
+    Sound.startEngine(1);
+    if (game.multiplayer && game.player2 && !game.p2pMode) Sound.startEngine(2);
+  } finally {
+    isStartingRace = false;
   }
-  Sound.stopTitleTheme();
-  hideAll();
-  buildRace();
-  startCountdown();
-  Sound.startEngine(1);
-  if (game.multiplayer && game.player2 && !game.p2pMode) Sound.startEngine(2);
 }
 
 function applyStoredSettings() {
@@ -1351,6 +1402,31 @@ selectBackBtn.addEventListener("click", () => {
   showMainMenu();
 });
 
+if (pauseResumeBtn) {
+  pauseResumeBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    resumeFromPause();
+  });
+}
+if (pauseRestartBtn) {
+  pauseRestartBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    restartCurrentRace();
+  });
+}
+if (pauseSettingsBtn) {
+  pauseSettingsBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    showSettingsScreen({ returnTo: "pause" });
+  });
+}
+if (pauseMenuBtn) {
+  pauseMenuBtn.addEventListener("click", () => {
+    Sound.ensure(); Sound.resume();
+    showMainMenu();
+  });
+}
+
 start1pBtn.addEventListener("click", () => {
   Sound.ensure(); Sound.resume();
   Sound.playVocoderTitle();
@@ -1393,6 +1469,7 @@ driveBtn.addEventListener("click", async () => {
     await startSelectedRace();
   } catch (e) {
     if (aiModelStatus) aiModelStatus.textContent = e?.message || "Could not load model";
+  } finally {
     driveBtn.disabled = false;
   }
 });
@@ -1546,10 +1623,15 @@ function modelMatchesCurrentMode(model) {
 
 function applySelectedAiModelToOpponents() {
   if (!TRAINED_AI_ENABLED && !HEADLESS_MODE) return;
-  if (selectedAiModelId === "classic" || !selectedAiModelWeights || !game.ais || !game.ais.length) return;
+  if (!game.ais || !game.ais.length) return;
   game.ais = game.ais.map((ai, idx) => {
     const char = CHARACTERS.find(c => c.id === ai.charId) || CHARACTERS[(idx + 1) % CHARACTERS.length];
-    const dqn = new DqnAIKart(ai.x, ai.y, ai.heading, char, selectedAiModelWeights, ai.skill || 0.96);
+    const overrideId = selectedAiOpponentModels[char.id];
+    const modelId = overrideId || selectedAiModelId || "classic";
+    if (modelId === "classic") return ai;
+    const weights = overrideId ? selectedAiOpponentWeights[char.id] : selectedAiModelWeights;
+    if (!weights) return ai;
+    const dqn = new DqnAIKart(ai.x, ai.y, ai.heading, char, weights, ai.skill || 0.96);
     dqn.lateralOffset = ai.lateralOffset || 0;
     return dqn;
   });
@@ -1573,9 +1655,7 @@ async function loadAiModelManifest() {
   return aiModelManifest;
 }
 
-function renderAiModelSelector() {
-  if (!aiModelSelect) return;
-  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
+function getSortedModeModels(selectedMap) {
   const getTrackMetrics = (model, mapId) => {
     const trackEntry = model.eval?.tracks?.[mapId];
     if (trackEntry) return trackEntry.battle || trackEntry.classic || trackEntry.solo || trackEntry;
@@ -1588,24 +1668,52 @@ function renderAiModelSelector() {
     return rate * 100000 + reward;
   };
   const models = (aiModelManifest?.models || []).filter(modelMatchesCurrentMode).sort((a, b) => scoreModel(b) - scoreModel(a));
-  const current = selectedAiModelId;
-  const currentExists = current === "classic" || models.some(m => (m.id || m.path) === current);
-  aiModelSelect.innerHTML = `<option value="classic">Classic Waypoint AI</option>`;
+  return { models, getTrackMetrics };
+}
+
+function populateAiModelSelect(selectEl, selectedId = "classic", { shortLabels = false } = {}) {
+  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
+  const { models, getTrackMetrics } = getSortedModeModels(selectedMap);
+  selectEl.textContent = "";
+
+  const classicOpt = document.createElement("option");
+  classicOpt.value = "classic";
+  classicOpt.textContent = shortLabels ? "Classic" : "Classic Waypoint AI";
+  classicOpt.selected = selectedId === "classic";
+  selectEl.appendChild(classicOpt);
+
   for (const model of models) {
     const actionCount = model.actionCount;
     const incompatible = Number.isFinite(actionCount) && actionCount > HEADLESS_DQN_ACTIONS.length;
+    const id = model.id || model.path;
     const metrics = getTrackMetrics(model, selectedMap);
     const rate = headlineModelRate(metrics);
-    const metricLabel = rate !== null
-      ? ` · ${(rate * 100).toFixed(0)}% ${isBattleMode() ? "win" : "finish"} · ${Number(metrics.avg_reward || 0).toFixed(0)} reward`
-      : "";
+    const label = shortLabels
+      ? (rate !== null
+        ? `${model.name || id} · ${(rate * 100).toFixed(0)}% · ${Number(metrics.avg_reward || 0).toFixed(0)}`
+        : (model.name || id))
+      : `${model.name || id}${rate !== null
+        ? ` · ${(rate * 100).toFixed(0)}% ${isBattleMode() ? "win" : "finish"} · ${Number(metrics.avg_reward || 0).toFixed(0)} reward`
+        : ""}${incompatible ? " (incompatible)" : ""}`;
     const option = document.createElement("option");
-    option.value = model.id || model.path;
-    option.textContent = `${model.name || model.id || model.path}${metricLabel}${incompatible ? " (incompatible)" : ""}`;
+    option.value = id;
+    option.textContent = label;
     option.disabled = incompatible;
-    aiModelSelect.appendChild(option);
+    option.selected = selectedId === id;
+    selectEl.appendChild(option);
   }
-  aiModelSelect.value = currentExists ? current : "classic";
+  return models;
+}
+
+function renderAiModelSelector() {
+  if (!aiModelSelect) return;
+  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
+  const { models } = getSortedModeModels(selectedMap);
+  const current = selectedAiModelId;
+  const currentExists = current === "classic" || models.some(m => (m.id || m.path) === current);
+  const nextId = currentExists ? current : "classic";
+  populateAiModelSelect(aiModelSelect, nextId, { shortLabels: false });
+  aiModelSelect.value = nextId;
   selectedAiModelId = aiModelSelect.value;
   if (aiModelStatus) {
     aiModelStatus.textContent = models.length
@@ -1615,55 +1723,31 @@ function renderAiModelSelector() {
   renderAiOpponentSelectors();
 }
 
-function getAiModelOptionsHtml(selectedId = "classic") {
-  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
-  const getTrackMetrics = (model, mapId) => {
-    const trackEntry = model.eval?.tracks?.[mapId];
-    if (trackEntry) return trackEntry.battle || trackEntry.classic || trackEntry.solo || trackEntry;
-    return model.metrics || {};
-  };
-  const scoreModel = (model) => {
-    const m = getTrackMetrics(model, selectedMap);
-    const rate = Number(headlineModelRate(m) ?? 0);
-    const reward = Number(m.avg_reward ?? -999999);
-    return rate * 100000 + reward;
-  };
-  const models = (aiModelManifest?.models || []).filter(modelMatchesCurrentMode).sort((a, b) => scoreModel(b) - scoreModel(a));
-  const options = [`<option value="classic"${selectedId === "classic" ? " selected" : ""}>Classic</option>`];
-  for (const model of models) {
-    const actionCount = model.actionCount;
-    const incompatible = Number.isFinite(actionCount) && actionCount > HEADLESS_DQN_ACTIONS.length;
-    const id = model.id || model.path;
-    const metrics = getTrackMetrics(model, selectedMap);
-    const rate = headlineModelRate(metrics);
-    const label = rate !== null
-      ? `${model.name || id} · ${(rate * 100).toFixed(0)}% · ${Number(metrics.avg_reward || 0).toFixed(0)}`
-      : (model.name || id);
-    options.push(`<option value="${id}"${selectedId === id ? " selected" : ""}${incompatible ? " disabled" : ""}>${label}</option>`);
-  }
-  return options.join("");
-}
-
 function renderAiOpponentSelectors() {
   if (!aiOpponentGrid) return;
   const playerIdx = game.selectedCharIdx || 0;
   const opponents = CHARACTERS.filter((_, idx) => idx !== playerIdx);
-  aiOpponentGrid.innerHTML = opponents.map((char, idx) => {
+  aiOpponentGrid.textContent = "";
+  for (const char of opponents) {
     const selected = selectedAiOpponentModels[char.id] || selectedAiModelId || "classic";
-    return `
-      <label class="ai-opponent-row">
-        <span class="ai-opponent-name">${char.name}</span>
-        <select class="ai-model-select ai-opponent-select" data-char-id="${char.id}">
-          ${getAiModelOptionsHtml(selected)}
-        </select>
-      </label>
-    `;
-  }).join("");
-  aiOpponentGrid.querySelectorAll(".ai-opponent-select").forEach(select => {
+    const row = document.createElement("label");
+    row.className = "ai-opponent-row";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "ai-opponent-name";
+    nameSpan.textContent = char.name;
+
+    const select = document.createElement("select");
+    select.className = "ai-model-select ai-opponent-select";
+    select.dataset.charId = char.id;
+    populateAiModelSelect(select, selected, { shortLabels: true });
     select.addEventListener("change", () => {
-      selectedAiOpponentModels[select.dataset.charId] = select.value || "classic";
+      selectedAiOpponentModels[char.id] = select.value || "classic";
     });
-  });
+
+    row.append(nameSpan, select);
+    aiOpponentGrid.appendChild(row);
+  }
 }
 
 async function refreshAiModelSelector() {
@@ -1696,29 +1780,44 @@ function importAiModelPayload(payload, fileName = "imported-model.json") {
   if (aiModelStatus) aiModelStatus.textContent = `Imported ${name}`;
 }
 
+async function loadAiModelWeightsById(modelId) {
+  if (!modelId || modelId === "classic") return null;
+  if (!aiModelManifest) await loadAiModelManifest();
+  const model = (aiModelManifest?.models || []).find(m => (m.id || m.path) === modelId);
+  if (!model) return null;
+  if (model._weights) return model._weights;
+  const path = model.path || `models/${model.id}.json`;
+  const response = await fetch(path, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Failed to load AI model: ${response.status}`);
+  model._weights = validateModelPayload(await response.json());
+  return model._weights;
+}
+
 async function loadSelectedAiModel() {
-  if (selectedAiModelId === "classic") {
+  selectedAiOpponentWeights = {};
+  const hasGlobal = selectedAiModelId && selectedAiModelId !== "classic";
+  const overrideEntries = Object.entries(selectedAiOpponentModels).filter(([, id]) => id && id !== "classic");
+  if (!hasGlobal && !overrideEntries.length) {
     selectedAiModelWeights = null;
     if (aiModelStatus) aiModelStatus.textContent = "Classic AI ready";
     return null;
   }
-  const model = (aiModelManifest?.models || []).find(m => (m.id || m.path) === selectedAiModelId);
-  if (!model) {
-    selectedAiModelWeights = null;
-    if (aiModelStatus) aiModelStatus.textContent = "Model missing from manifest";
-    return null;
-  }
-  if (model._weights) {
-    selectedAiModelWeights = model._weights;
-    return selectedAiModelWeights;
-  }
-  const path = model.path || `models/${model.id}.json`;
+
   if (aiModelStatus) aiModelStatus.textContent = "Loading model...";
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Failed to load AI model: ${response.status}`);
-  model._weights = validateModelPayload(await response.json());
-  selectedAiModelWeights = model._weights;
-  if (aiModelStatus) aiModelStatus.textContent = `Loaded ${model.name || model.id || path}`;
+  selectedAiModelWeights = hasGlobal ? await loadAiModelWeightsById(selectedAiModelId) : null;
+  for (const [charId, modelId] of overrideEntries) {
+    selectedAiOpponentWeights[charId] = await loadAiModelWeightsById(modelId);
+  }
+  if (aiModelStatus) {
+    if (selectedAiModelWeights) {
+      const model = (aiModelManifest?.models || []).find(m => (m.id || m.path) === selectedAiModelId);
+      aiModelStatus.textContent = `Loaded ${model?.name || selectedAiModelId}`;
+    } else if (overrideEntries.length) {
+      aiModelStatus.textContent = `Loaded ${overrideEntries.length} opponent model${overrideEntries.length === 1 ? "" : "s"}`;
+    } else {
+      aiModelStatus.textContent = "Model missing from manifest";
+    }
+  }
   return selectedAiModelWeights;
 }
 

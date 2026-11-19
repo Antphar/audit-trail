@@ -9,6 +9,7 @@ import {
   sendToConn, p2pHostCancelRaceToLobby, p2pGuestLeaveMatch,
 } from "../net/p2p.js";
 import { uiRuntime } from "./ui-runtime.js";
+import { netRuntime } from "../net/net-runtime.js";
 import { getRaceStartButtonLabel } from "./select.js";
 
 const p2pHostStatus = document.getElementById("p2p-host-status");
@@ -35,6 +36,7 @@ function isArenaMap(mapOrIdx) {
 
 const pauseP2pSubtitle = document.getElementById("pause-p2p-subtitle");
 const pauseDefaultSubtitle = document.getElementById("pause-default-subtitle");
+const pauseRestartBtn = document.getElementById("pause-restart-btn");
 const p2pCancelLobbyBtn = document.getElementById("p2p-cancel-lobby-btn");
 const p2pLeaveMatchBtn = document.getElementById("p2p-leave-match-btn");
 
@@ -42,6 +44,7 @@ export function updatePauseScreenUi() {
   const isP2pPaused = game.p2pMode && game.state === STATE.PAUSED;
   if (pauseP2pSubtitle) pauseP2pSubtitle.style.display = isP2pPaused ? "block" : "none";
   if (pauseDefaultSubtitle) pauseDefaultSubtitle.style.display = isP2pPaused ? "none" : "block";
+  if (pauseRestartBtn) pauseRestartBtn.style.display = game.p2pMode ? "none" : "inline-block";
   if (p2pCancelLobbyBtn) p2pCancelLobbyBtn.style.display = (isP2pPaused && game.p2pRole === "host") ? "inline-block" : "none";
   if (p2pLeaveMatchBtn) p2pLeaveMatchBtn.style.display = (isP2pPaused && game.p2pRole === "guest") ? "inline-block" : "none";
 }
@@ -156,8 +159,10 @@ export function checkMultiplayerSelectFinish() {
   }
 
   if (game.p1Locked && game.p2Locked) {
-    setTimeout(() => {
-      if (game.p1Locked && game.p2Locked) {
+    if (game._mpStartTimeoutId) clearTimeout(game._mpStartTimeoutId);
+    game._mpStartTimeoutId = setTimeout(() => {
+      game._mpStartTimeoutId = null;
+      if (game.state === STATE.SELECT && game.p1Locked && game.p2Locked) {
         Sound.stopTitleTheme();
         uiRuntime.hideAll();
         uiRuntime.buildRace();
@@ -236,6 +241,8 @@ export function updateSelectionHighlight() {
         card.appendChild(b1);
       }
     }
+    const isPressed = card.classList.contains("selected") || card.classList.contains("selected-p1") || card.classList.contains("selected-both");
+    card.setAttribute("aria-pressed", String(isPressed));
   });
 
   // Update status label banners in select screen
@@ -400,6 +407,7 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
   const turnAvailable = hasP2pTurnFallback();
   const attemptSeq = ++p2pJoinAttemptSeq;
   const isCurrentAttempt = () => attemptSeq === p2pJoinAttemptSeq;
+  let joinTimeout = null;
   p2pJoinStatus.innerText = usingRelay
     ? "Direct P2P failed. Trying TURN relay..."
     : "Connecting to lobby " + rawCode + " with direct P2P...";
@@ -419,6 +427,10 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
 
       let settled = false;
       const finishFailedAttempt = (message) => {
+        if (joinTimeout) {
+          clearTimeout(joinTimeout);
+          joinTimeout = null;
+        }
         if (!isCurrentAttempt() || settled || game.p2pMode) return;
         settled = true;
         try { conn.close(); } catch(e) {}
@@ -432,7 +444,8 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
         p2pJoinStatus.className = "p2p-status error";
       };
 
-      const joinTimeout = setTimeout(() => {
+      joinTimeout = setTimeout(() => {
+        joinTimeout = null;
         if (!isCurrentAttempt()) return;
         if (usingRelay) {
           finishFailedAttempt("TURN relay connection failed. The relay credentials may be expired, unreachable, or blocked by this network.");
@@ -446,7 +459,10 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
       conn.on("open", () => {
         if (!isCurrentAttempt()) return;
         settled = true;
-        clearTimeout(joinTimeout);
+        if (joinTimeout) {
+          clearTimeout(joinTimeout);
+          joinTimeout = null;
+        }
         p2pJoinStatus.innerText = usingRelay ? "Connected via relay! Joining lobby..." : "Connected directly! Joining lobby...";
         p2pJoinStatus.className = "p2p-status ready";
         game.p2pMode = true;
@@ -458,11 +474,13 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
         handleP2pData(data, conn);
       });
       conn.on("close", () => {
-        clearTimeout(joinTimeout);
+        if (joinTimeout) {
+          clearTimeout(joinTimeout);
+          joinTimeout = null;
+        }
         if (isCurrentAttempt() && game.p2pMode) handleP2pDisconnect();
       });
       conn.on("error", (err) => {
-        clearTimeout(joinTimeout);
         finishFailedAttempt(usingRelay
           ? "TURN relay connection error: " + (err.message || "WebRTC negotiation failed")
           : "Direct P2P connection error: " + (err.message || "WebRTC negotiation failed"));
@@ -470,6 +488,10 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
     });
 
     peer.on("error", (err) => {
+      if (joinTimeout) {
+        clearTimeout(joinTimeout);
+        joinTimeout = null;
+      }
       if (!isCurrentAttempt()) return;
       if (err.type === "peer-unavailable") {
         p2pJoinStatus.innerText = "Lobby not found. Check the code and make sure the host lobby is still open.";
@@ -479,6 +501,10 @@ export function startP2pJoinAttempt(rawCode, mode = "direct") {
       p2pJoinStatus.className = "p2p-status error";
     });
   } catch(e) {
+    if (joinTimeout) {
+      clearTimeout(joinTimeout);
+      joinTimeout = null;
+    }
     p2pJoinStatus.innerText = usingRelay
       ? "TURN relay setup failed: " + e.message
       : "Direct P2P setup failed: " + e.message;
@@ -497,6 +523,7 @@ function wireP2pHostClick() {
     loadPeerJS(() => {
       p2pHostStatus.innerText = "Connecting to matchmaking...";
       const code = generateLobbyCode();
+      let hostTimeout = null;
 
       try {
         if (peer) {
@@ -504,7 +531,8 @@ function wireP2pHostClick() {
         }
         setPeer(new Peer("TKD-" + code, { config: getP2pIceConfig("relay") }));
 
-        const hostTimeout = setTimeout(() => {
+        hostTimeout = setTimeout(() => {
+          hostTimeout = null;
           if (!game.p2pMode) {
             p2pHostStatus.innerText = "Connection timed out. Try again.";
             p2pHostStatus.className = "p2p-status error";
@@ -513,7 +541,10 @@ function wireP2pHostClick() {
         }, 15000);
 
         peer.on("open", () => {
-          clearTimeout(hostTimeout);
+          if (hostTimeout) {
+            clearTimeout(hostTimeout);
+            hostTimeout = null;
+          }
           p2pHostStatus.innerText = "Lobby active. Waiting for players...";
           p2pHostStatus.className = "p2p-status ready";
           p2pMyCode.innerText = code;
@@ -526,7 +557,20 @@ function wireP2pHostClick() {
         });
 
         peer.on("connection", (conn) => {
+          if ([STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED, STATE.FINISHED].includes(game.state)) {
+            conn.on("open", () => {
+              try { conn.send({ type: "race_in_progress" }); } catch (e) {}
+              try { conn.close(); } catch (e) {}
+            });
+            setTimeout(() => { try { if (conn.open) conn.close(); } catch (e) {} }, 250);
+            return;
+          }
           conn.on("open", () => {
+            if ([STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED, STATE.FINISHED].includes(game.state)) {
+              try { conn.send({ type: "race_in_progress" }); } catch (e) {}
+              try { conn.close(); } catch (e) {}
+              return;
+            }
             const player = addP2pGuest(conn);
             if (!player) return;
             p2pHostStatus.innerText = `${game.p2pPlayers.length} players in lobby. Host starts the race.`;
@@ -555,6 +599,10 @@ function wireP2pHostClick() {
         });
 
         peer.on("error", (err) => {
+          if (hostTimeout) {
+            clearTimeout(hostTimeout);
+            hostTimeout = null;
+          }
           if (err.type === "unavailable-id") {
             p2pHostBtn.click();
           } else {
@@ -563,15 +611,43 @@ function wireP2pHostClick() {
           }
         });
       } catch (e) {
+        if (hostTimeout) {
+          clearTimeout(hostTimeout);
+          hostTimeout = null;
+        }
         p2pHostStatus.innerText = "Failed to create: " + e.message;
         p2pHostStatus.className = "p2p-status error";
       }
+    }, (errMsg) => {
+      p2pHostStatus.innerText = errMsg || "Could not load PeerJS library.";
+      p2pHostStatus.className = "p2p-status error";
     });
   });
 }
 
 export function initLobbyUi(deps = {}) {
   const showMainMenu = deps.showMainMenu || (() => {});
+  netRuntime.p2pJoinStatus = p2pJoinStatus;
+  if (p2pMyCode) {
+    p2pMyCode.tabIndex = 0;
+    p2pMyCode.setAttribute("role", "button");
+    p2pMyCode.setAttribute("aria-label", "Copy lobby code");
+    p2pMyCode.title = "Click to copy lobby code";
+    const copyLobbyCode = () => {
+      const code = (p2pMyCode.innerText || "").trim();
+      if (!code || code === "------") return;
+      navigator.clipboard?.writeText(code)
+        .then(() => { window.showGameToast?.("Lobby code copied!", "success"); })
+        .catch(() => {});
+    };
+    p2pMyCode.addEventListener("click", copyLobbyCode);
+    p2pMyCode.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        copyLobbyCode();
+      }
+    });
+  }
   wireP2pHostClick();
   if (startP2pBtn) {
     startP2pBtn.addEventListener("click", () => {
@@ -595,7 +671,13 @@ export function initLobbyUi(deps = {}) {
       }
       p2pJoinStatus.innerText = "Loading network library...";
       p2pJoinStatus.className = "p2p-status";
-      loadPeerJS(() => startP2pJoinAttempt(rawCode, "direct"));
+      loadPeerJS(
+        () => startP2pJoinAttempt(rawCode, "direct"),
+        (errMsg) => {
+          p2pJoinStatus.innerText = errMsg || "Could not load PeerJS library.";
+          p2pJoinStatus.className = "p2p-status error";
+        }
+      );
     });
   }
   if (p2pBackBtn) {

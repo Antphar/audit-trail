@@ -16,6 +16,7 @@ import { draw3D } from "./three-frame.js";
 import { roundRect, drawApprovalSeals } from "./hud.js";
 import {
   drawHUD, drawHUDMultiplayer, drawCountdown, drawFinishBanner, drawApprovals3DOverlay,
+  drawBoostSpeedLines,
 } from "./hud.js";
 
 const ctx = () => renderRuntime.getCtx();
@@ -193,13 +194,78 @@ export function drawWorld(pKart, left, top, width, height, time, isP2) {
   // Track
   game.track.draw(ctx(), time);
 
-  // Skid marks
-  for (const s of game.skidMarks) {
-    const a = clamp(s.life / s.maxLife, 0, 1) * 0.6;
-    ctx().fillStyle = s.color || `rgba(20,20,30,${a})`;
-    ctx().beginPath();
-    ctx().arc(s.x, s.y, s.size, 0, TAU);
-    ctx().fill();
+  // Skid marks (batched into grouped angled dash strokes)
+  if (game.skidMarks && game.skidMarks.length) {
+    const c = ctx();
+    c.save();
+    c.lineCap = "round";
+    const buckets = new Map();
+    const lenMarks = game.skidMarks.length;
+    for (let i = 0; i < lenMarks; i++) {
+      const s = game.skidMarks[i];
+      if (!s) continue;
+      const lifeFrac = (s.life != null && s.maxLife)
+        ? clamp(s.life / s.maxLife, 0, 1)
+        : (s.alpha != null ? clamp(s.alpha, 0, 1) : 1);
+      if (lifeFrac <= 0.02) continue;
+      const alphaQ = Math.max(1, Math.min(4, Math.ceil(lifeFrac * 4))) * 0.25;
+      const w = Math.max(1.5, Math.round((s.size || 4) * 2) / 2);
+      const col = s.color || "rgba(20,20,30,0.6)";
+      const key = `${col}|${w}|${alphaQ}`;
+      let list = buckets.get(key);
+      if (!list) {
+        list = { col, w, alpha: alphaQ, segs: [] };
+        buckets.set(key, list);
+      }
+
+      let x1, y1, x2, y2;
+      if (Number.isFinite(s.px) && Number.isFinite(s.py)) {
+        x1 = s.px; y1 = s.py; x2 = s.x; y2 = s.y;
+      } else if (Number.isFinite(s.angle)) {
+        const half = Math.max(3, (s.size || 4) * 1.35);
+        const dx = Math.cos(s.angle) * half;
+        const dy = Math.sin(s.angle) * half;
+        x1 = s.x - dx; y1 = s.y - dy; x2 = s.x + dx; y2 = s.y + dy;
+      } else {
+        // Infer alignment from previous mark of the same wheel side (marks alternate left/right)
+        let prev = i >= 2 ? game.skidMarks[i - 2] : null;
+        if (!prev || prev.color !== s.color || Math.hypot(s.x - prev.x, s.y - prev.y) > 26) {
+          prev = i >= 1 ? game.skidMarks[i - 1] : null;
+        }
+        if (prev && prev.color === s.color) {
+          const dx = s.x - prev.x;
+          const dy = s.y - prev.y;
+          const d = Math.hypot(dx, dy);
+          if (d > 1.5 && d < 26) {
+            const half = Math.min(d * 0.55, Math.max(3.5, (s.size || 4) * 1.4));
+            const ux = (dx / d) * half;
+            const uy = (dy / d) * half;
+            x1 = s.x - ux; y1 = s.y - uy; x2 = s.x + ux; y2 = s.y + uy;
+          } else {
+            const r = Math.max(2, (s.size || 4) * 0.75);
+            x1 = s.x - r; y1 = s.y - r * 0.3; x2 = s.x + r; y2 = s.y + r * 0.3;
+          }
+        } else {
+          const r = Math.max(2, (s.size || 4) * 0.75);
+          x1 = s.x - r; y1 = s.y - r * 0.3; x2 = s.x + r; y2 = s.y + r * 0.3;
+        }
+      }
+      list.segs.push(x1, y1, x2, y2);
+    }
+
+    for (const bucket of buckets.values()) {
+      const segs = bucket.segs;
+      c.globalAlpha = bucket.alpha;
+      c.strokeStyle = bucket.col;
+      c.lineWidth = bucket.w;
+      c.beginPath();
+      for (let j = 0; j < segs.length; j += 4) {
+        c.moveTo(segs[j], segs[j + 1]);
+        c.lineTo(segs[j + 2], segs[j + 3]);
+      }
+      c.stroke();
+    }
+    c.restore();
   }
 
   // Spectators
@@ -226,10 +292,10 @@ export function drawWorld(pKart, left, top, width, height, time, isP2) {
     }
   }
 
-  drawMergeRequestTethers(ctx(), time);
+  drawMergeRequestTethers(time);
   // Dragon head visual for Dragon's Escape map
   if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
-    drawDragonHead(ctx(), pKart, time);
+    drawDragonHead(pKart, time);
   }
 
   // Karts sorted by depth
@@ -239,20 +305,20 @@ export function drawWorld(pKart, left, top, width, height, time, isP2) {
 
   // Name tags below karts + speech bubbles above
   for (const k of sorted) {
-    drawKartNameTag(ctx(), k, time);
-    drawApprovals(ctx(), k, time);
-    drawSpeechBubble(ctx(), k);
+    drawKartNameTag(k, time);
+    drawApprovals(k, time);
+    drawSpeechBubble(k);
   }
 
   // Particles
   game.particles.draw(ctx());
 
-  // Speed lines while boosting
-  if (pKart.boostTimer > 0) {
-    drawSpeedLinesViewport(ctx(), left, top, width, height, time);
-  }
-
   ctx().restore();
+
+  // Speed lines while boosting (drawn in viewport screen space)
+  if (pKart.boostTimer > 0) {
+    drawSpeedLinesViewport(left, top, width, height, time);
+  }
 }
 
 export function drawDragonHead( pKart, time) {
@@ -274,7 +340,6 @@ export function drawDragonHead( pKart, time) {
   const wingFlap = Math.sin(time * 0.004) * 0.15;
 
   // ---- Shadow ----
-  ctx().shadowBlur = 0;
   ctx().fillStyle = "rgba(0,0,0,0.35)";
   ctx().beginPath();
   ctx().ellipse(10, 150, 120, 22, 0, 0, TAU);
@@ -283,15 +348,16 @@ export function drawDragonHead( pKart, time) {
   // ---- WINGS (drawn behind body) ----
   // Back wing (darker, offset)
   ctx().save();
-  ctx().shadowBlur = 12;
-  ctx().shadowColor = "#660000";
-  ctx().fillStyle = "#1a0a05";
   ctx().beginPath();
   ctx().moveTo(-40, -20);
   ctx().quadraticCurveTo(-200, -220 + wingFlap * 60, -320, -120 + wingFlap * 90);
   ctx().quadraticCurveTo(-240, -60 + wingFlap * 40, -180, -40 + wingFlap * 20);
   ctx().quadraticCurveTo(-140, -10 + wingFlap * 10, -50, 20);
   ctx().closePath();
+  ctx().strokeStyle = "rgba(120, 16, 0, 0.28)";
+  ctx().lineWidth = 8;
+  ctx().stroke();
+  ctx().fillStyle = "#1a0a05";
   ctx().fill();
   ctx().strokeStyle = "#4a1a0a";
   ctx().lineWidth = 2;
@@ -309,9 +375,6 @@ export function drawDragonHead( pKart, time) {
 
   // Front wing (slightly lighter, different flap phase)
   ctx().save();
-  ctx().shadowBlur = 15;
-  ctx().shadowColor = "#aa2200";
-  ctx().fillStyle = "#2a1008";
   const flap2 = Math.sin(time * 0.004 + 1.2) * 0.12;
   ctx().beginPath();
   ctx().moveTo(-10, 10);
@@ -319,6 +382,10 @@ export function drawDragonHead( pKart, time) {
   ctx().quadraticCurveTo(-220, -30 + flap2 * 45, -150, -10 + flap2 * 25);
   ctx().quadraticCurveTo(-110, 20 + flap2 * 15, -20, 50);
   ctx().closePath();
+  ctx().strokeStyle = "rgba(180, 42, 0, 0.32)";
+  ctx().lineWidth = 9;
+  ctx().stroke();
+  ctx().fillStyle = "#2a1008";
   ctx().fill();
   ctx().strokeStyle = "#5c1a0a";
   ctx().lineWidth = 2;
@@ -326,9 +393,6 @@ export function drawDragonHead( pKart, time) {
   ctx().restore();
 
   // ---- Serpentine BODY/NECK trailing back ----
-  ctx().shadowBlur = 10;
-  ctx().shadowColor = "#551100";
-  ctx().fillStyle = "#1e0d06";
   ctx().beginPath();
   ctx().moveTo(-50, 40);
   ctx().quadraticCurveTo(-120, 80 + breathe * 10, -180, 40 + breathe * 15);
@@ -338,32 +402,34 @@ export function drawDragonHead( pKart, time) {
   ctx().quadraticCurveTo(-400, 40 + breathe * 25, -320, 80 + breathe * 15);
   ctx().quadraticCurveTo(-200, 120 + breathe * 10, -80, 70);
   ctx().closePath();
+  ctx().strokeStyle = "rgba(110, 24, 6, 0.35)";
+  ctx().lineWidth = 9;
+  ctx().stroke();
+  ctx().fillStyle = "#1e0d06";
   ctx().fill();
   ctx().strokeStyle = "#3a1208";
   ctx().lineWidth = 2.5;
   ctx().stroke();
 
   // ---- Dorsal spikes along neck ----
-  ctx().shadowBlur = 8;
-  ctx().shadowColor = "#aa0000";
-  ctx().fillStyle = "#8b0000";
   const spikePts = [
     [-60, 20, 25], [-110, 50, 22], [-170, 30, 28], [-240, 5, 24],
     [-310, -15, 26], [-380, -40, 30], [-440, -15, 22]
   ];
+  ctx().beginPath();
   for (const [sx, sy, sh] of spikePts) {
-    ctx().beginPath();
     ctx().moveTo(sx, sy);
     ctx().lineTo(sx - 8, sy - sh);
     ctx().lineTo(sx + 8, sy - sh + 6);
     ctx().closePath();
-    ctx().fill();
   }
+  ctx().strokeStyle = "rgba(190, 20, 0, 0.35)";
+  ctx().lineWidth = 5;
+  ctx().stroke();
+  ctx().fillStyle = "#8b0000";
+  ctx().fill();
 
   // ---- MAIN HEAD (serpentine, menacing) ----
-  ctx().shadowBlur = 20;
-  ctx().shadowColor = "#ff2200";
-  ctx().fillStyle = "#2a1010";
   ctx().beginPath();
   // Top of skull
   ctx().moveTo(-70, -50);
@@ -383,96 +449,103 @@ export function drawDragonHead( pKart, time) {
   ctx().quadraticCurveTo(-80, 30, -90, 0);
   ctx().quadraticCurveTo(-100, -30, -70, -50);
   ctx().closePath();
+  ctx().strokeStyle = "rgba(255, 45, 10, 0.22)";
+  ctx().lineWidth = 14;
+  ctx().stroke();
+  ctx().strokeStyle = "rgba(255, 70, 20, 0.42)";
+  ctx().lineWidth = 7;
+  ctx().stroke();
+  ctx().fillStyle = "#2a1010";
   ctx().fill();
   ctx().strokeStyle = "#c0392b";
   ctx().lineWidth = 3;
   ctx().stroke();
 
   // ---- Jaw interior (dark fleshy cavity) ----
-  ctx().shadowBlur = 8;
-  ctx().shadowColor = "#ff6600";
-  ctx().fillStyle = "#0a0302";
   ctx().beginPath();
   ctx().moveTo(30, 35);
   ctx().quadraticCurveTo(80, 40, 110, 30);
   ctx().quadraticCurveTo(100, 55, 60, 58);
   ctx().quadraticCurveTo(20, 55, 0, 45);
   ctx().closePath();
+  ctx().strokeStyle = "rgba(255, 102, 0, 0.35)";
+  ctx().lineWidth = 4;
+  ctx().stroke();
+  ctx().fillStyle = "#0a0302";
   ctx().fill();
 
   // ---- TEETH (upper row) ----
-  ctx().shadowBlur = 4;
-  ctx().shadowColor = "#ffffff";
   ctx().fillStyle = "#e8e0d0";
+  ctx().beginPath();
   for (let i = 0; i < 7; i++) {
     const tx = 45 + i * 12;
     const ty = 35 + (i % 2) * 5;
-    ctx().beginPath();
     ctx().moveTo(tx, ty);
     ctx().lineTo(tx + 4, ty + 14);
     ctx().lineTo(tx + 8, ty + 2);
     ctx().closePath();
-    ctx().fill();
   }
+  ctx().fill();
 
   // ---- TEETH (lower row) ----
+  ctx().beginPath();
   for (let i = 0; i < 5; i++) {
     const tx = 55 + i * 11;
     const ty = 55 - (i % 2) * 4;
-    ctx().beginPath();
     ctx().moveTo(tx, ty);
     ctx().lineTo(tx + 3, ty - 10);
     ctx().lineTo(tx + 6, ty + 1);
     ctx().closePath();
-    ctx().fill();
   }
+  ctx().fill();
 
-  // ---- EYES (glowing demonic) ----
-  ctx().shadowBlur = 25 * eyeGlow;
-  ctx().shadowColor = "#ffcc00";
+  // ---- EYES (glowing demonic - layered halo fills) ----
+  ctx().fillStyle = `rgba(255, 180, 20, ${0.22 * eyeGlow})`;
+  ctx().beginPath(); ctx().ellipse(30, -50, 26, 20, 0.15, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(75, -55, 20, 15, 0.1, 0, TAU); ctx().fill();
+  ctx().fillStyle = `rgba(255, 210, 40, ${0.45 * eyeGlow})`;
+  ctx().beginPath(); ctx().ellipse(30, -50, 21, 16, 0.15, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(75, -55, 16.5, 12, 0.1, 0, TAU); ctx().fill();
   ctx().fillStyle = "#ffaa00";
   // Eye sockets (larger)
-  ctx().beginPath();
-  ctx().ellipse(30, -50, 18, 14, 0.15, 0, TAU);
-  ctx().fill();
-  ctx().beginPath();
-  ctx().ellipse(75, -55, 14, 10, 0.1, 0, TAU);
-  ctx().fill();
-  // Pupils (vertical cat-like slits)
-  ctx().shadowBlur = 10;
-  ctx().shadowColor = "#ff0000";
+  ctx().beginPath(); ctx().ellipse(30, -50, 18, 14, 0.15, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(75, -55, 14, 10, 0.1, 0, TAU); ctx().fill();
+  // Pupils (vertical cat-like slits with red rim)
+  ctx().fillStyle = "rgba(255, 20, 0, 0.45)";
+  ctx().beginPath(); ctx().ellipse(33, -50, 5.5, 13, 0.15, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(77, -55, 4, 9.5, 0.1, 0, TAU); ctx().fill();
   ctx().fillStyle = "#110000";
-  ctx().beginPath();
-  ctx().ellipse(33, -50, 3.5, 12, 0.15, 0, TAU);
-  ctx().fill();
-  ctx().beginPath();
-  ctx().ellipse(77, -55, 2.5, 8, 0.1, 0, TAU);
-  ctx().fill();
+  ctx().beginPath(); ctx().ellipse(33, -50, 3.5, 12, 0.15, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(77, -55, 2.5, 8, 0.1, 0, TAU); ctx().fill();
   // Eye highlight glint
-  ctx().shadowBlur = 0;
   ctx().fillStyle = "#ffffff";
-  ctx().beginPath();
-  ctx().arc(35, -54, 2.5, 0, TAU); ctx().fill();
-  ctx().beginPath();
-  ctx().arc(79, -58, 1.8, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().arc(35, -54, 2.5, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().arc(79, -58, 1.8, 0, TAU); ctx().fill();
 
   // ---- Forehead ridge / brow ----
-  ctx().shadowBlur = 8;
-  ctx().shadowColor = "#551100";
   ctx().fillStyle = "#3a1510";
+  ctx().strokeStyle = "#6c2418";
+  ctx().lineWidth = 2;
   ctx().beginPath();
   ctx().moveTo(10, -75);
   ctx().quadraticCurveTo(50, -95, 100, -70);
   ctx().quadraticCurveTo(80, -60, 40, -65);
   ctx().closePath();
   ctx().fill();
+  ctx().stroke();
 
-  // ---- Horns (swept back, much larger) ----
-  ctx().shadowBlur = 15;
-  ctx().shadowColor = "#883311";
+  // ---- Horns (swept back, 2-pass layered halo strokes) ----
+  ctx().lineCap = "round";
+  // Outer horn halo pass
+  ctx().strokeStyle = "rgba(160, 60, 20, 0.35)";
+  ctx().lineWidth = 11;
+  ctx().beginPath();
+  ctx().moveTo(5, -80); ctx().quadraticCurveTo(-40, -160, -30, -260);
+  ctx().moveTo(70, -85); ctx().quadraticCurveTo(110, -170, 130, -240);
+  ctx().stroke();
+
   ctx().strokeStyle = "#4a2818";
   ctx().fillStyle = "#4a2818";
-  ctx().lineWidth = 6;
   // Main left horn
   ctx().beginPath();
   ctx().moveTo(5, -80);
@@ -503,85 +576,68 @@ export function drawDragonHead( pKart, time) {
   ctx().stroke();
 
   // ---- Nostril slits ----
-  ctx().shadowBlur = 6;
-  ctx().shadowColor = "#ff3300";
+  ctx().fillStyle = "rgba(255, 60, 0, 0.4)";
+  ctx().beginPath(); ctx().ellipse(120, 20, 7, 4.5, 0.2, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(128, 18, 6, 4, 0.2, 0, TAU); ctx().fill();
   ctx().fillStyle = "#1a0300";
-  ctx().beginPath();
-  ctx().ellipse(120, 20, 5, 3, 0.2, 0, TAU); ctx().fill();
-  ctx().beginPath();
-  ctx().ellipse(128, 18, 4, 2.5, 0.2, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(120, 20, 5, 3, 0.2, 0, TAU); ctx().fill();
+  ctx().beginPath(); ctx().ellipse(128, 18, 4, 2.5, 0.2, 0, TAU); ctx().fill();
 
   // ---- Scales on neck and jaw ----
-  ctx().shadowBlur = 0;
   ctx().strokeStyle = "rgba(255, 60, 20, 0.35)";
   ctx().lineWidth = 1.2;
+  ctx().beginPath();
   for (let i = 0; i < 6; i++) {
     const sy = -60 + i * 18;
     for (let j = 0; j < 4; j++) {
       const sx = -55 + j * 30 + (i % 2) * 15;
-      ctx().beginPath();
+      ctx().moveTo(sx + 7, sy + 80);
       ctx().arc(sx, sy + 80, 7, 0, Math.PI);
-      ctx().stroke();
     }
   }
+  ctx().stroke();
 
-  // ---- Scattered glowing embers floating off the dragon ----
+  // ---- Scattered glowing embers floating off the dragon (2-pass halo fills) ----
   const emberPhase = (time * 0.003) % 1;
-  ctx().shadowBlur = 8;
   for (let i = 0; i < 8; i++) {
     const eph = (emberPhase + i / 8) % 1;
     const ex = -20 + i * 15 + eph * 30;
     const ey = -30 + Math.sin(eph * Math.PI * 3 + i) * 25 + eph * 80;
     const er = 3 + eph * 4;
-    ctx().shadowColor = `rgba(255, ${80 + i * 20}, 0, ${1 - eph})`;
-    ctx().fillStyle = `rgba(255, ${80 + i * 20}, 0, ${1 - eph})`;
-    ctx().beginPath();
-    ctx().arc(ex, ey, er, 0, TAU);
-    ctx().fill();
+    const g = 80 + i * 20;
+    const a = 1 - eph;
+    ctx().fillStyle = `rgba(255, ${g}, 0, ${a * 0.28})`;
+    ctx().beginPath(); ctx().arc(ex, ey, er * 2.1, 0, TAU); ctx().fill();
+    ctx().fillStyle = `rgba(255, ${g}, 0, ${a})`;
+    ctx().beginPath(); ctx().arc(ex, ey, er, 0, TAU); ctx().fill();
   }
 
   // ---- Occasional continuous fire breath from nostrils ----
   if (breathe > 0.3) {
-    ctx().shadowBlur = 20 + breathe * 15;
-    ctx().shadowColor = "#ff4400";
-    const fGrad = ctx().createRadialGradient(124, 19, 2, 124, 19, 40 + breathe * 30);
-    fGrad.addColorStop(0, `rgba(255, 240, 100, ${0.8})`);
-    fGrad.addColorStop(0.3, `rgba(255, 120, 20, ${0.5})`);
-    fGrad.addColorStop(1, "rgba(200, 0, 0, 0)");
-    ctx().fillStyle = fGrad;
     ctx().beginPath();
     ctx().moveTo(120, 15);
     ctx().quadraticCurveTo(170, 10, 210 + breathe * 40, 30 + Math.sin(time * 0.01) * 15);
     ctx().quadraticCurveTo(180, 35, 125, 25);
     ctx().closePath();
+    ctx().strokeStyle = "rgba(255, 80, 0, 0.25)";
+    ctx().lineWidth = 10;
+    ctx().stroke();
+    const fGrad = ctx().createRadialGradient(124, 19, 2, 124, 19, 40 + breathe * 30);
+    fGrad.addColorStop(0, `rgba(255, 240, 100, ${0.85})`);
+    fGrad.addColorStop(0.3, `rgba(255, 120, 20, ${0.55})`);
+    fGrad.addColorStop(1, "rgba(200, 0, 0, 0)");
+    ctx().fillStyle = fGrad;
     ctx().fill();
   }
 
   ctx().restore();
 }
 
-export function drawSpeedLinesViewport( left, top, width, height, time) {
-  ctx().save();
-  ctx().beginPath();
-  ctx().rect(left, top, width, height);
-  ctx().clip();
-
-  const cx = left + width / 2, cy = top + height / 2;
-  ctx().strokeStyle = "rgba(255,255,255,0.4)";
-  ctx().lineWidth = 2;
-  for (let i = 0; i < 14; i++) {
-    const ang = (i / 14) * TAU + (time * 0.001);
-    const r1 = 150 + ((time * 0.5 + i * 50) % 120);
-    const r2 = r1 + 50;
-    ctx().beginPath();
-    ctx().moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-    ctx().lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
-    ctx().stroke();
-  }
-  ctx().restore();
+export function drawSpeedLinesViewport(left, top, width, height, time) {
+  drawBoostSpeedLines(ctx(), left, top, width, height, time, 1);
 }
 
-export function draw(time) {
+export function draw(time, dt = 1) {
   if (!game.track) {
     ctx().fillStyle = "#07091a";
     ctx().fillRect(0, 0, VIEW_W(), VIEW_H());
@@ -589,7 +645,7 @@ export function draw(time) {
   }
 
   if (game.viewMode === "3d" && THREE_STATE.renderer) {
-    draw3D(time);
+    draw3D(dt, time);
     return;
   }
 
@@ -643,7 +699,7 @@ export function draw(time) {
     drawCountdown();
   } else if ((game.player && game.player.finished && !game.player.eliminated) || (game.player2 && game.player2.finished && !game.player2.eliminated)) {
     if (game.state === STATE.RACING) {
-      drawFinishBanner();
+      drawFinishBanner(time);
     }
   }
 }

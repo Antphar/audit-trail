@@ -241,11 +241,14 @@ export class Track {
     const ix = lerp(prevX, x, t);
     const iy = lerp(prevY, y, t);
     const lateral = Math.abs((ix - gate.x) * gate.nx + (iy - gate.y) * gate.ny);
-    return lateral <= gate.halfW + 12;
+    return lateral <= gate.halfW + 75;
   }
 
   // Find closest segment to a world point
   closestSegment(x, y) {
+    if (!this.segments || !this.segments.length) {
+      return { idx: 0, dist: Infinity, t: 0, proj: { x, y, t: 0, d: Infinity } };
+    }
     let bestI = 0, bestD = Infinity, bestT = 0, bestProj = null;
     for (let i = 0; i < this.segments.length; i++) {
       const s = this.segments[i];
@@ -260,15 +263,19 @@ export class Track {
     if (this.arenaFloor) {
       return ellipseNormDist(x, y, this.arenaFloor) <= 1.0;
     }
+    if (!this.segments || !this.segments.length) return false;
     const c = this.closestSegment(x, y);
-    return c.dist <= this.segments[c.idx].halfW;
+    const seg = this.segments[c.idx];
+    return !!(seg && c.dist <= seg.halfW);
   }
 
   // Is point on the outer rumble strip?
   isOnRumble(x, y) {
+    if (this.arenaFloor) return false;
+    if (!this.segments || !this.segments.length) return false;
     const c = this.closestSegment(x, y);
     const seg = this.segments[c.idx];
-    return c.dist > seg.halfW && c.dist <= seg.halfW + 10;
+    return !!(seg && c.dist > seg.halfW && c.dist <= seg.halfW + 10);
   }
 
   // Returns the over-edge distance (>0 if outside the road) on this segment
@@ -279,9 +286,10 @@ export class Track {
       const scale = Math.min(this.arenaFloor.rx, this.arenaFloor.ry);
       return (nd - 1) * scale;
     }
+    if (!this.segments || !this.segments.length) return 0;
     const c = this.closestSegment(x, y);
     const seg = this.segments[c.idx];
-    return c.dist - seg.halfW;
+    return seg ? c.dist - seg.halfW : 0;
   }
 
   _generateDecor() {
@@ -779,15 +787,15 @@ export class Track {
     const day = isDayMode();
     const dayPal = day ? getMapDayPalette(mapId) : null;
 
-    // Road Outer Shadow
+    // Road Outer Shadow (fast layered halo strokes, no shadowBlur)
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    ctx.strokeStyle = hexToRgba(dayPal ? COMPASS_VISUAL.primary : "#7b75ff", dayPal ? 0.08 : 0.07);
+    ctx.lineWidth = (this.halfWidth + 26) * 2;
+    this.drawPath(ctx); ctx.stroke();
     ctx.strokeStyle = dayPal ? dayPal.roadOuterShadow : "rgba(123, 117, 255, 0.15)";
     ctx.lineWidth = (this.halfWidth + 18) * 2;
-    ctx.shadowColor = dayPal ? COMPASS_VISUAL.primary : "#7b75ff";
-    ctx.shadowBlur = dayPal ? dayPal.roadShadowBlur : 10;
     this.drawPath(ctx); ctx.stroke();
-    ctx.shadowBlur = 0;
 
     // Rumble strip — alternating neon Pink (#ff4d6d) and Mint Green (#a4ff80)
     ctx.strokeStyle = dayPal ? dayPal.roadRumbleA : "#ff4d6d";
@@ -1105,13 +1113,14 @@ export class Track {
     const day = isDayMode();
     const roadPattern = getCompassFloorPattern(ctx, `${day ? "day" : "night"}:road`);
 
-    ctx.strokeStyle = day ? hexToRgba(COMPASS_VISUAL.primary, 0.22) : hexToRgba(COMPASS_VISUAL.primary, 0.14);
-    ctx.lineWidth = (this.halfWidth + 16) * 2;
-    ctx.shadowColor = COMPASS_VISUAL.primary;
-    ctx.shadowBlur = day ? 6 : 10;
+    ctx.strokeStyle = hexToRgba(COMPASS_VISUAL.primary, day ? 0.09 : 0.06);
+    ctx.lineWidth = (this.halfWidth + 24) * 2;
     this.drawPath(ctx);
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    ctx.strokeStyle = day ? hexToRgba(COMPASS_VISUAL.primary, 0.22) : hexToRgba(COMPASS_VISUAL.primary, 0.14);
+    ctx.lineWidth = (this.halfWidth + 16) * 2;
+    this.drawPath(ctx);
+    ctx.stroke();
 
     ctx.strokeStyle = roadPattern || (day ? COMPASS_VISUAL.baseMid : COMPASS_VISUAL.baseDark);
     ctx.lineWidth = this.halfWidth * 2;
@@ -1363,9 +1372,11 @@ export class Track {
 
       if (p.isJapanese) {
         if (p.type === "lantern") {
-          // Japanese paper lantern
-          ctx.shadowBlur = 18 * pulse;
-          ctx.shadowColor = p.color;
+          // Japanese paper lantern (layered halo instead of shadowBlur)
+          ctx.fillStyle = hexToRgba(p.color, 0.14 * pulse);
+          ctx.beginPath();
+          ctx.ellipse(0, -h * 0.5, p.r * 1.45, h * 0.55, 0, 0, TAU);
+          ctx.fill();
           ctx.fillStyle = hexToRgba(p.color, 0.35);
           ctx.strokeStyle = p.color;
           ctx.lineWidth = 2;
@@ -1379,7 +1390,6 @@ export class Track {
           ctx.fillRect(-p.r * 1.1, -h * 0.05, p.r * 2.2, 4);
           ctx.fillRect(-p.r * 1.1, -h * 0.95, p.r * 2.2, 4);
           // Glowing center
-          ctx.shadowBlur = 0;
           ctx.fillStyle = hexToRgba("#ffeebb", 0.6);
           ctx.beginPath();
           ctx.ellipse(0, -h * 0.5, p.r * 0.5, h * 0.2, 0, 0, TAU);
@@ -1388,8 +1398,8 @@ export class Track {
           // Mini torii gate
           const tw = p.r * 2.5;
           const th = h * 0.8;
-          ctx.shadowBlur = 12 * pulse;
-          ctx.shadowColor = "#c0392b";
+          ctx.fillStyle = hexToRgba("#c0392b", 0.18 * pulse);
+          ctx.fillRect(-tw * 0.58, -th - 6, tw * 1.16, 11);
           ctx.strokeStyle = "#c0392b";
           ctx.fillStyle = "#c0392b";
           ctx.lineWidth = 3;
@@ -1404,7 +1414,6 @@ export class Track {
           ctx.fillRect(-tw * 0.45, -th * 0.75, tw * 0.9, 4);
         } else {
           // Sakura cherry blossom tree
-          ctx.shadowBlur = 0;
           // Trunk
           ctx.strokeStyle = "#5c3a21";
           ctx.lineWidth = 3;
@@ -1422,25 +1431,24 @@ export class Track {
             ctx.lineTo(Math.cos(ba) * p.r, -h * 0.55 + Math.sin(ba) * p.r * 0.5);
             ctx.stroke();
           }
-          // Cherry blossom clusters
-          ctx.shadowBlur = 8 * pulse;
-          ctx.shadowColor = p.color;
-          ctx.fillStyle = p.color;
+          // Cherry blossom clusters (soft halo + core)
           for (let c = 0; c < 6; c++) {
             const ca = (c / 6) * TAU + p.pulseOffset;
             const cr = p.r * 0.6;
+            const bx = Math.cos(ca) * cr;
+            const by = -h * 0.55 + Math.sin(ca) * cr * 0.3;
+            ctx.fillStyle = hexToRgba(p.color, 0.22 * pulse);
             ctx.beginPath();
-            ctx.arc(Math.cos(ca) * cr, -h * 0.55 + Math.sin(ca) * cr * 0.3, 3 + pulse * 2, 0, TAU);
+            ctx.arc(bx, by, 5 + pulse * 2.5, 0, TAU);
+            ctx.fill();
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(bx, by, 3 + pulse * 2, 0, TAU);
             ctx.fill();
           }
         }
       } else {
-        // Default cyberpunk pillar
-        ctx.shadowBlur = day ? 8 * pulse : 15 * pulse;
-        ctx.shadowColor = p.color;
-        ctx.fillStyle = hexToRgba(p.color, day ? 0.10 : 0.15);
-        ctx.strokeStyle = p.color;
-        ctx.lineWidth = 1.5;
+        // Default cyberpunk pillar (layered low-alpha halos instead of shadowBlur)
         ctx.beginPath();
         ctx.moveTo(-p.r, 0);
         ctx.lineTo(-p.r, -h);
@@ -1448,18 +1456,25 @@ export class Track {
         ctx.lineTo(p.r, 0);
         ctx.quadraticCurveTo(0, p.r * 0.4, -p.r, 0);
         ctx.closePath();
+        ctx.strokeStyle = hexToRgba(p.color, (day ? 0.14 : 0.22) * pulse);
+        ctx.lineWidth = 5;
+        ctx.stroke();
+        ctx.fillStyle = hexToRgba(p.color, day ? 0.10 : 0.15);
+        ctx.strokeStyle = p.color;
+        ctx.lineWidth = 1.5;
         ctx.fill();
         ctx.stroke();
-        ctx.shadowBlur = 0;
         ctx.strokeStyle = day ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.7)";
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(0, -h);
         ctx.stroke();
+        ctx.fillStyle = hexToRgba(p.color, (day ? 0.20 : 0.32) * pulse);
+        ctx.beginPath();
+        ctx.arc(0, -h, p.r * 0.65, 0, TAU);
+        ctx.fill();
         ctx.fillStyle = day ? hexToRgba("#ffffff", 0.85) : "#ffffff";
-        ctx.shadowBlur = day ? 4 : 10;
-        ctx.shadowColor = p.color;
         ctx.beginPath();
         ctx.arc(0, -h, p.r * 0.35, 0, TAU);
         ctx.fill();

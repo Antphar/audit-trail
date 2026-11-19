@@ -11,11 +11,12 @@ import { bus } from "../core/events.js";
 import {
   game,
   isBattleMode,
+  isDayMode,
   isP2pBattleGuest,
   getActiveKarts,
 } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
-import { WORLD_W, WORLD_H } from "./track.js";
+import { WORLD_W, WORLD_H, RAMP_IMPULSE, BUMP_IMPULSE } from "./track.js";
 import {
   MergeConflict,
   PlaceboPill,
@@ -70,7 +71,7 @@ export function integrateKartVertical(kart, dt) {
   }
 }
 
-export function constrainArenaKart(kart, track) {
+export function constrainArenaKart(kart, track, dt = 1) {
   const floor = track?.arenaFloor;
   if (!floor || !kart) return false;
   const nd = ellipseNormDist(kart.x, kart.y, floor);
@@ -94,16 +95,17 @@ export function constrainArenaKart(kart, track) {
 
   const dot = kart.vx * outNx + kart.vy * outNy;
   if (dot > 0) {
-    kart.vx -= dot * outNx * 2.2;
-    kart.vy -= dot * outNy * 2.2;
-    kart.vx *= 0.78;
-    kart.vy *= 0.78;
+    const tx = kart.vx - dot * outNx;
+    const ty = kart.vy - dot * outNy;
+    const rn = dot - dot * 1.35; // restitution = 0.35
+    kart.vx = tx * 0.90 + rn * outNx;
+    kart.vy = ty * 0.90 + rn * outNy;
   } else {
-    kart.vx -= outNx * 0.8;
-    kart.vy -= outNy * 0.8;
+    kart.vx -= outNx * 0.8 * dt;
+    kart.vy -= outNy * 0.8 * dt;
   }
 
-  if (simNow() - (kart.lastBumpAt || -999) > 1100) {
+  if (simNow() - (kart.lastBumpAt ?? -Infinity) > 1100) {
     runtime.triggerQuote(kart, "crash");
     kart.lastBumpAt = simNow();
     if (kart.isPlayer) {
@@ -119,8 +121,8 @@ export function checkTrackRamps(kart, track) {
   const now = simNow();
   for (const ramp of track.ramps) {
     if (!ramp.cooldown) ramp.cooldown = new Map();
-    const last = ramp.cooldown.get(kart);
-    if (last && (now - last) < RAMP_COOLDOWN_MS) continue;
+    const last = ramp.cooldown.get(kart) ?? -Infinity;
+    if ((now - last) < RAMP_COOLDOWN_MS) continue;
 
     const cos = Math.cos(ramp.ang);
     const sin = Math.sin(ramp.ang);
@@ -258,6 +260,8 @@ export class Kart {
     this.amendmentTimer = 0;
     this.driftCharge = 0;      // increases while drifting -> mini-turbo
     this.driftDir = 0;
+    this.driftTier = 0;
+    this.steerVisual = 0;
     this.invuln = 0;
 
     // Arcade Item System
@@ -302,6 +306,7 @@ export class Kart {
 
     // Drafting / Boost state
     this.draftTimer = 0;
+    this.slipstreamTimer = 0;
     this.draftBoostTimer = 0;
     this.ultraBoostActive = false;
     this.mergePullTimer = 0;
@@ -481,6 +486,13 @@ export class Kart {
       if (this.amendmentTimer > 0) this.amendmentTimer -= dt;
       if (this.invuln > 0) this.invuln -= dt;
       if (this.draftBoostTimer > 0) this.draftBoostTimer -= dt;
+      this.mergePullTimer = 0;
+      this.mergePullTarget = null;
+      this.mergePullTargetId = null;
+      this.mergeBattleStole = false;
+      this.driftCharge = 0;
+      this.driftDir = 0;
+      this.driftTier = 0;
 
       this.vx *= Math.pow(0.92, dt);
       this.vy *= Math.pow(0.92, dt);
@@ -493,7 +505,7 @@ export class Kart {
         this.y = clamp(this.y, 30, WORLD_H - 30);
         integrateKartVertical(this, dt);
         checkTrackRamps(this, track);
-        constrainArenaKart(this, track);
+        constrainArenaKart(this, track, dt);
       } else {
         const c = track.closestSegment(this.x, this.y);
         const seg = track.segments[c.idx];
@@ -543,7 +555,7 @@ export class Kart {
     const powerMult = this.boostTimer > 0 ? 1.55 : (this.draftBoostTimer > 0 ? 1.25 : this.citationBoostTimer > 0 ? 1.12 : 1);
     const slowMult = this.placeboSlowTimer > 0 ? 0.72 : 1;
     const cap = this.maxSpeed * powerMult * slowMult * speedCapMul;
-    if (vF > cap) vF = cap;
+    if (vF > cap && !input.back) vF = Math.max(cap, vF - 0.14 * dt);
     if (vF < -this.reverseMax) vF = -this.reverseMax;
 
     // Lateral grip — drift reduces it for sliding, with continuous traction recovery
@@ -560,6 +572,7 @@ export class Kart {
     const steerInput = input.continuousSteer !== undefined
       ? clamp(input.continuousSteer, -1, 1)
       : (input.left ? -1 : 0) + (input.right ? 1 : 0);
+    this.steerVisual = (this.steerVisual || 0) + ((steerInput || 0) - (this.steerVisual || 0)) * Math.min(1, 0.25 * dt);
     if (steerInput !== 0) {
       let speedFactor = clamp(Math.abs(vF) / 2.0, 0, 1);
       let turn = this.turnSpeed * speedFactor;
@@ -572,20 +585,33 @@ export class Kart {
       this.heading += steerInput * turn * sign * dt;
     }
 
-    // Drift mini-turbo charge
-    if (drifting && steerInput !== 0 && Math.abs(vF) > 2) {
-      if (this.driftDir === 0) this.driftDir = steerInput;
-      if (this.driftDir === steerInput) {
-        // Artur trailing desperation mechanic: 1.8x charging rate!
-        let chargeAmt = dt * TUNING.DRIFT_CHARGE_RATE;
-        if (this.charId === "artur") {
-          const ranking = runtime.rankAll();
-          const rank = ranking.indexOf(this) + 1;
-          if (rank >= 3) {
-            chargeAmt *= 1.8;
-          }
+    // Drift mini-turbo charge (supports drift feathering once driftDir is locked)
+    if (drifting && this.driftDir === 0 && steerInput !== 0) {
+      this.driftDir = Math.sign(steerInput);
+    }
+    if (drifting && this.driftDir !== 0) {
+      // Artur trailing desperation mechanic: 1.8x charging rate!
+      let baseRate = dt * TUNING.DRIFT_CHARGE_RATE;
+      if (this.charId === "artur") {
+        const ranking = runtime.rankAll();
+        const rank = ranking.indexOf(this) + 1;
+        if (rank >= 3) {
+          baseRate *= 1.8;
         }
-        this.driftCharge += chargeAmt;
+      }
+      let chargeMult = 0.45; // neutral feathering
+      if (steerInput !== 0) {
+        chargeMult = Math.sign(steerInput) === this.driftDir ? 1.20 : 0.25;
+      }
+      this.driftCharge += baseRate * chargeMult;
+
+      let newTier = 0;
+      if (this.driftCharge >= TUNING.DRIFT_TIER3) newTier = 3;
+      else if (this.driftCharge >= TUNING.DRIFT_TIER2) newTier = 2;
+      else if (this.driftCharge >= TUNING.DRIFT_TIER1) newTier = 1;
+      if (newTier > (this.driftTier || 0)) {
+        this.driftTier = newTier;
+        bus?.emit("kart:driftTier", { kart: this, tier: newTier });
       }
 
       // Drift sparks generation from rear wheels
@@ -618,9 +644,9 @@ export class Kart {
           }
         }
       }
-    } else {
+    } else if (!drifting) {
       // Release drift -> boost if charged enough
-      if (this.driftCharge >= TUNING.DRIFT_TIER1 && Math.abs(vF) > 2) {
+      if (this.driftCharge >= TUNING.DRIFT_TIER1) {
         this.driftBoostCount = (this.driftBoostCount || 0) + 1;
         let boostTime = 0;
         let text = "";
@@ -685,6 +711,7 @@ export class Kart {
       }
       this.driftCharge = 0;
       this.driftDir = 0;
+      this.driftTier = 0;
     }
 
     // Recompose velocity
@@ -705,7 +732,7 @@ export class Kart {
 
     // Wall (deep off-road) collision: clamp position back toward road / arena boundary
     if (track.arenaFloor) {
-      constrainArenaKart(this, track);
+      constrainArenaKart(this, track, dt);
     } else {
       const c = track.closestSegment(this.x, this.y);
       const seg = track.segments[c.idx];
@@ -718,22 +745,21 @@ export class Kart {
         this.x -= nx * push;
         this.y -= ny * push;
 
-        // Bounce / recoil: elastic bounce off the wall normal
+        // Clean normal restitution (0.35) + 0.90 tangential velocity retention
         const dot = this.vx * nx + this.vy * ny;
         if (dot > 0) {
-          // Reflect velocity with 2.5x elasticity coefficient
-          this.vx -= dot * nx * 2.5;
-          this.vy -= dot * ny * 2.5;
-          // Dampen non-normal velocity slightly to prevent sliding along wall
-          this.vx *= 0.75;
-          this.vy *= 0.75;
+          const tx = this.vx - dot * nx;
+          const ty = this.vy - dot * ny;
+          const rn = dot - dot * 1.35; // restitution = 0.35
+          this.vx = tx * 0.90 + rn * nx;
+          this.vy = ty * 0.90 + rn * ny;
         } else {
           // Extra kick back onto track
           this.vx -= nx * 0.8 * dt;
           this.vy -= ny * 0.8 * dt;
         }
 
-        if (simNow() - this.lastBumpAt > 1100) {
+        if (simNow() - (this.lastBumpAt ?? -Infinity) > 1100) {
           runtime.triggerQuote(this, "crash");
           this.lastBumpAt = simNow();
           if (this.isPlayer) {
@@ -817,8 +843,10 @@ export class Kart {
 
     if (isDraftingNow) {
       this.draftTimer += dt;
+      this.slipstreamTimer = this.draftTimer;
       if (this.draftTimer >= 45) {
         this.draftTimer = 0;
+        this.slipstreamTimer = 0;
         this.draftBoostTimer = 60;
         this.boostTimer = Math.max(this.boostTimer, 45); // short boost surge
 
@@ -842,8 +870,8 @@ export class Kart {
         }
       }
 
-      // Wind-tunnel blue overlay trails
-      if (this.draftTimer > 15 && simRandom() < 0.5 * dt) {
+      // Wind-tunnel blue overlay trails (early feedback at > 12)
+      if (this.slipstreamTimer > 12 && simRandom() < 0.5 * dt) {
         const side = simRandom() < 0.5 ? -1 : 1;
         game.particles.add({
           type: "line",
@@ -860,6 +888,7 @@ export class Kart {
       }
     } else {
       this.draftTimer = Math.max(0, this.draftTimer - 0.4 * dt);
+      this.slipstreamTimer = this.draftTimer;
     }
 
     if (this.draftBoostTimer > 0) {
@@ -987,44 +1016,69 @@ export class Kart {
   }
 
   _drawVehicleWheels(ctx, style, halfL, halfW) {
+    const steerAng = (this.steerVisual || 0) * 0.4;
+    const drawFrontWheel = (x, y, w, h, rimDx = 0, rimDy = 0, rimW = 0, rimH = 0) => {
+      if (steerAng === 0) {
+        ctx.fillStyle = "#0a0a0a";
+        ctx.fillRect(x, y, w, h);
+        if (rimW > 0) {
+          ctx.fillStyle = "#222";
+          ctx.fillRect(x + rimDx, y + rimDy, rimW, rimH);
+        }
+        return;
+      }
+      ctx.save();
+      ctx.translate(x + w * 0.5, y + h * 0.5);
+      ctx.rotate(steerAng);
+      ctx.fillStyle = "#0a0a0a";
+      ctx.fillRect(-w * 0.5, -h * 0.5, w, h);
+      if (rimW > 0) {
+        ctx.fillStyle = "#222";
+        ctx.fillRect(-w * 0.5 + rimDx, -h * 0.5 + rimDy, rimW, rimH);
+      }
+      ctx.restore();
+    };
+
     ctx.fillStyle = "#0a0a0a";
     if (style === "formula") {
       const fw = 5, fh = 3, rw = 5, rh = 3;
-      ctx.fillRect(halfL - 6, -halfW - 1, fw, fh);
-      ctx.fillRect(halfL - 6, halfW - fh + 1, fw, fh);
+      drawFrontWheel(halfL - 6, -halfW - 1, fw, fh, 1, 1, 2, 2);
+      drawFrontWheel(halfL - 6, halfW - fh + 1, fw, fh, 1, 0, 2, 2);
+      ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(-halfL + 1, -halfW - 1, rw, rh);
       ctx.fillRect(-halfL + 1, halfW - rh + 1, rw, rh);
-      ctx.fillStyle = "#222";
-      ctx.fillRect(halfL - 5, -halfW, 2, 2);
-      ctx.fillRect(halfL - 5, halfW - 2, 2, 2);
     } else if (style === "muscle") {
-      ctx.fillRect(halfL - 8, -halfW + 1, 6, 3);
-      ctx.fillRect(halfL - 8, halfW - 4, 6, 3);
+      drawFrontWheel(halfL - 8, -halfW + 1, 6, 3);
+      drawFrontWheel(halfL - 8, halfW - 4, 6, 3);
+      ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(-halfL + 2, -halfW - 2, 8, 4);
       ctx.fillRect(-halfL + 2, halfW - 2, 8, 4);
       ctx.fillStyle = "#333";
       ctx.fillRect(-halfL + 4, -halfW - 1, 3, 2);
       ctx.fillRect(-halfL + 4, halfW - 1, 3, 2);
     } else if (style === "compact") {
-      ctx.fillRect(halfL - 5, -halfW + 3, 5, 2.5);
-      ctx.fillRect(halfL - 5, halfW - 5.5, 5, 2.5);
+      drawFrontWheel(halfL - 5, -halfW + 3, 5, 2.5);
+      drawFrontWheel(halfL - 5, halfW - 5.5, 5, 2.5);
+      ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(-halfL + 2, -halfW + 3, 5, 2.5);
       ctx.fillRect(-halfL + 2, halfW - 5.5, 5, 2.5);
     } else if (style === "armored") {
-      ctx.fillRect(halfL - 7, -halfW + 2, 7, 4);
-      ctx.fillRect(halfL - 7, halfW - 6, 7, 4);
+      drawFrontWheel(halfL - 7, -halfW + 2, 7, 4);
+      drawFrontWheel(halfL - 7, halfW - 6, 7, 4);
+      ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(-halfL + 1, -halfW + 2, 7, 4);
       ctx.fillRect(-halfL + 1, halfW - 6, 7, 4);
     } else if (style === "coupe") {
-      ctx.fillRect(halfL - 6, -halfW + 2, 6, 3);
-      ctx.fillRect(halfL - 6, halfW - 5, 6, 3);
+      drawFrontWheel(halfL - 6, -halfW + 2, 6, 3);
+      drawFrontWheel(halfL - 6, halfW - 5, 6, 3);
+      ctx.fillStyle = "#0a0a0a";
       ctx.fillRect(-halfL + 2, -halfW + 1, 7, 3.5);
       ctx.fillRect(-halfL + 2, halfW - 4.5, 7, 3.5);
     } else {
       ctx.fillRect(-12, -12, 7, 4);
       ctx.fillRect(-12, 8, 7, 4);
-      ctx.fillRect(7, -12, 7, 4);
-      ctx.fillRect(7, 8, 7, 4);
+      drawFrontWheel(7, -12, 7, 4);
+      drawFrontWheel(7, 8, 7, 4);
     }
   }
 
@@ -1228,6 +1282,27 @@ export class Kart {
     const headSize = style === "armored" ? 3 : 2;
     ctx.fillRect(headX, -6, headSize, headSize + 1);
     ctx.fillRect(headX, 6 - headSize - 1, headSize, headSize + 1);
+    if (!isDayMode()) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const coneLen = 68;
+      const coneSpread = 16;
+      for (const ly of [-4.5, 4.5]) {
+        const grad = ctx.createLinearGradient(headX, ly, headX + coneLen, ly);
+        grad.addColorStop(0, `rgba(255, 240, 175, ${0.22 * headlightBrightness})`);
+        grad.addColorStop(0.55, `rgba(255, 225, 130, ${0.09 * headlightBrightness})`);
+        grad.addColorStop(1, "rgba(255, 220, 120, 0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.moveTo(headX, ly - 1.5);
+        ctx.lineTo(headX + coneLen, ly - coneSpread);
+        ctx.lineTo(headX + coneLen, ly + coneSpread);
+        ctx.lineTo(headX, ly + 1.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
     const tailX = -halfL;
     if (style !== "formula") {
       ctx.fillStyle = COMPASS_VISUAL.baseDark;
@@ -1327,12 +1402,19 @@ export class Kart {
     return `rgb(${Math.round(lerp(c[0], 0, t))},${Math.round(lerp(c[1], 0, t))},${Math.round(lerp(c[2], 0, t))})`;
   }
   _parseHex(h) {
+    if (!h || typeof h !== "string") return [255, 255, 255];
     if (h.startsWith("rgb")) {
-      const m = h.match(/\d+/g); return [+m[0], +m[1], +m[2]];
+      const m = h.match(/\d+/g);
+      if (!m || m.length < 3) return [255, 255, 255];
+      return [+m[0], +m[1], +m[2]];
     }
     let s = h.replace("#", "");
     if (s.length === 3) s = s.split("").map(c => c + c).join("");
-    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+    if (s.length < 6) return [255, 255, 255];
+    const r = parseInt(s.slice(0, 2), 16);
+    const g = parseInt(s.slice(2, 4), 16);
+    const b = parseInt(s.slice(4, 6), 16);
+    return [Number.isFinite(r) ? r : 255, Number.isFinite(g) ? g : 255, Number.isFinite(b) ? b : 255];
   }
 
   update(dt, track, allKarts) {

@@ -23,6 +23,9 @@ export class AIKart extends Kart {
     this.aiNoise = rand(0, 100);
     this.lateralOffset = rand(-0.45, 0.45);
     this.itemTimer = rand(120, 360);
+    this._stuckFrames = 0;
+    this._unstuckFrames = 0;
+    this._unstuckDir = 1;
   }
 
   getControls(dt, track, allKarts) {
@@ -67,8 +70,10 @@ export class AIKart extends Kart {
       }
     }
 
-    const currentWP = track.waypoints[(this.aiTargetIdx - 1 + track.n) % track.n];
-    const farWP = track.waypoints[(this.aiTargetIdx + 1) % track.n];
+    const prevWpIdx = isOpen ? Math.max(0, this.aiTargetIdx - 1) : (this.aiTargetIdx - 1 + track.n) % track.n;
+    const farWpIdx = isOpen ? Math.min(track.n - 1, this.aiTargetIdx + 1) : (this.aiTargetIdx + 1) % track.n;
+    const currentWP = track.waypoints[prevWpIdx];
+    const farWP = track.waypoints[farWpIdx];
     const ang1 = Math.atan2(target.y - currentWP.y, target.x - currentWP.x);
     const ang2 = Math.atan2(farWP.y - target.y, farWP.x - target.x);
     const curvature = Math.abs(angleDiff(ang1, ang2));
@@ -129,6 +134,7 @@ export class AIKart extends Kart {
         }
       }
     }
+    steerAdj = clamp(steerAdj, -0.85, 0.85);
 
     const desired = Math.atan2(aimY - this.y, aimX - this.x);
     const diff = angleDiff(this.heading, desired) + steerAdj;
@@ -147,6 +153,24 @@ export class AIKart extends Kart {
       input.forward = false;
     }
 
+    if (this._unstuckFrames > 0) {
+      this._unstuckFrames -= dt;
+      input.forward = false;
+      input.back = true;
+      input.drift = false;
+      input.left = this._unstuckDir < 0;
+      input.right = this._unstuckDir > 0;
+    } else if (!this.eliminated && !this.finished && this.spinoutTimer <= 0 && Math.abs(speed) < 0.65) {
+      this._stuckFrames += dt;
+      if (this._stuckFrames > 45) {
+        this._stuckFrames = 0;
+        this._unstuckFrames = 28;
+        this._unstuckDir = diff < 0 ? 1 : -1;
+      }
+    } else {
+      this._stuckFrames = 0;
+    }
+
     // Strategic AI Item Decision engine
     if (this.itemState === "active" && this.itemSlot) {
       let shouldUse = false;
@@ -154,8 +178,24 @@ export class AIKart extends Kart {
 
       if (isBattleMode()) {
         const td = this._battleTargetDist;
-        const OFFENSIVE = { dossier: 1, deauth: 1, conflict: 1, mergerequest: 1, hotfix: 1 };
-        if (OFFENSIVE[this.itemSlot]) {
+        const bt = this._battleTarget;
+        const OFFENSIVE = { deauth: 1, mergerequest: 1, hotfix: 1 };
+        if (this.itemSlot === "dossier") {
+          if (bt && td < 260) {
+            const aimErr = Math.abs(angleDiff(this.heading, Math.atan2(bt.y - this.y, bt.x - this.x)));
+            shouldUse = aimErr < 0.5;
+          }
+        } else if (this.itemSlot === "conflict") {
+          shouldUse = getActiveKarts().some(k => {
+            if (!k || k === this || k.eliminated || k.finished) return false;
+            const d = dist(this.x, this.y, k.x, k.y);
+            if (d >= 160) return false;
+            const rx = k.x - this.x;
+            const ry = k.y - this.y;
+            const localForward = rx * fx + ry * fy;
+            return localForward < 20;
+          });
+        } else if (OFFENSIVE[this.itemSlot]) {
           shouldUse = td < 260;
         } else if (this.itemSlot === "boost" || this.itemSlot === "fasttrack") {
           shouldUse = td > 200 || td === Infinity;

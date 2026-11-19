@@ -78,7 +78,8 @@ export class PlayerKart extends Kart {
     const deficit = leaderProgress - runtime.progressValue(this);
     let catchupMult = 1.0;
     if (deficit > 0) {
-      catchupMult = 1 + Math.min(TUNING.PLAYER_CATCHUP_MAX, (deficit / TUNING.PLAYER_CATCHUP_RANGE) * TUNING.PLAYER_CATCHUP_MAX);
+      const range = game.track?.isOpen ? TUNING.PLAYER_CATCHUP_RANGE : Math.max(4, (game.track?.checkpointCount || 12) * 0.5);
+      catchupMult = 1 + Math.min(TUNING.PLAYER_CATCHUP_MAX, (deficit / range) * TUNING.PLAYER_CATCHUP_MAX);
     }
     return { speedMult: catchupMult, accelMult: catchupMult };
   }

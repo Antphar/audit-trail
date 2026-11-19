@@ -39,47 +39,43 @@ export function apply3DMapTheme() {
       THREE_STATE.dirLight.intensity = 0.9;
     }
   }
-  THREE_STATE.scene.traverse((child) => {
-    if (child.isHemisphereLight) {
-      if (day) {
-        child.color.setHex(isArenaDay ? 0x8fc7ef : 0xb8d4ff);
-        child.groundColor.setHex(isArenaDay ? 0x78a977 : 0x8ab878);
-        child.intensity = isArenaDay ? 0.75 : 1.1;
-      } else {
-        child.color.setHex(0x2a1860);
-        child.groundColor.setHex(0x0a2f12);
-        child.intensity = 0.8;
-      }
+  if (THREE_STATE.hemiLight) {
+    if (day) {
+      THREE_STATE.hemiLight.color.setHex(isArenaDay ? 0x8fc7ef : 0xb8d4ff);
+      THREE_STATE.hemiLight.groundColor.setHex(isArenaDay ? 0x78a977 : 0x8ab878);
+      THREE_STATE.hemiLight.intensity = isArenaDay ? 0.75 : 1.1;
+    } else {
+      THREE_STATE.hemiLight.color.setHex(0x2a1860);
+      THREE_STATE.hemiLight.groundColor.setHex(0x0a2f12);
+      THREE_STATE.hemiLight.intensity = 0.8;
     }
-    if (child.isAmbientLight) {
-      child.intensity = day ? (isArenaDay ? 0.28 : 0.55) : 0.35;
-      child.color.setHex(day ? (isArenaDay ? 0xd8e7f0 : 0xf0f4ff) : 0x1a1040);
-    }
-  });
+  }
+  if (THREE_STATE.ambientLight) {
+    THREE_STATE.ambientLight.intensity = day ? (isArenaDay ? 0.28 : 0.55) : 0.35;
+    THREE_STATE.ambientLight.color.setHex(day ? (isArenaDay ? 0xd8e7f0 : 0xf0f4ff) : 0x1a1040);
+  }
   if (THREE_STATE.playerLight) THREE_STATE.playerLight.intensity = isArenaDay ? 0.35 : 0.9;
   if (THREE_STATE.backLight) THREE_STATE.backLight.intensity = isArenaDay ? 0.18 : 0.35;
   if (THREE_STATE.rimLight) THREE_STATE.rimLight.intensity = isArenaDay ? 0.18 : 0.3;
 
-  // Update sky dome texture
-  THREE_STATE.scene.traverse(child => {
-    if (child.geometry && child.geometry.type === "SphereGeometry" &&
-        child.material && child.material.side === T.BackSide && child.material.map) {
-      const c = document.createElement("canvas");
-      c.width = 1; c.height = 256;
-      const cx = c.getContext("2d");
-      const grad = cx.createLinearGradient(0, 0, 0, 256);
-      const stops = theme.sky;
-      for (let i = 0; i < stops.length; i++) {
-        grad.addColorStop(i / (stops.length - 1), stops[i]);
-      }
-      cx.fillStyle = grad;
-      cx.fillRect(0, 0, 1, 256);
-      child.material.map.image = c;
-      child.material.map.needsUpdate = true;
-      child.material.toneMapped = !(isArenaDay || (day && !MAPS[game.selectedMapIdx || 0].arena));
-      child.material.needsUpdate = true;
+  // Update sky dome texture directly
+  if (THREE_STATE.skyMesh?.material?.map) {
+    const skyMat = THREE_STATE.skyMesh.material;
+    const c = document.createElement("canvas");
+    c.width = 1; c.height = 256;
+    const cx = c.getContext("2d");
+    const grad = cx.createLinearGradient(0, 0, 0, 256);
+    const stops = theme.sky;
+    for (let i = 0; i < stops.length; i++) {
+      grad.addColorStop(i / (stops.length - 1), stops[i]);
     }
-  });
+    cx.fillStyle = grad;
+    cx.fillRect(0, 0, 1, 256);
+    skyMat.map.image = c;
+    skyMat.map.needsUpdate = true;
+    skyMat.toneMapped = !(isArenaDay || (day && !MAPS[game.selectedMapIdx || 0].arena));
+    skyMat.needsUpdate = true;
+  }
 
   // Update ground texture
   if (THREE_STATE.groundMesh && THREE_STATE.groundMesh.material) {
@@ -95,9 +91,12 @@ export function apply3DMapTheme() {
       gGrad.addColorStop(1, theme.ground);
       cx.fillStyle = gGrad;
       cx.fillRect(0, 0, 512, 512);
+      const col = new T.Color(theme.groundAccent);
+      const r = Math.floor(col.r * 255);
+      const g = Math.floor(col.g * 255);
+      const b = Math.floor(col.b * 255);
       for (let i = 0; i < 2000; i++) {
-        const col = new T.Color(theme.groundAccent);
-        cx.fillStyle = `rgba(${Math.floor(col.r * 255)}, ${Math.floor(col.g * 255)}, ${Math.floor(col.b * 255)}, ${0.1 + Math.random() * 0.15})`;
+        cx.fillStyle = `rgba(${r}, ${g}, ${b}, ${0.1 + Math.random() * 0.15})`;
         cx.fillRect(Math.random() * 512, Math.random() * 512, 1 + Math.random() * 3, 1 + Math.random() * 3);
       }
       gMat.map.image = c;
@@ -105,13 +104,11 @@ export function apply3DMapTheme() {
     }
   }
 
-  // Update grid colors
-  THREE_STATE.scene.traverse(child => {
-    if (child.isGridHelper) {
-      child.material.color.set(theme.gridColor);
-      child.material.opacity = 0.18;
-    }
-  });
+  // Update grid colors directly
+  if (THREE_STATE.gridHelper?.material) {
+    THREE_STATE.gridHelper.material.color.set(theme.gridColor);
+    THREE_STATE.gridHelper.material.opacity = 0.18;
+  }
 
   // Build distant scenery per map theme
   build3DScenery(theme);
@@ -222,21 +219,53 @@ export function build3DScenery(theme) {
 }
 
 
+let _viewModeReqToken = 0;
+
+function apply2DViewDom() {
+  game.viewMode = "2d";
+  renderRuntime.saveGameSettings({ viewMode: "2d" });
+  renderRuntime.canvas.style.display = "block";
+  canvas3d.style.display = "none";
+  if (hudCanvas) hudCanvas.style.display = "none";
+  if (renderRuntime.view2dBtn) renderRuntime.view2dBtn.classList.add("active");
+  if (renderRuntime.view3dBtn) renderRuntime.view3dBtn.classList.remove("active");
+}
+
+function apply3DViewDom() {
+  game.viewMode = "3d";
+  renderRuntime.saveGameSettings({ viewMode: "3d" });
+  renderRuntime.canvas.style.display = "none";
+  canvas3d.style.display = "block";
+  if (hudCanvas) hudCanvas.style.display = "block";
+  if (renderRuntime.view2dBtn) renderRuntime.view2dBtn.classList.remove("active");
+  if (renderRuntime.view3dBtn) renderRuntime.view3dBtn.classList.add("active");
+}
+
 export function setViewMode(mode) {
-  game.viewMode = mode;
-  renderRuntime.saveGameSettings({ viewMode: mode });
-  const is3d = mode === "3d";
-  renderRuntime.canvas.style.display = is3d ? "none" : "block";
-  canvas3d.style.display = is3d ? "block" : "none";
-  if (hudCanvas) hudCanvas.style.display = is3d ? "block" : "none";
-  if (renderRuntime.view2dBtn) renderRuntime.view2dBtn.classList.toggle("active", !is3d);
-  if (renderRuntime.view3dBtn) renderRuntime.view3dBtn.classList.toggle("active", is3d);
-  if (is3d) {
-    loadThreeJS(() => {
-      if (!THREE_STATE.renderer) init3DScene();
-      rebuild3DTrack();
-    });
+  const reqToken = ++_viewModeReqToken;
+  if (mode !== "3d") {
+    apply2DViewDom();
+    return;
   }
+
+  const fallback2D = () => {
+    if (reqToken !== _viewModeReqToken) return;
+    apply2DViewDom();
+    window.showGameToast?.("3D mode unavailable on this device — using 2D view.", "error");
+  };
+
+  loadThreeJS(() => {
+    if (reqToken !== _viewModeReqToken) return;
+    try {
+      if (!THREE_STATE.renderer) init3DScene();
+      if (!THREE_STATE.renderer) throw new Error("WebGL renderer unavailable");
+    } catch (_err) {
+      fallback2D();
+      return;
+    }
+    apply3DViewDom();
+    rebuild3DTrack();
+  }, fallback2D);
 }
 
 
@@ -244,8 +273,21 @@ export function init3DScene() {
   if (!window.THREE || THREE_STATE.renderer) return;
   const T = window.THREE;
 
+  if (canvas3d && !canvas3d._webglContextListenersAttached) {
+    canvas3d._webglContextListenersAttached = true;
+    canvas3d.addEventListener("webglcontextlost", (e) => {
+      e.preventDefault();
+      THREE_STATE.contextLost = true;
+    });
+    canvas3d.addEventListener("webglcontextrestored", () => {
+      THREE_STATE.contextLost = false;
+      apply3DMapTheme();
+      rebuild3DTrack();
+    });
+  }
+
   THREE_STATE.renderer = new T.WebGLRenderer({ canvas: canvas3d, antialias: true, alpha: false });
-  THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25));
+  THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   THREE_STATE.renderer.setSize(renderRuntime.getViewW(), renderRuntime.getViewH());
   THREE_STATE.renderer.setClearColor(0x060514);
   THREE_STATE.renderer.toneMapping = T.ACESFilmicToneMapping;
@@ -261,8 +303,10 @@ export function init3DScene() {
 
   const hemiLight = new T.HemisphereLight(0x2a1860, 0x0a2f12, 0.8);
   THREE_STATE.scene.add(hemiLight);
+  THREE_STATE.hemiLight = hemiLight;
   const ambient = new T.AmbientLight(0x1a1040, 0.35);
   THREE_STATE.scene.add(ambient);
+  THREE_STATE.ambientLight = ambient;
   const dirLight = new T.DirectionalLight(0x9999ff, 0.9);
   dirLight.position.set(300, 600, -300);
   dirLight.castShadow = ENABLE_3D_SHADOWS;
@@ -331,6 +375,7 @@ export function init3DScene() {
   grid.material.opacity = 0.22;
   grid.material.transparent = true;
   THREE_STATE.scene.add(grid);
+  THREE_STATE.gridHelper = grid;
 
   // Gradient sky dome
   const skyGeo = new T.SphereGeometry(5000, 32, 24);
@@ -387,6 +432,7 @@ export function init3DScene() {
 
   window.addEventListener("resize", () => {
     if (THREE_STATE.renderer) {
+      THREE_STATE.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
       THREE_STATE.renderer.setSize(renderRuntime.getViewW(), renderRuntime.getViewH());
       THREE_STATE.camera.aspect = renderRuntime.getViewW() / renderRuntime.getViewH();
       THREE_STATE.camera.updateProjectionMatrix();

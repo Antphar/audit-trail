@@ -514,10 +514,20 @@
     border-color: var(--compass-primary);
     box-shadow: 0 0 10px rgba(123, 117, 255, 0.3);
   }
+  .p1-status.ready {
+    color: var(--compass-success);
+    border-color: rgba(164, 255, 128, 0.55);
+    box-shadow: 0 0 12px rgba(164, 255, 128, 0.28);
+  }
   .p2-status.locked {
     color: var(--compass-accent);
     border-color: rgba(253, 153, 39, 0.55);
     box-shadow: 0 0 10px rgba(253, 153, 39, 0.25);
+  }
+  .p2-status.ready {
+    color: var(--compass-success);
+    border-color: rgba(164, 255, 128, 0.55);
+    box-shadow: 0 0 12px rgba(164, 255, 128, 0.28);
   }
 
   .p2p-panel {
@@ -575,6 +585,12 @@
     color: #a8acd0;
     font-weight: 700;
     min-height: 18px;
+  }
+  .p2p-status.ready {
+    color: var(--compass-success);
+  }
+  .p2p-status.error {
+    color: #ff4d6d;
   }
   .p2p-code-display {
     background: rgba(87, 242, 255, 0.08);
@@ -739,7 +755,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    min-width: min(560px, 86vw);
+    min-width: 0;
   }
   .ai-global-actions {
     display: flex;
@@ -826,7 +842,7 @@
     width: 100%;
     max-height: 30vh;
     overflow-y: auto;
-    padding: 2px 6px 8px;
+    padding: 12px 6px 8px;
   }
   .p2p-map-category {
     width: 100%;
@@ -1059,4 +1075,155 @@
   @keyframes bounce {
     0% { transform: translateY(0); }
     100% { transform: translateY(-4px); }
+  }
+
+  /* ---- Accessibility helpers & focus rings ---- */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  :is(.btn, .char-card, .map-card, .volume-slider, select, input, .p2p-code-display, .game-toast-close):focus-visible {
+    outline: 2px solid #57f2ff;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 4px rgba(87, 242, 255, 0.24);
+  }
+
+  /* ---- Non-blocking Toast System (popover="manual" + fallback) ---- */
+  .toast-region {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    max-width: min(380px, calc(100vw - 32px));
+    pointer-events: none;
+  }
+
+  .game-toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(16, 13, 32, 0.94);
+    color: var(--compass-content);
+    border: 1.5px solid rgba(123, 117, 255, 0.55);
+    box-shadow: 0 10px 30px rgba(8, 6, 22, 0.6), 0 0 20px rgba(123, 117, 255, 0.2);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    font-size: 13.5px;
+    line-height: 1.4;
+    font-weight: 600;
+    text-align: left;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.22s ease, transform 0.22s ease, display 0.22s ease, overlay 0.22s ease;
+    transition-behavior: allow-discrete;
+  }
+
+  [popover].game-toast {
+    position: fixed;
+    inset: auto;
+    top: var(--toast-top, 18px);
+    right: 18px;
+    margin: 0;
+  }
+
+  .game-toast:not([popover]) {
+    display: none;
+  }
+
+  .game-toast:is(:popover-open, .toast-open) {
+    display: flex;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @starting-style {
+    .game-toast:is(:popover-open, .toast-open) {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+  }
+
+  .game-toast--info {
+    border-color: rgba(87, 242, 255, 0.55);
+  }
+  .game-toast--success {
+    border-color: rgba(164, 255, 128, 0.65);
+    box-shadow: 0 10px 30px rgba(8, 6, 22, 0.6), 0 0 20px rgba(164, 255, 128, 0.2);
+  }
+  .game-toast--warn {
+    border-color: rgba(253, 153, 39, 0.7);
+    box-shadow: 0 10px 30px rgba(8, 6, 22, 0.6), 0 0 20px rgba(253, 153, 39, 0.22);
+  }
+  .game-toast--error {
+    border-color: rgba(255, 77, 109, 0.8);
+    box-shadow: 0 10px 30px rgba(8, 6, 22, 0.65), 0 0 22px rgba(255, 77, 109, 0.28);
+  }
+
+  .game-toast-msg {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .game-toast-close {
+    flex: 0 0 auto;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--compass-content);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 8px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 2px 7px;
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .game-toast-close:hover {
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  @media (max-width: 680px) {
+    .ai-select-panel {
+      grid-template-columns: 1fr;
+    }
+    .ai-global-actions {
+      justify-content: flex-start;
+    }
+    .volume-row {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .volume-value {
+      text-align: left;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pulse,
+    .p-badge,
+    .promptly-wiggle {
+      animation: none !important;
+    }
+    .game-toast {
+      transition: none !important;
+      transform: none !important;
+    }
   }

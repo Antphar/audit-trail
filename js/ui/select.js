@@ -1,6 +1,7 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
 import { clamp, TAU } from "../core/math.js";
+import { resetAllInputs } from "../core/input.js";
 import {
   MAPS, GRAND_PRIX_ID, clampGrandPrixRaces, regenerateDragonTrail,
 } from "../config/maps.js";
@@ -436,6 +437,9 @@ export function renderSelectScreen() {
   CHARACTERS.forEach((char, idx) => {
     const card = document.createElement("div");
     card.className = "char-card" + (idx === game.selectedCharIdx ? " selected" : "");
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-pressed", String(idx === game.selectedCharIdx));
     card.style.setProperty("--char-color", char.color);
     card.style.setProperty("--char-glow", char.colorGlow);
     card.style.setProperty("--char-gradient", char.gradient);
@@ -465,6 +469,14 @@ export function renderSelectScreen() {
         <div class="ultimate-copy"><strong>Ultimate: ${getUltimateInfo(char.id).name}</strong>${getUltimateInfo(char.id).desc}</div>
       </div>
     `;
+
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        e.stopPropagation();
+        card.click();
+      }
+    });
 
     card.addEventListener("click", () => {
       if (game.p2pMode && game.p1Locked) return;
@@ -502,6 +514,15 @@ export function updateDriveButtonLabel() {
 
 
 export function showSelectScreen() {
+  if (game._finishTimeoutId) {
+    clearTimeout(game._finishTimeoutId);
+    game._finishTimeoutId = null;
+  }
+  if (game._mpStartTimeoutId) {
+    clearTimeout(game._mpStartTimeoutId);
+    game._mpStartTimeoutId = null;
+  }
+  game.finishScheduled = false;
   if (
     isGrandPrixActive() &&
     [STATE.COUNTDOWN, STATE.RACING, STATE.PAUSED, STATE.FINISHED].includes(game.state)
@@ -516,6 +537,7 @@ export function showSelectScreen() {
   }
   uiRuntime.hideAll();
   screens.show("select");
+  resetAllInputs();
   game.state = STATE.SELECT;
   game.selectedCharIdx = game.selectedCharIdx || 0;
 
@@ -677,7 +699,15 @@ export function buildMapCard({
 } = {}) {
   const card = document.createElement("div");
   card.className = classes + (selected ? " selected" : "");
-  if (disabled) card.classList.add("disabled");
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-pressed", String(!!selected));
+  if (disabled) {
+    card.classList.add("disabled");
+    card.setAttribute("aria-disabled", "true");
+    card.tabIndex = -1;
+  } else {
+    card.tabIndex = 0;
+  }
 
   card.innerHTML = `
     ${badge}
@@ -689,6 +719,13 @@ export function buildMapCard({
   `;
 
   if (!disabled && onSelect) {
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        e.stopPropagation();
+        card.click();
+      }
+    });
     card.addEventListener("click", () => {
       if (game.p1Locked) return;
       onSelect();

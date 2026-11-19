@@ -2,6 +2,7 @@ import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
 import { MAPS, GRAND_PRIX_ID, regenerateDragonTrail } from "../config/maps.js";
 import { clamp, dist } from "../core/math.js";
+import { simNow } from "../core/clock.js";
 import { screens } from "../ui/screens.js";
 import { bus } from "../core/events.js";
 import {
@@ -24,6 +25,16 @@ import { netRuntime } from "./net-runtime.js";
 
 export let peer = null;
 export const p2pConnections = new Map();
+
+function notifyErrorToast(message) {
+  if (netRuntime.showToast) {
+    netRuntime.showToast(message, "error");
+    return;
+  }
+  if (typeof window !== "undefined" && typeof window.showGameToast === "function") {
+    window.showGameToast(message, "error");
+  }
+}
 
 export function setPeer(p) {
   peer = p;
@@ -210,23 +221,47 @@ export function getP2pLobbyMapPayload() {
     battleUntimed: !!game.battleUntimed,
     mapIdx: game.selectedMapIdx,
     mapSelection: game.mapSelection,
-    grandPrixRaces: netRuntime.grandPrixRaces,
+    grandPrixRaces: netRuntime.getGrandPrixRaces ? netRuntime.getGrandPrixRaces() : 3,
     trackIdx: Sound.trackIdx,
   };
 }
 
-export function loadPeerJS(callback) {
-  if (window.Peer) {
-    callback();
+let _peerJsLoading = false;
+let _peerJsQueue = [];
+let _peerJsScript = null;
+
+export function loadPeerJS(callback, onError) {
+  if (typeof window !== "undefined" && window.Peer) {
+    callback?.();
     return;
   }
+  _peerJsQueue.push({ callback, onError });
+  if (_peerJsLoading) return;
+  _peerJsLoading = true;
+
   const script = document.createElement("script");
   script.src = "peerjs.min.js";
+  _peerJsScript = script;
   script.onload = () => {
-    callback();
+    _peerJsLoading = false;
+    _peerJsScript = null;
+    const pending = _peerJsQueue.splice(0);
+    for (const item of pending) {
+      try { item.callback?.(); } catch (e) {}
+    }
   };
   script.onerror = () => {
-    alert("Could not load PeerJS library. Please check your internet connection.");
+    _peerJsLoading = false;
+    if (_peerJsScript && _peerJsScript.parentNode) {
+      _peerJsScript.parentNode.removeChild(_peerJsScript);
+    }
+    _peerJsScript = null;
+    const msg = "Could not load PeerJS library. Please check your internet connection.";
+    notifyErrorToast(msg);
+    const pending = _peerJsQueue.splice(0);
+    for (const item of pending) {
+      try { item.onError?.(msg); } catch (e) {}
+    }
   };
   document.head.appendChild(script);
 }
@@ -484,7 +519,7 @@ export function sendGuestSync() {
 }
 
 export function handleP2pDisconnect({ silent = false } = {}) {
-  p2pJoinAttemptSeq++;
+  const prevState = game.state;
   const battleEndPending = !!game.p2pBattleEndPending;
   const leaveMsg = {
     type: "player_left",
@@ -520,17 +555,26 @@ export function handleP2pDisconnect({ silent = false } = {}) {
   game.p1Locked = false;
   game.p2Locked = false;
   game.p2pBattleEndPending = false;
+  game._pauseFromState = null;
 
   if (netRuntime.resetP2pLobbyDom) netRuntime.resetP2pLobbyDom();
 
-  if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED || battleEndPending) {
+  if (
+    prevState === STATE.SELECT ||
+    prevState === STATE.RACING ||
+    prevState === STATE.COUNTDOWN ||
+    prevState === STATE.PAUSED ||
+    prevState === STATE.FINISHED ||
+    battleEndPending
+  ) {
     Sound.stopAllEngines();
     Sound.stopAllDriftSqueals();
     Sound.stopAllRumbles();
+    Sound.stopMusic(true);
     game.state = STATE.TITLE;
     netRuntime.hideAll();
     screens.show("title");
-    if (!silent) alert("Peer disconnected! Returning to menu.");
+    if (!silent) notifyErrorToast("Peer disconnected! Returning to menu.");
   }
 }
 
@@ -616,14 +660,27 @@ function handleP2pLobbyConnected(data, sourceConn = null) {
   netRuntime.applyLobbyMapSelection(data);
   if (data.trackIdx !== undefined && data.trackIdx !== null) netRuntime.setMusicTrack(data.trackIdx);
   netRuntime.renderP2pLobby();
-  netRuntime.p2pJoinStatus.innerText = "Connected! Waiting for host to start...";
-  netRuntime.p2pJoinStatus.className = "p2p-status ready";
+  if (netRuntime.p2pJoinStatus) {
+    netRuntime.p2pJoinStatus.innerText = "Connected! Waiting for host to start...";
+    netRuntime.p2pJoinStatus.className = "p2p-status ready";
+  }
   netRuntime.enterP2pSelectScreen();
 }
 
 function handleP2pLobbyFull(data, sourceConn = null) {
-  netRuntime.p2pJoinStatus.innerText = "Lobby is full!";
-  netRuntime.p2pJoinStatus.className = "p2p-status error";
+  if (netRuntime.p2pJoinStatus) {
+    netRuntime.p2pJoinStatus.innerText = "Lobby is full!";
+    netRuntime.p2pJoinStatus.className = "p2p-status error";
+  }
+}
+
+function handleP2pRaceInProgress() {
+  handleP2pDisconnect({ silent: true });
+  if (netRuntime.p2pJoinStatus) {
+    netRuntime.p2pJoinStatus.innerText = "Race already in progress!";
+    netRuntime.p2pJoinStatus.className = "p2p-status error";
+  }
+  notifyErrorToast("Cannot join: race is already in progress.");
 }
 
 function handleP2pLobbyState(data, sourceConn = null) {
@@ -749,11 +806,12 @@ function handleP2pHostSync(data, sourceConn = null) {
     game.p2pConnectionUnstable = false;
   }
   const gs = data.gs ?? data.state;
+  const rt = data.rt ?? data.raceTime;
   if (gs !== undefined) {
-    if (game.state !== gs) {
-      if (game.p2pMode && game.state === STATE.PAUSED && gs !== STATE.FINISHED) {
-        // Keep local pause overlay while the online race continues.
-      } else if (gs === STATE.FINISHED) {
+    const locallyPaused = game.p2pMode && game.state === STATE.PAUSED;
+    const effectiveState = locallyPaused ? (game._pauseFromState || STATE.RACING) : game.state;
+    if (effectiveState !== gs) {
+      if (gs === STATE.FINISHED) {
         game._pauseFromState = null;
         screens.hide("pause");
         game.state = STATE.FINISHED;
@@ -762,18 +820,30 @@ function handleP2pHostSync(data, sourceConn = null) {
         } else {
           netRuntime.showFinishScreen();
         }
+      } else if (gs === STATE.RACING && effectiveState === STATE.COUNTDOWN) {
+        netRuntime.applyRocketStart?.();
+        netRuntime.startRaceSim?.();
+        if (rt !== undefined) {
+          game.startTime = simNow() - (Number(rt) || 0) * 1000;
+        }
+        if (locallyPaused) {
+          game._pauseFromState = STATE.RACING;
+          game.state = STATE.PAUSED;
+        }
+      } else if (locallyPaused) {
+        game._pauseFromState = gs;
       } else {
         game.state = gs;
       }
     }
   }
-  if ((data.rt ?? data.raceTime) !== undefined) game.raceTime = data.rt ?? data.raceTime;
+  if (rt !== undefined) game.raceTime = rt;
   if (data.btl !== undefined && isBattleMode()) game.battleTimeLeft = data.btl;
   if (data.dr ?? data.dragon) applyDragonState(data.dr ?? data.dragon);
   if (data.de ?? data.dragonEscape) applyDragonEscapeState(data.de ?? data.dragonEscape);
 
   const players = data.pl ?? data.players;
-  if (players) {
+  if (players && players.length) {
     for (const ps of players) {
       if (!ps) continue;
       const state = ps.s ?? ps.state;
@@ -783,9 +853,7 @@ function handleP2pHostSync(data, sourceConn = null) {
       }
       applyKartState(getKartById(ps.id), state, { smooth: true });
     }
-  }
-
-  if (game.player2 && data.p2) {
+  } else if (game.player2 && data.p2) {
     applyKartState(game.player2, data.p2, { smooth: true });
   }
 
@@ -888,13 +956,17 @@ function handleP2pPickupConfirm(data, sourceConn = null) {
 }
 
 function handleP2pGuestSync(data, sourceConn = null) {
-  if (data.playerId && data.state) {
-    applyKartState(getKartById(data.playerId), data.state, {
+  const senderId = game.p2pRole === "host"
+    ? getP2pIdForConn(sourceConn)
+    : (getP2pIdForConn(sourceConn) || data.playerId);
+  const state = data.state || data.p2;
+  if (senderId && state) {
+    applyKartState(getKartById(senderId), state, {
       smooth: true,
       preserveBattleAuthority: game.p2pMode && isBattleMode(),
     });
     if (game.p2pRole === "host") {
-      broadcastP2pMessage(data, sourceConn);
+      broadcastP2pMessage({ ...data, playerId: senderId }, sourceConn);
     }
     return;
   }
@@ -954,10 +1026,11 @@ function handleP2pPlayerLeft(data, sourceConn = null) {
   if (game.p2pRole === "host") {
     handleP2pPlayerRemoved(data.playerId);
   } else {
+    const prevState = game.state;
     handleP2pDisconnect({ silent: true });
     const who = data.role === "host" ? "Host" : "A player";
-    if (game.state === STATE.RACING || game.state === STATE.COUNTDOWN || game.state === STATE.PAUSED) {
-      alert(`${who} left the race. Returning to menu.`);
+    if (prevState === STATE.RACING || prevState === STATE.COUNTDOWN || prevState === STATE.PAUSED || prevState === STATE.SELECT) {
+      notifyErrorToast(`${who} left the race. Returning to menu.`);
     }
   }
 }
@@ -984,6 +1057,7 @@ const P2P_HANDLERS = {
   pong: handleP2pPong,
   lobby_connected: handleP2pLobbyConnected,
   lobby_full: handleP2pLobbyFull,
+  race_in_progress: handleP2pRaceInProgress,
   lobby_state: handleP2pLobbyState,
   lobby_char_update: handleP2pLobbyCharUpdate,
   select_update: handleP2pSelectUpdate,

@@ -1,7 +1,13 @@
 import { TAU, rand } from "../core/math.js";
-import { game, getActiveKarts, getKartById } from "../core/state.js";
+import { game, isDayMode, getActiveKarts, getKartById } from "../core/state.js";
 import { getVehicleProfile } from "../config/characters.js";
-import { THREE_STATE, ENABLE_3D_SHADOWS, dispose3DObject } from "./three-state.js";
+import {
+  THREE_STATE,
+  ENABLE_3D_SHADOWS,
+  dispose3DObject,
+  getContactShadowTexture3D,
+  getParticleGlowTexture3D,
+} from "./three-state.js";
 
 export function getCompassKartMats3D(T, charColor) {
   const railColor = new T.Color(charColor);
@@ -59,26 +65,49 @@ export function applyCompassKartRestyle3D(group, charColor, T, charId) {
     }
   });
 
+  const replacedMats = new Set();
   group.traverse((child) => {
     if (!child.isMesh || child.parent !== group) return;
     const box = new T.Box3().setFromObject(child);
     const size = box.getSize(new T.Vector3());
     const pos = child.position;
+    let nextMat = null;
     if (child === bodyMesh) {
-      child.material = mats.shell; usedMats.add(mats.shell);
+      nextMat = mats.shell;
     } else if (Math.abs(pos.x) > 7 && size.x < 3 && size.z > 10) {
-      child.material = mats.rail; usedMats.add(mats.rail);
+      nextMat = mats.rail;
     } else if (pos.z > 10 && size.x > 4 && size.z < 12 && size.y < 6) {
-      child.material = mats.nose; usedMats.add(mats.nose);
+      nextMat = mats.nose;
     } else if (pos.z < -12 && size.x > 8 && size.z < 5) {
-      child.material = mats.rear; usedMats.add(mats.rear);
+      nextMat = mats.rear;
     } else if (
       box.max.y <= bodyBox.min.y + bodySize.y * 0.65
       && (size.x > 8 || size.z > 8)
     ) {
-      child.material = mats.frame; usedMats.add(mats.frame);
+      nextMat = mats.frame;
+    }
+    if (nextMat) {
+      if (child.material && child.material !== nextMat) {
+        replacedMats.add(child.material);
+      }
+      child.material = nextMat;
+      usedMats.add(nextMat);
     }
   });
+
+  if (replacedMats.size > 0) {
+    const stillUsedMats = new Set();
+    group.traverse((child) => {
+      if (!child.isMesh || !child.material) return;
+      if (Array.isArray(child.material)) child.material.forEach(m => stillUsedMats.add(m));
+      else stillUsedMats.add(child.material);
+    });
+    for (const oldMat of replacedMats) {
+      if (!stillUsedMats.has(oldMat) && !usedMats.has(oldMat)) {
+        oldMat.dispose?.();
+      }
+    }
+  }
 
   if (!group.userData.compassCosmetic) {
     const topY = cosmeticTopY + 0.3;
@@ -326,14 +355,16 @@ export function buildKartModel3D(charId, color) {
 
   function addWheels(positions) {
     group._wheels = [];
+    group._frontWheelPivots = [];
     const tireGeo = new T.TorusGeometry(3.2, 1.6, 10, 16);
     const cylGeo = new T.CylinderGeometry(2.8, 2.8, 3.8, 14);
     const hubGeo = new T.CylinderGeometry(1.8, 1.8, 4.0, 8);
     const rimGeo = new T.TorusGeometry(2.2, 0.3, 6, 12);
     const rimMat = new T.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.1 });
-    positions.forEach(([wx, wy, wz]) => {
+    positions.forEach(([wx, wy, wz], idx) => {
+      const steerPivot = new T.Group();
+      steerPivot.position.set(wx, wy, wz);
       const wheelGroup = new T.Group();
-      wheelGroup.position.set(wx, wy, wz);
       const tire = new T.Mesh(tireGeo, wheelMat);
       tire.rotation.x = Math.PI / 2;
       wheelGroup.add(tire);
@@ -347,10 +378,15 @@ export function buildKartModel3D(charId, color) {
       rim.rotation.x = Math.PI / 2;
       wheelGroup.add(rim);
       wheelGroup.castShadow = true;
-      group.add(wheelGroup);
+      steerPivot.add(wheelGroup);
+      group.add(steerPivot);
       group._wheels.push(wheelGroup);
+      if (wz > 0 || idx < 2) {
+        group._frontWheelPivots.push(steerPivot);
+      }
     });
   }
+  group._taillights = [taillightMat];
 
   if (charId === "anton") {
     const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.18, metalness: 0.75 });
@@ -683,6 +719,38 @@ export function buildKartModel3D(charId, color) {
   group._flameMat = flameMat;
 
   applyCompassKartRestyle3D(group, color, T, charId);
+
+  // Ground contact shadow + night headlight pool (added after restyle so restyle won't touch them)
+  const contactShadowMat = new T.MeshBasicMaterial({
+    map: getContactShadowTexture3D(T),
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+  });
+  const contactShadow = new T.Mesh(new T.PlaneGeometry(36, 46), contactShadowMat);
+  contactShadow.rotation.x = -Math.PI / 2;
+  contactShadow.position.set(0, 0.68, 0);
+  contactShadow.renderOrder = 2;
+  group.add(contactShadow);
+  group._contactShadow = contactShadow;
+
+  const headlightPoolMat = new T.MeshBasicMaterial({
+    map: getParticleGlowTexture3D(T),
+    color: 0xfff3c4,
+    transparent: true,
+    opacity: 0.22,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
+  });
+  const headlightPool = new T.Mesh(new T.PlaneGeometry(34, 72), headlightPoolMat);
+  headlightPool.rotation.x = -Math.PI / 2;
+  headlightPool.position.set(0, 0.72, 46);
+  headlightPool.renderOrder = 2;
+  headlightPool.visible = !isDayMode();
+  group.add(headlightPool);
+  group._headlightPool = headlightPool;
+
+  group.rotation.order = "YXZ";
   group.userData._baseScale = 1;
 
   return group;
@@ -774,11 +842,13 @@ export function buildDragonModel3D(isEscapeDragon = false) {
     horn.rotation.z = -0.4 * side;
     horn.rotation.x = 0.15 * side;
     horn.castShadow = true;
+    const hornTip = new T.Mesh(
+      new T.ConeGeometry(1.5, 8, 6),
+      new T.MeshStandardMaterial({ color: 0x2a1510, emissive: glowColor, emissiveIntensity: 0.3 })
+    );
+    hornTip.position.set(0, 18, 0);
+    horn.add(hornTip);
     group.add(horn);
-    const hornTip = new T.Mesh(new T.ConeGeometry(1.5, 8, 6), new T.MeshStandardMaterial({ color: 0x2a1510, emissive: glowColor, emissiveIntensity: 0.3 }));
-    hornTip.position.set(68, 85, side * 14);
-    hornTip.rotation.z = -0.4 * side;
-    group.add(hornTip);
   });
 
   const spikeMat = new T.MeshStandardMaterial({ color: 0x8b0000, emissive: glowColor, emissiveIntensity: 0.2, metalness: 0.3 });

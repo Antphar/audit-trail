@@ -20,6 +20,9 @@
       <div id="audio-track-tempo" class="audio-track-tempo">124 BPM</div>
     </div>
   </div>
+  <div id="toast-region" class="toast-region" role="region" aria-label="Notifications"></div>
+  <p class="sr-only">Screen reader announcements</p>
+  <div id="sr-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
   <!-- Title screen -->
   <div id="title-screen" class="overlay">
@@ -216,13 +219,17 @@
   <!-- Pause screen -->
   <div id="pause-screen" class="overlay hidden">
     <div class="title-text" style="font-size: clamp(36px, 6vw, 70px);">Paused</div>
-    <div class="subtitle" id="pause-default-subtitle">Press P to resume</div>
+    <div class="subtitle" id="pause-default-subtitle">Press P or Esc to resume</div>
     <div class="subtitle" id="pause-p2p-subtitle" style="display:none;">Race continues online while paused</div>
-    <div style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top: 8px;">
+    <div class="pause-actions" style="display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin-top: 8px;">
+      <button class="btn" id="pause-resume-btn" type="button">Resume</button>
+      <button class="btn btn-alt" id="pause-restart-btn" type="button">Restart Race</button>
+      <button class="btn btn-alt" id="pause-settings-btn" type="button">Settings</button>
+      <button class="btn btn-alt" id="pause-menu-btn" type="button">Main Menu</button>
       <button class="btn btn-alt" id="p2p-cancel-lobby-btn" type="button" style="display:none;">Cancel Race · Back to Lobby</button>
       <button class="btn btn-alt" id="p2p-leave-match-btn" type="button" style="display:none;">Leave Match</button>
     </div>
-    <div class="hint">Press R to restart · Esc for main menu · M to mute</div>
+    <div class="hint">Press R to restart · Esc to resume · M to mute</div>
   </div>
 
   <!-- Finish screen -->

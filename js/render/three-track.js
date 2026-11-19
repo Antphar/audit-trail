@@ -75,8 +75,8 @@ export function build3DArenaFloor(group, track) {
   });
   const floorMesh = new T.Mesh(floorGeo, floorMat);
   floorMesh.rotation.x = -Math.PI / 2;
-  // Keep the daylight road ribbon above the arena floor instead of z-fighting with it.
-  floorMesh.position.set(floor.cx, day ? 0.1 : 0.5, floor.cy);
+  // Keep arena floor cleanly below the road ribbon (y = 0.50) to prevent z-fighting.
+  floorMesh.position.set(floor.cx, 0.25, floor.cy);
   floorMesh.receiveShadow = true;
   group.add(floorMesh);
   THREE_STATE.arenaFloorMesh = floorMesh;
@@ -108,11 +108,12 @@ export function build3DArenaFloor(group, track) {
   });
   const innerRing = new T.Mesh(innerRingGeo, innerRingMat);
   innerRing.rotation.x = -Math.PI / 2;
-  innerRing.position.set(floor.cx, 0.62, floor.cy);
+  innerRing.position.set(floor.cx, 0.58, floor.cy);
   group.add(innerRing);
 
   if (track.reviewPlatformRadius > 0) {
-    const platGeo = new T.CylinderGeometry(track.reviewPlatformRadius, track.reviewPlatformRadius, 1.5, 48);
+    const platHeight = 1.2;
+    const platGeo = new T.CylinderGeometry(track.reviewPlatformRadius, track.reviewPlatformRadius, platHeight, 48);
     const platMat = new T.MeshStandardMaterial({
       color: day ? 0xb3d9aa : 0x1b1726,
       emissive: day ? 0x10220c : 0x7b75ff,
@@ -121,7 +122,8 @@ export function build3DArenaFloor(group, track) {
       metalness: 0.35,
     });
     const plat = new T.Mesh(platGeo, platMat);
-    plat.position.set(floor.cx, 0.75, floor.cy);
+    // Base at y = 0.62 clears innerRing (y = 0.58) with zero coplanar overlap.
+    plat.position.set(floor.cx, 0.62 + platHeight * 0.5, floor.cy);
     plat.receiveShadow = true;
     group.add(plat);
     THREE_STATE.reviewPlatformMesh = plat;
@@ -284,6 +286,126 @@ export function build3DRamps(group, track) {
 }
 
 
+let _chevronTexLeft3D = null;
+let _chevronTexRight3D = null;
+let _citationLabelTex3D = null;
+
+function getChevronSignTexture3D(T, turnRight) {
+  if (turnRight && _chevronTexRight3D) return _chevronTexRight3D;
+  if (!turnRight && _chevronTexLeft3D) return _chevronTexLeft3D;
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 64;
+  const cx = c.getContext("2d");
+  cx.fillStyle = "#12101d";
+  cx.fillRect(0, 0, 128, 64);
+  cx.strokeStyle = "#fd9927";
+  cx.lineWidth = 4;
+  cx.strokeRect(3, 3, 122, 58);
+
+  const dir = turnRight ? 1 : -1;
+  for (let k = 0; k < 2; k++) {
+    const ox = 64 + (k - 0.5) * 32 * dir;
+    cx.strokeStyle = k === 1 ? "#ffd86b" : "#fd9927";
+    cx.lineWidth = 8;
+    cx.lineCap = "round";
+    cx.lineJoin = "round";
+    cx.beginPath();
+    cx.moveTo(ox - 12 * dir, 16);
+    cx.lineTo(ox + 10 * dir, 32);
+    cx.lineTo(ox - 12 * dir, 48);
+    cx.stroke();
+  }
+
+  const tex = new T.CanvasTexture(c);
+  if (T.SRGBColorSpace) tex.colorSpace = T.SRGBColorSpace;
+  tex.userData = { shared: true };
+  tex.needsUpdate = true;
+  if (turnRight) _chevronTexRight3D = tex;
+  else _chevronTexLeft3D = tex;
+  return tex;
+}
+
+export function build3DCornerChevrons(group, track, edges) {
+  if (!window.THREE || !track || track.arenaFloor || !edges || edges.length < 3) return;
+  const T = window.THREE;
+  const n = edges.length;
+  const startIdx = track.isOpen ? 1 : 0;
+  const endIdx = track.isOpen ? n - 1 : n;
+
+  const postGeo = new T.CylinderGeometry(1.1, 1.3, 16, 6);
+  const boardGeo = new T.BoxGeometry(20, 11, 1.6);
+  const faceGeo = new T.PlaneGeometry(18.5, 9.5);
+  const postMat = new T.MeshStandardMaterial({ color: 0x222036, metalness: 0.7, roughness: 0.35 });
+  const boardMat = new T.MeshStandardMaterial({ color: 0x131019, metalness: 0.5, roughness: 0.45 });
+  const faceMatRight = new T.MeshStandardMaterial({
+    map: getChevronSignTexture3D(T, true),
+    emissive: 0xffffff,
+    emissiveMap: getChevronSignTexture3D(T, true),
+    emissiveIntensity: 0.95,
+    roughness: 0.3,
+  });
+  const faceMatLeft = new T.MeshStandardMaterial({
+    map: getChevronSignTexture3D(T, false),
+    emissive: 0xffffff,
+    emissiveMap: getChevronSignTexture3D(T, false),
+    emissiveIntensity: 0.95,
+    roughness: 0.3,
+  });
+
+  let lastSignX = -99999;
+  let lastSignY = -99999;
+  for (let i = startIdx; i < endIdx; i++) {
+    const prev = edges[(i - 1 + n) % n].center;
+    const curr = edges[i].center;
+    const next = edges[(i + 1) % n].center;
+    const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
+    const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+    const l1 = Math.hypot(dx1, dy1), l2 = Math.hypot(dx2, dy2);
+    if (l1 < 1 || l2 < 1) continue;
+    const u1x = dx1 / l1, u1y = dy1 / l1;
+    const u2x = dx2 / l2, u2y = dy2 / l2;
+    const cross = u1x * u2y - u1y * u2x;
+    const dot = clamp(u1x * u2x + u1y * u2y, -1, 1);
+    const turnAngle = Math.atan2(cross, dot);
+    if (Math.abs(turnAngle) <= 0.42) continue;
+
+    const edgePt = turnAngle > 0 ? edges[i].right : edges[i].left;
+    let ox = edgePt.x - curr.x;
+    let oz = edgePt.y - curr.y;
+    const ol = Math.hypot(ox, oz) || 1;
+    ox /= ol;
+    oz /= ol;
+
+    const sx = edgePt.x + ox * 14;
+    const sz = edgePt.y + oz * 14;
+    if (Math.hypot(sx - lastSignX, sz - lastSignY) < 70) continue;
+    lastSignX = sx;
+    lastSignY = sz;
+
+    const signGroup = new T.Group();
+    const post = new T.Mesh(postGeo, postMat);
+    post.position.y = 8;
+    signGroup.add(post);
+
+    const board = new T.Mesh(boardGeo, boardMat);
+    board.position.y = 18;
+    signGroup.add(board);
+
+    const face = new T.Mesh(faceGeo, turnAngle > 0 ? faceMatRight : faceMatLeft);
+    face.position.set(0, 18, 0.9);
+    signGroup.add(face);
+
+    const faceDirX = -u1x * 0.72 - ox * 0.28;
+    const faceDirZ = -u1y * 0.72 - oz * 0.28;
+    signGroup.position.set(sx, 0, sz);
+    signGroup.rotation.y = Math.atan2(faceDirX, faceDirZ);
+    group.add(signGroup);
+    THREE_STATE.chevronMeshes.push(signGroup);
+  }
+}
+
+
 export function rebuild3DTrack() {
   if (!window.THREE || !THREE_STATE.scene || !game.track) return;
   const T = window.THREE;
@@ -301,6 +423,10 @@ export function rebuild3DTrack() {
   THREE_STATE.arenaMarkerPanelMesh = null;
   THREE_STATE.arenaMarkerCapMesh = null;
   THREE_STATE.rampMeshes = [];
+  if (THREE_STATE.chevronMeshes?.length) {
+    THREE_STATE.chevronMeshes.forEach(m => { sc.remove(m); dispose3DObject(m); });
+  }
+  THREE_STATE.chevronMeshes = [];
   // Remove old kart models
   THREE_STATE.kartModels.forEach(m => {
     sc.remove(m);
@@ -308,6 +434,18 @@ export function rebuild3DTrack() {
   });
   THREE_STATE.kartModels.clear();
   disposeTethers3D();
+  if (THREE_STATE._ultAuras) {
+    THREE_STATE._ultAuras.forEach(a => { sc.remove(a); dispose3DObject(a); });
+    THREE_STATE._ultAuras.clear();
+  }
+  if (THREE_STATE._shockwaves?.length) {
+    THREE_STATE._shockwaves.forEach(sw => {
+      sc.remove(sw.mesh);
+      dispose3DObject(sw.mesh);
+      if (sw.light) sc.remove(sw.light);
+    });
+    THREE_STATE._shockwaves.length = 0;
+  }
   THREE_STATE.itemMeshes = [];
   THREE_STATE.coinMeshes = [];
   THREE_STATE.boostPadMeshes = [];
@@ -324,6 +462,19 @@ export function rebuild3DTrack() {
   reset3DParticlePool();
   THREE_STATE.pillarRings = [];
   if (THREE_STATE._sceneryGroup) { sc.remove(THREE_STATE._sceneryGroup); dispose3DObject(THREE_STATE._sceneryGroup); THREE_STATE._sceneryGroup = null; }
+  // Clean up old name tags / speech bubbles from previous track
+  THREE_STATE.nameTagSprites.forEach(s => {
+    sc.remove(s);
+    s.material.map?.dispose();
+    s.material.dispose();
+  });
+  THREE_STATE.nameTagSprites.clear();
+  THREE_STATE.speechBubbleSprites.forEach(s => {
+    sc.remove(s);
+    s.material.map?.dispose();
+    s.material.dispose();
+  });
+  THREE_STATE.speechBubbleSprites.clear();
 
   const group = new T.Group();
   THREE_STATE.trackGroup = group;
@@ -336,29 +487,35 @@ export function rebuild3DTrack() {
     build3DArenaBoundaryMarkers(group, game.track);
   }
 
-  // Build track ribbon from waypoints
+  // Build track ribbon from waypoints with arc-length UVs
   const wp = game.track.waypoints;
   const verts = [];
   const colors = [];
   const roadUvs = [];
   const edges = get3DRoadEdges(game.track);
   const segmentCount = game.track.isOpen ? edges.length - 1 : edges.length;
-  const roadUvScale = 1 / 192;
+  let cumDist = 0;
 
   for (let i = 0; i < segmentCount; i++) {
     const e0 = edges[i];
     const e1 = edges[(i + 1) % edges.length];
     if (!e0 || !e1) continue;
 
-    verts.push(e0.left.x, 0, e0.left.y, e0.right.x, 0, e0.right.y, e1.left.x, 0, e1.left.y);
-    verts.push(e0.right.x, 0, e0.right.y, e1.right.x, 0, e1.right.y, e1.left.x, 0, e1.left.y);
+    const segLen = Math.hypot(e1.center.x - e0.center.x, e1.center.y - e0.center.y);
+    const u0 = cumDist / 160;
+    cumDist += segLen;
+    const u1 = cumDist / 160;
+
+    // Wound CCW when viewed from +Y so vertex normals point upward (+Y) for lighting & front-face rendering
+    verts.push(e0.left.x, 0, e0.left.y, e1.left.x, 0, e1.left.y, e0.right.x, 0, e0.right.y);
+    verts.push(e0.right.x, 0, e0.right.y, e1.left.x, 0, e1.left.y, e1.right.x, 0, e1.right.y);
     roadUvs.push(
-      e0.left.x * roadUvScale, e0.left.y * roadUvScale,
-      e0.right.x * roadUvScale, e0.right.y * roadUvScale,
-      e1.left.x * roadUvScale, e1.left.y * roadUvScale,
-      e0.right.x * roadUvScale, e0.right.y * roadUvScale,
-      e1.right.x * roadUvScale, e1.right.y * roadUvScale,
-      e1.left.x * roadUvScale, e1.left.y * roadUvScale
+      u0, 0,
+      u1, 0,
+      u0, 1,
+      u0, 1,
+      u1, 0,
+      u1, 1
     );
 
     // Edge glow coloring
@@ -384,6 +541,7 @@ export function rebuild3DTrack() {
     roughness: 0.78,
     metalness: 0.12,
     vertexColors: false,
+    side: T.DoubleSide,
   });
   THREE_STATE.trackMesh = new T.Mesh(geo, roadMat);
   THREE_STATE.trackMesh.position.y = 0.5;
@@ -410,8 +568,13 @@ export function rebuild3DTrack() {
       const dl1 = Math.hypot(dx1, dy1) || 1;
       const o0x = s0.x + (dx0 / dl0) * rumbleExtra, o0z = s0.y + (dy0 / dl0) * rumbleExtra;
       const o1x = s1.x + (dx1 / dl1) * rumbleExtra, o1z = s1.y + (dy1 / dl1) * rumbleExtra;
-      rumbleVerts.push(s0.x, 0, s0.y, o0x, 0, o0z, s1.x, 0, s1.y);
-      rumbleVerts.push(o0x, 0, o0z, o1x, 0, o1z, s1.x, 0, s1.y);
+      if (side === 1) {
+        rumbleVerts.push(s0.x, 0, s0.y, o0x, 0, o0z, s1.x, 0, s1.y);
+        rumbleVerts.push(o0x, 0, o0z, o1x, 0, o1z, s1.x, 0, s1.y);
+      } else {
+        rumbleVerts.push(s0.x, 0, s0.y, s1.x, 0, s1.y, o0x, 0, o0z);
+        rumbleVerts.push(o0x, 0, o0z, s1.x, 0, s1.y, o1x, 0, o1z);
+      }
       for (let v = 0; v < 6; v++) rumbleColors.push(r[0], r[1], r[2]);
     }
   }
@@ -426,6 +589,7 @@ export function rebuild3DTrack() {
       metalness: 0.2,
       emissive: 0x111111,
       emissiveIntensity: roadDay ? 0.08 : 0.3,
+      side: T.DoubleSide,
     });
     const rumble = new T.Mesh(rGeo, rMat);
     rumble.position.y = 0.3;
@@ -474,6 +638,7 @@ export function rebuild3DTrack() {
         emissiveIntensity: roadDay ? 0.12 : 0.4,
         transparent: true,
         opacity: roadDay ? 0.88 : 0.82,
+        side: T.DoubleSide,
       });
       const wall = new T.Mesh(wGeo, wMat);
       wall.position.y = 0.5;
@@ -517,6 +682,8 @@ export function rebuild3DTrack() {
     centerLine.computeLineDistances();
     group.add(centerLine);
   }
+
+  build3DCornerChevrons(group, game.track, edges);
 
   if (!game.track.isOpen && edges.length > 1) {
     const e = edges[0];
@@ -660,84 +827,93 @@ export function rebuild3DTrack() {
   }
 
   if (game.track.coins) {
-    const citationLabelCanvas = document.createElement("canvas");
-    citationLabelCanvas.width = 128;
-    citationLabelCanvas.height = 72;
-    const labelCtx = citationLabelCanvas.getContext("2d");
-    labelCtx.clearRect(0, 0, citationLabelCanvas.width, citationLabelCanvas.height);
-    labelCtx.fillStyle = "rgba(6,5,20,0.74)";
-    labelCtx.fillRect(8, 8, 112, 56);
-    labelCtx.strokeStyle = "rgba(255,216,107,0.95)";
-    labelCtx.lineWidth = 3;
-    labelCtx.strokeRect(8, 8, 112, 56);
-    labelCtx.fillStyle = "#ffffff";
-    labelCtx.font = "bold 26px 'SFMono-Regular', Consolas, monospace";
-    labelCtx.textAlign = "center";
-    labelCtx.textBaseline = "middle";
-    labelCtx.fillText("PMC", 64, 30);
-    labelCtx.fillStyle = "#ffd86b";
-    labelCtx.font = "bold 15px 'SFMono-Regular', Consolas, monospace";
-    labelCtx.fillText("CITE", 64, 51);
-    const citationLabelTex = new T.CanvasTexture(citationLabelCanvas);
-    citationLabelTex.minFilter = T.LinearFilter;
-    const citationLabelMat = new T.MeshBasicMaterial({ map: citationLabelTex, transparent: true, depthWrite: false, side: T.DoubleSide });
+    if (!_citationLabelTex3D) {
+      const citationLabelCanvas = document.createElement("canvas");
+      citationLabelCanvas.width = 128;
+      citationLabelCanvas.height = 72;
+      const labelCtx = citationLabelCanvas.getContext("2d");
+      labelCtx.clearRect(0, 0, citationLabelCanvas.width, citationLabelCanvas.height);
+      labelCtx.fillStyle = "rgba(6,5,20,0.74)";
+      labelCtx.fillRect(8, 8, 112, 56);
+      labelCtx.strokeStyle = "rgba(255,216,107,0.95)";
+      labelCtx.lineWidth = 3;
+      labelCtx.strokeRect(8, 8, 112, 56);
+      labelCtx.fillStyle = "#ffffff";
+      labelCtx.font = "bold 26px 'SFMono-Regular', Consolas, monospace";
+      labelCtx.textAlign = "center";
+      labelCtx.textBaseline = "middle";
+      labelCtx.fillText("PMC", 64, 30);
+      labelCtx.fillStyle = "#ffd86b";
+      labelCtx.font = "bold 15px 'SFMono-Regular', Consolas, monospace";
+      labelCtx.fillText("CITE", 64, 51);
+      _citationLabelTex3D = new T.CanvasTexture(citationLabelCanvas);
+      _citationLabelTex3D.minFilter = T.LinearFilter;
+      _citationLabelTex3D.userData = { shared: true };
+    }
+    const citationLabelMat = new T.MeshBasicMaterial({ map: _citationLabelTex3D, transparent: true, depthWrite: false, side: T.DoubleSide });
+    const citationMat = new T.MeshStandardMaterial({
+      color: 0xffd86b,
+      emissive: 0xffd86b,
+      emissiveIntensity: 1.2,
+      metalness: 0.85,
+      roughness: 0.16,
+    });
+    const frameMat = new T.MeshStandardMaterial({ color: 0xffe08a, emissive: 0xffd86b, emissiveIntensity: 1.0, metalness: 0.9, roughness: 0.08 });
+    const foldMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, side: T.DoubleSide });
+    const lineMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
+    const glowCoreMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 1.4, transparent: true, opacity: 0.9 });
+
+    const bodyGeo = new T.BoxGeometry(12, 16, 3);
+    const frameGeos = [
+      [0, 10.75, new T.BoxGeometry(11.6, 0.55, 0.38)],
+      [0, -4.75, new T.BoxGeometry(11.6, 0.55, 0.38)],
+      [-5.75, 3, new T.BoxGeometry(0.55, 15.2, 0.38)],
+      [5.75, 3, new T.BoxGeometry(0.55, 15.2, 0.38)],
+    ];
+    const topTabGeo = new T.BoxGeometry(7.5, 1.2, 3.4);
+    const foldGeo = new T.BufferGeometry();
+    foldGeo.setAttribute("position", new T.Float32BufferAttribute([
+      2.3, 9.2, 1.98,
+      5.0, 9.2, 1.98,
+      5.0, 6.5, 1.98,
+    ], 3));
+    foldGeo.computeVertexNormals();
+    const lineGeoLong = new T.BoxGeometry(7, 0.28, 0.18);
+    const lineGeoShort = new T.BoxGeometry(4.6, 0.28, 0.18);
+    const labelGeo = new T.PlaneGeometry(8.7, 4.9);
+    const glowCoreGeo = new T.OctahedronGeometry(1.4, 0);
 
     game.track.coins.forEach(c => {
       if (c.collected) return;
       const coinGroup = new T.Group();
-      const citationMat = new T.MeshStandardMaterial({
-        color: 0xffd86b,
-        emissive: 0xffd86b,
-        emissiveIntensity: 1.2,
-        metalness: 0.85,
-        roughness: 0.16,
-      });
-      const citationBody = new T.Mesh(new T.BoxGeometry(12, 16, 3), citationMat);
+      const citationBody = new T.Mesh(bodyGeo, citationMat);
       citationBody.position.y = 3;
       citationBody.castShadow = ENABLE_3D_SHADOWS;
       coinGroup.add(citationBody);
 
-      const frameMat = new T.MeshStandardMaterial({ color: 0xffe08a, emissive: 0xffd86b, emissiveIntensity: 1.0, metalness: 0.9, roughness: 0.08 });
-      [
-        [0, 10.75, 11.6, 0.55],
-        [0, -4.75, 11.6, 0.55],
-        [-5.75, 3, 0.55, 15.2],
-        [5.75, 3, 0.55, 15.2],
-      ].forEach(([px, py, w, h]) => {
-        const frameBar = new T.Mesh(new T.BoxGeometry(w, h, 0.38), frameMat);
+      for (const [px, py, fGeo] of frameGeos) {
+        const frameBar = new T.Mesh(fGeo, frameMat);
         frameBar.position.set(px, py, 1.78);
         coinGroup.add(frameBar);
-      });
+      }
 
-      const topTab = new T.Mesh(new T.BoxGeometry(7.5, 1.2, 3.4), frameMat);
+      const topTab = new T.Mesh(topTabGeo, frameMat);
       topTab.position.set(0, 10.2, 0);
       coinGroup.add(topTab);
 
-      const foldGeo = new T.BufferGeometry();
-      foldGeo.setAttribute("position", new T.Float32BufferAttribute([
-        2.3, 9.2, 1.98,
-        5.0, 9.2, 1.98,
-        5.0, 6.5, 1.98,
-      ], 3));
-      foldGeo.computeVertexNormals();
-      const foldMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, side: T.DoubleSide });
       coinGroup.add(new T.Mesh(foldGeo, foldMat));
 
-      const lineMat = new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 });
       [-1.8, -3.2, -4.6].forEach((lineY, idx) => {
-        const line = new T.Mesh(new T.BoxGeometry(idx === 2 ? 4.6 : 7, 0.28, 0.18), lineMat);
+        const line = new T.Mesh(idx === 2 ? lineGeoShort : lineGeoLong, lineMat);
         line.position.set(0, lineY, 1.78);
         coinGroup.add(line);
       });
 
-      const label = new T.Mesh(new T.PlaneGeometry(8.7, 4.9), citationLabelMat);
+      const label = new T.Mesh(labelGeo, citationLabelMat);
       label.position.set(0, 3.0, 1.91);
       coinGroup.add(label);
 
-      const glowCore = new T.Mesh(
-        new T.OctahedronGeometry(1.4, 0),
-        new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 1.4, transparent: true, opacity: 0.9 })
-      );
+      const glowCore = new T.Mesh(glowCoreGeo, glowCoreMat);
       glowCore.position.set(0, -7.0, 1.8);
       coinGroup.add(glowCore);
       if (ENABLE_DECORATIVE_3D_LIGHTS) {
@@ -874,11 +1050,6 @@ export function rebuild3DTrack() {
   build3DStartLine();
   enhance3DKartModels();
 
-  // Clean up old name tags / speech bubbles from previous track
-  THREE_STATE.nameTagSprites.forEach(s => THREE_STATE.scene.remove(s));
-  THREE_STATE.nameTagSprites.clear();
-  THREE_STATE.speechBubbleSprites.forEach(s => { THREE_STATE.scene.remove(s); s.material.map?.dispose(); s.material.dispose(); });
-  THREE_STATE.speechBubbleSprites.clear();
   recycleAll3DSkidMarks();
 }
 
@@ -903,7 +1074,7 @@ export function recycleAll3DSkidMarks() {
 export function getSkidMark3D(isNeon) {
   if (!window.THREE) return null;
   const T = window.THREE;
-  if (!_skidGeo3d) _skidGeo3d = new T.PlaneGeometry(4, 6);
+  if (!_skidGeo3d) _skidGeo3d = new T.PlaneGeometry(8, 3.5);
   if (!_skidMatDark) _skidMatDark = new T.MeshBasicMaterial({ color: 0x141420, transparent: true, opacity: 0.5, depthWrite: false, side: T.DoubleSide });
   if (!_skidMatNeon) _skidMatNeon = new T.MeshBasicMaterial({ color: 0x4dffaa, transparent: true, opacity: 0.6, depthWrite: false, side: T.DoubleSide });
   if (_skidFreePool.length > 0) {

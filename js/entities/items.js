@@ -225,6 +225,7 @@ export class DossierProjectile {
     this.active = true;
     this.life = 360;
     this.ignoreOwnerTimer = 20;
+    this.wallBounces = 0;
   }
 
   update(dt, track) {
@@ -240,7 +241,7 @@ export class DossierProjectile {
     }
 
     // Bounce off track walls!
-    if (track) {
+    if (track && track.segments && track.segments.length) {
       const c = track.closestSegment(this.x, this.y);
       const seg = track.segments[c.idx];
       const wallLimit = seg.halfW + 40;
@@ -250,6 +251,13 @@ export class DossierProjectile {
         const ny = (this.y - proj.y) / Math.max(0.001, c.dist);
         const push = c.dist - wallLimit;
         this.x -= nx * push;
+        this.y -= ny * push;
+
+        this.wallBounces = (this.wallBounces || 0) + 1;
+        if (this.wallBounces > 12) {
+          this.active = false;
+          return;
+        }
 
         // Reflect velocity with elastic bounce off normal
         const dot = this.vx * nx + this.vy * ny;

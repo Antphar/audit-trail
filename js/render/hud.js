@@ -20,6 +20,8 @@ const VIEW_W = () => renderRuntime.getViewW();
 const VIEW_H = () => renderRuntime.getViewH();
 function getTotalLaps() { return renderRuntime.getTotalLaps ? renderRuntime.getTotalLaps() : 3; }
 function isDragonEscape() { return MAPS[game.selectedMapIdx || 0].id === "dragon_escape"; }
+let _approvalProjVec3 = null;
+
 export function drawApprovalSeals(c, x, y, n, time = 0, r = 8) {
   if (n <= 0) return;
   c.save();
@@ -32,11 +34,12 @@ export function drawApprovalSeals(c, x, y, n, time = 0, r = 8) {
     // Drop shadow
     c.fillStyle = "rgba(0,0,0,0.45)";
     c.beginPath(); c.arc(cx, cy + 1.5, r, 0, TAU); c.fill();
-    // Mint success seal with lavender/purple outer ring
-    c.shadowBlur = 8; c.shadowColor = COMPASS_VISUAL.sealFill;
+    // Crisp dark outline + mint success seal with outer ring
+    c.strokeStyle = "rgba(8, 10, 24, 0.85)";
+    c.lineWidth = 3.2;
+    c.beginPath(); c.arc(cx, cy, r + 0.5, 0, TAU); c.stroke();
     c.fillStyle = COMPASS_VISUAL.sealFill;
     c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.fill();
-    c.shadowBlur = 0;
     c.strokeStyle = COMPASS_VISUAL.sealRing;
     c.lineWidth = 2;
     c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.stroke();
@@ -115,15 +118,17 @@ export function drawHitFlash( kart, left, top, width, height, time) {
   ctx().globalAlpha = alpha;
 
   const fontSize = Math.min(52, width * 0.08);
-  ctx().shadowBlur = 30;
-  ctx().shadowColor = hf.color;
-  ctx().fillStyle = hf.color;
   ctx().font = `bold ${fontSize}px sans-serif`;
   ctx().textAlign = "center";
   ctx().textBaseline = "middle";
+  ctx().lineJoin = "round";
+  ctx().strokeStyle = "rgba(8, 10, 24, 0.9)";
+  ctx().lineWidth = 6;
+  ctx().strokeText(hf.text, 0, 0);
+
+  ctx().fillStyle = hf.color;
   ctx().fillText(hf.text, 0, 0);
 
-  ctx().shadowBlur = 0;
   ctx().strokeStyle = "rgba(255,255,255,0.6)";
   ctx().lineWidth = 1.5;
   ctx().strokeText(hf.text, 0, 0);
@@ -131,7 +136,7 @@ export function drawHitFlash( kart, left, top, width, height, time) {
   ctx().restore();
 }
 
-export function drawStatusEffects( x, y, kart, time) {
+export function drawStatusEffects(x, y, kart, time, opts = {}) {
   if (!kart) return;
   const effects = [];
   if (kart.shieldTimer > 0) effects.push({ label: "SHIELD", color: "#57f2ff", ratio: kart.shieldTimer / (kart.charId === "rissal" ? TUNING.SHIELD_DURATION_RISSAL : TUNING.SHIELD_DURATION) });
@@ -149,39 +154,50 @@ export function drawStatusEffects( x, y, kart, time) {
 
   if (effects.length === 0) return;
 
-  const barW = 110, barH = 14, gap = 4;
-  const panelH = effects.length * (barH + gap) + 8;
+  const barW = 110, barH = 14, gap = 4, colGap = 6, padX = 8, padY = 4;
+  const cols = effects.length > 4 ? 2 : 1;
+  const rows = cols === 2 ? Math.ceil(effects.length / 2) : effects.length;
+  const panelW = cols * barW + (cols - 1) * colGap + padX * 2;
+  const panelH = rows * (barH + gap) - gap + padY * 2;
+
+  let drawX = opts.alignRight ? (opts.rightEdge != null ? opts.rightEdge - panelW : x - panelW) : x;
+  let drawY = opts.stackUp ? (opts.bottomEdge != null ? opts.bottomEdge - panelH : y - panelH) : y;
+  if (opts.minTop != null) drawY = Math.max(opts.minTop, drawY);
+  drawX = clamp(drawX, 8, Math.max(8, VIEW_W() - panelW - 8));
 
   ctx().save();
-  ctx().translate(x, y);
+  ctx().translate(drawX, drawY);
 
-  ctx().fillStyle = "rgba(8, 10, 24, 0.65)";
-  roundRect(ctx(), 0, 0, barW + 16, panelH, 10);
+  ctx().fillStyle = "rgba(8, 10, 24, 0.72)";
+  roundRect(ctx(), 0, 0, panelW, panelH, 10);
   ctx().fill();
-  ctx().strokeStyle = "rgba(255,255,255,0.08)";
+  ctx().strokeStyle = "rgba(255,255,255,0.12)";
   ctx().lineWidth = 1;
-  roundRect(ctx(), 0.5, 0.5, barW + 15, panelH - 1, 10);
+  roundRect(ctx(), 0.5, 0.5, panelW - 1, panelH - 1, 10);
   ctx().stroke();
 
   effects.forEach((eff, i) => {
-    const ey = 4 + i * (barH + gap);
+    const colIdx = cols === 2 ? Math.floor(i / rows) : 0;
+    const rowIdx = cols === 2 ? (i % rows) : i;
+    const ex = padX + colIdx * (barW + colGap);
+    const ey = padY + rowIdx * (barH + gap);
     const ratio = clamp(eff.ratio, 0, 1);
 
     ctx().fillStyle = "rgba(255,255,255,0.08)";
-    roundRect(ctx(), 8, ey, barW, barH, 3);
+    roundRect(ctx(), ex, ey, barW, barH, 3);
     ctx().fill();
 
     const isDebuff = (eff.label === "BLINDED" || eff.label === "SLOWED" || eff.label === "SPINNING" || eff.label === "TETHERED!");
     const pulse = isDebuff ? (0.6 + 0.4 * Math.sin(time * 0.02)) : 1;
 
-    ctx().fillStyle = hexToRgba(eff.color, 0.7 * pulse);
-    roundRect(ctx(), 8, ey, barW * ratio, barH, 3);
+    ctx().fillStyle = hexToRgba(eff.color, 0.72 * pulse);
+    roundRect(ctx(), ex, ey, barW * ratio, barH, 3);
     ctx().fill();
 
     if (isDebuff) {
-      ctx().strokeStyle = hexToRgba(eff.color, 0.8 * pulse);
+      ctx().strokeStyle = hexToRgba(eff.color, 0.85 * pulse);
       ctx().lineWidth = 1.5;
-      roundRect(ctx(), 8, ey, barW, barH, 3);
+      roundRect(ctx(), ex, ey, barW, barH, 3);
       ctx().stroke();
     }
 
@@ -189,7 +205,7 @@ export function drawStatusEffects( x, y, kart, time) {
     ctx().font = "bold 9px sans-serif";
     ctx().textAlign = "left";
     ctx().textBaseline = "middle";
-    ctx().fillText(eff.label, 12, ey + barH / 2);
+    ctx().fillText(eff.label, ex + 4, ey + barH / 2);
   });
 
   ctx().restore();
@@ -202,28 +218,35 @@ export function drawSpectateBanner(cx, y, time) {
   ctx().save();
   ctx().textAlign = "center";
   ctx().textBaseline = "middle";
+  ctx().lineJoin = "round";
 
   // Headline
-  ctx().shadowBlur = 10; ctx().shadowColor = "#ff3366";
-  ctx().fillStyle = "#ff3366";
   ctx().font = "bold 20px sans-serif";
+  ctx().strokeStyle = "rgba(8, 10, 24, 0.9)";
+  ctx().lineWidth = 4;
+  ctx().strokeText("SUBMISSION REJECTED", cx, y);
+  ctx().fillStyle = "#ff3366";
   ctx().fillText("SUBMISSION REJECTED", cx, y);
-  ctx().shadowBlur = 0;
 
   // Subline: who we're watching now
   if (t) {
     ctx().fillStyle = "#a8acd0";
     ctx().font = "12px sans-serif";
     const followingKiller = killerName && t.name === killerName;
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 3;
+    ctx().strokeText(followingKiller ? "Following your rival" : "Following the leader", cx, y + 20);
     ctx().fillText(followingKiller ? "Following your rival" : "Following the leader", cx, y + 20);
-    ctx().fillStyle = t.color || "#fff";
     ctx().font = "bold 16px sans-serif";
-    ctx().fillText(`\u25B6 ${t.name}  (${Math.max(0, t.approvals || 0)} \u2713)`, cx, y + 40);
+    const subLabel = `\u25B6 ${t.name}  (${Math.max(0, t.approvals || 0)} \u2713)`;
+    ctx().strokeText(subLabel, cx, y + 40);
+    ctx().fillStyle = t.color || "#fff";
+    ctx().fillText(subLabel, cx, y + 40);
   }
   ctx().restore();
 }
 
-export function drawWrongWay( kart, left, top, width, height, time) {
+export function drawWrongWay(kart, left, top, width, height, time) {
   if (!kart || !kart.wrongWayTimer || kart.wrongWayTimer < 15) return;
   const alpha = clamp((kart.wrongWayTimer - 15) / 20, 0, 1);
   const blink = Math.sin(time * 0.012) > 0 ? 1 : 0.4;
@@ -237,27 +260,32 @@ export function drawWrongWay( kart, left, top, width, height, time) {
   ctx().fillStyle = "rgba(255, 30, 30, 0.15)";
   ctx().fillRect(left, top, width, height);
 
-  ctx().shadowBlur = 20;
-  ctx().shadowColor = "#ff2222";
-  ctx().fillStyle = "#ff2222";
   ctx().font = "bold 48px sans-serif";
   ctx().textAlign = "center";
   ctx().textBaseline = "middle";
+  ctx().lineJoin = "round";
+  ctx().strokeStyle = "rgba(15, 4, 10, 0.92)";
+  ctx().lineWidth = 7;
+  ctx().strokeText("WRONG WAY!", cx, cy);
+
+  ctx().fillStyle = "#ff2222";
   ctx().fillText("WRONG WAY!", cx, cy);
 
-  ctx().shadowBlur = 0;
-  ctx().strokeStyle = "rgba(255,255,255,0.5)";
+  ctx().strokeStyle = "rgba(255,255,255,0.55)";
   ctx().lineWidth = 1.5;
   ctx().strokeText("WRONG WAY!", cx, cy);
 
   ctx().font = "bold 16px sans-serif";
+  ctx().strokeStyle = "rgba(15, 4, 10, 0.85)";
+  ctx().lineWidth = 3.5;
+  ctx().strokeText("Turn around!", cx, cy + 36);
   ctx().fillStyle = "#ffaaaa";
   ctx().fillText("Turn around!", cx, cy + 36);
 
   ctx().restore();
 }
 
-export function drawPositionChange( x, y, kart) {
+export function drawPositionChange(x, y, kart) {
   if (isBattleMode()) return; // no race positions in Battle
   if (!kart || !kart.posChangeFlash || kart.posChangeFlash.timer <= 0) return;
   const pf = kart.posChangeFlash;
@@ -273,66 +301,98 @@ export function drawPositionChange( x, y, kart) {
   const arrow = pf.gained ? "\u2191" : "\u2193";
   const text = `${ordinal(pf.from)} ${arrow} ${ordinal(pf.to)}`;
 
-  ctx().shadowBlur = 12;
-  ctx().shadowColor = color;
-  ctx().fillStyle = "rgba(8, 10, 24, 0.8)";
+  ctx().fillStyle = "rgba(8, 10, 24, 0.88)";
   roundRect(ctx(), -60, -16, 120, 32, 8);
   ctx().fill();
+  ctx().strokeStyle = color;
+  ctx().lineWidth = 1.8;
+  roundRect(ctx(), -60, -16, 120, 32, 8);
+  ctx().stroke();
 
-  ctx().fillStyle = color;
   ctx().font = "bold 18px sans-serif";
   ctx().textAlign = "center";
   ctx().textBaseline = "middle";
+  ctx().strokeStyle = "rgba(8, 10, 24, 0.9)";
+  ctx().lineWidth = 3;
+  ctx().strokeText(text, 0, 0);
+  ctx().fillStyle = color;
   ctx().fillText(text, 0, 0);
 
   ctx().restore();
 }
 
-export function drawItemNamePopup( x, y, kart, time) {
+export function drawItemNamePopup(x, y, kart, time) {
   if (!kart || !kart.itemNamePopup || kart.itemNamePopup.timer <= 0) return;
   const pop = kart.itemNamePopup;
   const alpha = clamp(pop.timer / 15, 0, 1) * clamp((pop.maxTimer - pop.timer) / 5, 0, 1);
 
   ctx().save();
   ctx().globalAlpha = alpha;
-  ctx().fillStyle = pop.color;
   ctx().font = "bold 11px sans-serif";
   ctx().textAlign = "center";
   ctx().textBaseline = "top";
-  ctx().shadowBlur = 6;
-  ctx().shadowColor = pop.color;
+  ctx().lineJoin = "round";
+  ctx().strokeStyle = "rgba(8, 10, 24, 0.92)";
+  ctx().lineWidth = 3;
+  ctx().strokeText(pop.name, x, y);
+  ctx().fillStyle = pop.color;
   ctx().fillText(pop.name, x, y);
   ctx().restore();
 }
 
-export function drawApprovals3DOverlay(c, time) {
-  if (!isBattleMode() || !window.THREE || !THREE_STATE.camera) return;
-  const cam = THREE_STATE.camera;
-  const v = new THREE.Vector3();
+export function drawApprovals3DOverlay(arg1, arg2, arg3, arg4 = 0, arg5 = 0, arg6 = 0, arg7 = 0) {
+  if (!isBattleMode() || !window.THREE) return;
+  let c, time, camera, viewW, viewH, vx, vy;
+  if (arg1 && typeof arg1.save === "function") {
+    c = arg1;
+    time = arg2 || 0;
+    camera = arg3 || THREE_STATE.camera;
+    viewW = arg4 || VIEW_W();
+    viewH = arg5 || VIEW_H();
+    vx = arg6 || 0;
+    vy = arg7 || 0;
+  } else {
+    c = ctx();
+    camera = arg1 || THREE_STATE.camera;
+    viewW = arg2 ?? VIEW_W();
+    viewH = arg3 ?? VIEW_H();
+    vx = arg4 || 0;
+    vy = arg5 || 0;
+    time = arg6 || (game.raceTime || 0) * 1000;
+  }
+  if (!c || !camera) return;
+  if (!_approvalProjVec3) _approvalProjVec3 = new THREE.Vector3();
+
+  c.save();
+  c.beginPath();
+  c.rect(vx, vy, viewW, viewH);
+  c.clip();
   for (const k of getActiveKarts()) {
     if (!k || k.eliminated) continue;
     const n = k.approvals || 0;
     if (n <= 0) continue;
-    v.set(k.x, 52 + (k.z || 0), k.y);
-    v.project(cam);
-    if (v.z > 1) continue; // behind the camera
-    const sx = (v.x * 0.5 + 0.5) * VIEW_W();
-    const sy = (-v.y * 0.5 + 0.5) * VIEW_H();
+    _approvalProjVec3.set(k.x, 52 + (k.z || 0), k.y);
+    _approvalProjVec3.project(camera);
+    if (_approvalProjVec3.z > 1) continue; // behind the camera
+    const sx = vx + (_approvalProjVec3.x * 0.5 + 0.5) * viewW;
+    const sy = vy + (-_approvalProjVec3.y * 0.5 + 0.5) * viewH;
     drawApprovalSeals(c, sx, sy, n, time, 7);
   }
+  c.restore();
 }
-export function drawFinishBanner() {
+
+export function drawFinishBanner(time = (game.raceTime || 0) * 1000) {
   ctx().save();
   ctx().translate(VIEW_W() / 2, VIEW_H() / 2);
 
-  // Pulsing scale based on time
-  const t = performance.now() * 0.005;
+  // Pulsing scale based on simulation/frame time
+  const t = time * 0.005;
   const scale = 1.0 + Math.sin(t) * 0.06;
   ctx().scale(scale, scale);
 
   // Glassmorphic backing bar
-  ctx().fillStyle = "rgba(10, 8, 30, 0.72)";
-  ctx().strokeStyle = "rgba(255, 255, 255, 0.16)";
+  ctx().fillStyle = "rgba(10, 8, 30, 0.78)";
+  ctx().strokeStyle = "rgba(255, 255, 255, 0.2)";
   ctx().lineWidth = 2.5;
 
   const bw = 550, bh = 110;
@@ -340,13 +400,15 @@ export function drawFinishBanner() {
   ctx().fill();
   ctx().stroke();
 
-  // Glowing neon yellow/orange text with deep drop-shadow blur
+  // Crisp outlined gold text
   ctx().font = "bold 72px sans-serif";
   ctx().textAlign = "center";
   ctx().textBaseline = "middle";
+  ctx().lineJoin = "round";
+  ctx().strokeStyle = "rgba(10, 8, 30, 0.94)";
+  ctx().lineWidth = 8;
+  ctx().strokeText("FINISH!", 0, 0);
   ctx().fillStyle = "#ffd86b";
-  ctx().shadowBlur = 30;
-  ctx().shadowColor = "#ffd86b";
   ctx().fillText("FINISH!", 0, 0);
 
   ctx().restore();
@@ -413,167 +475,402 @@ export function drawUltimateMeter( x, y, w, kart, time) {
   ctx().restore();
 }
 
+export function drawDriftBar(x, y, w, h, kart, compact = false) {
+  if (!kart || kart.driftCharge <= 5) return;
+  const c = ctx();
+  c.save();
+
+  const charge = clamp(kart.driftCharge / TUNING.DRIFT_TIER3, 0, 1);
+  let col = "#57f2ff"; // Tier 1
+  if (kart.driftCharge >= TUNING.DRIFT_TIER3) col = "#ff4d6d"; // Tier 3
+  else if (kart.driftCharge >= TUNING.DRIFT_TIER2) col = "#fd9927"; // Tier 2
+
+  c.fillStyle = "rgba(8, 10, 24, 0.78)";
+  roundRect(c, x - 2, y - 2, w + 4, h + 4, 4);
+  c.fill();
+
+  c.fillStyle = col;
+  roundRect(c, x, y, w * charge, h, 3);
+  c.fill();
+
+  // Drift tier notch markers (T1, T2, T3)
+  const tiers = [
+    { frac: TUNING.DRIFT_TIER1 / TUNING.DRIFT_TIER3, threshold: TUNING.DRIFT_TIER1, label: "T1", color: "#57f2ff" },
+    { frac: TUNING.DRIFT_TIER2 / TUNING.DRIFT_TIER3, threshold: TUNING.DRIFT_TIER2, label: "T2", color: "#fd9927" },
+    { frac: 1.0, threshold: TUNING.DRIFT_TIER3, label: "T3", color: "#ff4d6d" },
+  ];
+
+  for (const t of tiers) {
+    const nx = x + w * t.frac;
+    const reached = kart.driftCharge >= t.threshold;
+    c.fillStyle = reached ? t.color : "rgba(255, 255, 255, 0.45)";
+    c.fillRect(nx - 1, y - 2, 2, h + 4);
+    if (!compact) {
+      c.font = "bold 8px monospace";
+      c.textAlign = t.frac >= 1 ? "right" : "center";
+      c.textBaseline = "top";
+      c.fillStyle = reached ? t.color : "rgba(255, 255, 255, 0.45)";
+      c.fillText(t.label, t.frac >= 1 ? nx : nx, y + h + 3);
+    }
+  }
+
+  c.strokeStyle = col;
+  c.lineWidth = 1.2;
+  roundRect(c, x - 1, y - 1, w + 2, h + 2, 3);
+  c.stroke();
+
+  c.font = compact ? "bold 9px sans-serif" : "bold 10px sans-serif";
+  c.textAlign = "center";
+  c.textBaseline = "bottom";
+  c.strokeStyle = "rgba(8, 10, 24, 0.9)";
+  c.lineWidth = 3;
+  const label = kart.driftCharge >= TUNING.DRIFT_TIER3
+    ? "ULTRA TURBO"
+    : kart.driftCharge >= TUNING.DRIFT_TIER2
+      ? "SUPER TURBO"
+      : kart.driftCharge >= TUNING.DRIFT_TIER1
+        ? "MINI TURBO"
+        : "CHARGING";
+  c.strokeText(label, x + w / 2, y - 3);
+  c.fillStyle = col;
+  c.fillText(label, x + w / 2, y - 3);
+
+  c.restore();
+}
+
+export function drawBoostSpeedLines(c, left, top, width, height, time, intensity = 1) {
+  if (!c || width <= 0 || height <= 0 || intensity <= 0.01) return;
+  const inten = clamp(intensity, 0, 1.5);
+  const cx = left + width / 2;
+  const cy = top + height / 2;
+  const minDim = Math.min(width, height);
+  const maxDim = Math.max(width, height);
+
+  c.save();
+  c.beginPath();
+  c.rect(left, top, width, height);
+  c.clip();
+
+  // Subtle warm/cyan edge glow during boost / high speed
+  const edgeGrad = c.createRadialGradient(cx, cy, minDim * 0.34, cx, cy, maxDim * 0.72);
+  edgeGrad.addColorStop(0, "rgba(0, 0, 0, 0)");
+  edgeGrad.addColorStop(0.65, `rgba(87, 242, 255, ${0.05 * inten})`);
+  edgeGrad.addColorStop(1, `rgba(253, 153, 39, ${0.18 * inten})`);
+  c.fillStyle = edgeGrad;
+  c.fillRect(left, top, width, height);
+
+  // Crisp radial streak lines
+  const count = 20;
+  const innerBase = minDim * 0.32;
+  const span = maxDim * 0.42;
+  c.lineCap = "round";
+
+  for (let i = 0; i < count; i++) {
+    const ang = (i / count) * TAU + Math.sin(time * 0.0018 + i) * 0.05 + time * 0.0004;
+    const phase = ((time * 0.0042 + i * 0.37) % 1);
+    const r1 = innerBase + phase * span * 0.55;
+    const len = 36 + (i % 3) * 24 + phase * 32;
+    const r2 = r1 + len;
+    const cos = Math.cos(ang);
+    const sin = Math.sin(ang);
+    const alpha = (1 - phase) * 0.45 * inten;
+    if (alpha <= 0.02) continue;
+
+    c.strokeStyle = i % 3 === 0
+      ? `rgba(87, 242, 255, ${alpha})`
+      : i % 3 === 1
+        ? `rgba(255, 224, 140, ${alpha})`
+        : `rgba(255, 255, 255, ${alpha * 0.9})`;
+    c.lineWidth = i % 2 === 0 ? 2 : 1.3;
+    c.beginPath();
+    c.moveTo(cx + cos * r1, cy + sin * r1);
+    c.lineTo(cx + cos * r2, cy + sin * r2);
+    c.stroke();
+  }
+
+  c.restore();
+}
+
+export function drawRearThreatIndicator(c, kart, left, top, width, height, time) {
+  if (!c || !kart || kart.eliminated) return;
+
+  const sources = [
+    game.track && game.track.projectiles,
+    game.track && game.track.dragonProjectiles,
+    game.hazards,
+  ];
+
+  const fx = Math.cos(kart.heading);
+  const fy = Math.sin(kart.heading);
+  let bestUrgency = 0;
+  let bestLateral = 0;
+
+  for (const list of sources) {
+    if (!list || !list.length) continue;
+    for (let i = 0; i < list.length; i++) {
+      const p = list[i];
+      if (!p || p.active === false) continue;
+      const isProjectile = list !== game.hazards ||
+        p.kind === "regulatory_projectile" ||
+        p.constructor?.name === "DossierProjectile" ||
+        p.constructor?.name === "RegulatoryProjectile";
+      if (!isProjectile) continue;
+      if (p.owner === kart && (p.ignoreOwnerTimer || 0) > 0) continue;
+
+      const dx = p.x - kart.x;
+      const dy = p.y - kart.y;
+      const d = Math.hypot(dx, dy);
+      if (d <= 1 || d > 420) continue;
+
+      const ux = dx / d;
+      const uy = dy / d;
+      // Must be behind the kart
+      const dotForward = ux * fx + uy * fy;
+      if (dotForward > -0.15) continue;
+
+      const pvx = p.vx != null ? p.vx : Math.cos(p.heading || 0) * (p.speed || 0);
+      const pvy = p.vy != null ? p.vy : Math.sin(p.heading || 0) * (p.speed || 0);
+      const relVx = pvx - (kart.vx || 0);
+      const relVy = pvy - (kart.vy || 0);
+      // Closing speed toward kart: -ux, -uy is from projectile to kart
+      const closing = relVx * (-ux) + relVy * (-uy);
+      if (closing <= 0.5) continue;
+
+      const urgency = 1 - d / 420;
+      if (urgency > bestUrgency) {
+        bestUrgency = urgency;
+        bestLateral = fx * uy - fy * ux;
+      }
+    }
+  }
+
+  if (bestUrgency <= 0) return;
+
+  const pulse = 0.55 + 0.45 * Math.sin(time * 0.024);
+  const wx = clamp(left + width / 2 + clamp(-bestLateral, -0.75, 0.75) * (width * 0.25), left + 36, left + width - 36);
+  const wy = top + height - 28;
+  const sz = 12 + bestUrgency * 4;
+
+  c.save();
+  c.beginPath();
+  c.rect(left, top, width, height);
+  c.clip();
+
+  // Subtle bottom edge red warning glow
+  const g = c.createLinearGradient(0, top + height - 42, 0, top + height);
+  g.addColorStop(0, "rgba(255, 30, 60, 0)");
+  g.addColorStop(1, `rgba(255, 30, 60, ${(0.18 + bestUrgency * 0.16) * pulse})`);
+  c.fillStyle = g;
+  c.fillRect(left, top + height - 42, width, 42);
+
+  // Pulsing red warning chevron
+  c.translate(wx, wy);
+  const scale = 0.92 + pulse * 0.14;
+  c.scale(scale, scale);
+
+  c.beginPath();
+  c.moveTo(0, -sz);
+  c.lineTo(sz * 0.95, sz * 0.72);
+  c.lineTo(0, sz * 0.34);
+  c.lineTo(-sz * 0.95, sz * 0.72);
+  c.closePath();
+
+  c.strokeStyle = "rgba(8, 10, 24, 0.92)";
+  c.lineWidth = 4;
+  c.lineJoin = "round";
+  c.stroke();
+
+  c.fillStyle = `rgba(255, 51, 85, ${0.75 + 0.25 * pulse})`;
+  c.fill();
+
+  c.strokeStyle = "#ffd86b";
+  c.lineWidth = 1.4;
+  c.stroke();
+
+  c.fillStyle = "#ffffff";
+  c.font = "bold 9px sans-serif";
+  c.textAlign = "center";
+  c.textBaseline = "middle";
+  c.fillText("!", 0, 0);
+
+  c.restore();
+}
+
 export function drawHUD(time) {
   if (!game.player) return;
   ctx().save();
 
+  const vw = VIEW_W();
+  const vh = VIEW_H();
+  const battle = isBattleMode();
+  const dragon = isDragonEscape();
+  const hasBest = !battle && !dragon && game.mapRecordCache && Number.isFinite(game.mapRecordCache.bestTotal);
+  const topLeftW = hasBest ? 316 : (battle ? 244 : 228);
+
   // Top-left: Lap/Distance, Position, Time
-  drawHUDPanel(20, 20, 220, 92, () => {
+  drawHUDPanel(20, 20, topLeftW, 102, () => {
     ctx().fillStyle = "#a8acd0";
     ctx().font = "11px sans-serif";
     ctx().textAlign = "left"; ctx().textBaseline = "top";
-    if (isBattleMode()) {
+    if (battle) {
       const appr = game.player.approvals || 0;
-      ctx().fillText("APPROVALS", 18, 14);
-      ctx().font = "bold 22px sans-serif";
-      for (let i = 0; i < Math.max(appr, 0); i++) {
-        ctx().fillStyle = COMPASS_VISUAL.sealFill;
-        ctx().beginPath(); ctx().arc(24 + i * 20, 34, 7, 0, TAU); ctx().fill();
-        ctx().strokeStyle = COMPASS_VISUAL.sealRing;
-        ctx().lineWidth = 1.2;
-        ctx().stroke();
-        ctx().fillStyle = COMPASS_VISUAL.sealMark;
-        ctx().font = "bold 9px sans-serif";
-        ctx().fillText("✓", 20 + i * 20, 29);
-        ctx().font = "bold 22px sans-serif";
-      }
+      ctx().fillText("APPROVALS", 18, 12);
       if (appr <= 0) {
         ctx().fillStyle = "#ff3366";
         ctx().font = "bold 16px sans-serif";
         ctx().fillText("REJECTED", 18, 28);
+      } else {
+        const cap = appr > 5 ? 4 : appr;
+        for (let i = 0; i < cap; i++) {
+          const sx = 24 + i * 18;
+          ctx().fillStyle = COMPASS_VISUAL.sealFill;
+          ctx().beginPath(); ctx().arc(sx, 33, 6.5, 0, TAU); ctx().fill();
+          ctx().strokeStyle = COMPASS_VISUAL.sealRing;
+          ctx().lineWidth = 1.2;
+          ctx().stroke();
+          ctx().fillStyle = COMPASS_VISUAL.sealMark;
+          ctx().font = "bold 8.5px sans-serif";
+          ctx().fillText("✓", sx - 3.5, 29);
+        }
+        if (appr > 5) {
+          ctx().fillStyle = "#ffd86b";
+          ctx().font = "bold 13px 'SFMono-Regular', Consolas, monospace";
+          ctx().fillText(`×${appr}`, 24 + cap * 18 - 4, 27);
+        }
       }
 
       const untimed = isUntimedHumanBattle();
       const tl = untimed ? game.battleDuration : Math.max(0, game.battleTimeLeft || 0);
       ctx().fillStyle = !untimed && tl < 15 ? "#ff4d6d" : "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("TIME LEFT", 130, 14);
+      ctx().fillText("TIME LEFT", 134, 12);
       ctx().fillStyle = !untimed && tl < 15 ? "#ff4d6d" : "#fff";
-      ctx().font = "bold 22px 'SFMono-Regular', Consolas, monospace";
-      ctx().fillText(untimed ? "∞" : formatTime(tl), 130, 32);
+      ctx().font = "bold 20px 'SFMono-Regular', Consolas, monospace";
+      ctx().fillText(untimed ? "∞" : formatTime(tl), 134, 29);
 
       const aliveCount = getActiveKarts().filter((k) => k && !k.eliminated).length;
       ctx().fillStyle = "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("SURVIVORS", 18, 64);
+      ctx().fillText("SURVIVORS", 18, 58);
       ctx().fillStyle = "#fff";
       ctx().font = "bold 22px sans-serif";
-      ctx().fillText(`${aliveCount} / ${game.totalRacers}`, 18, 78);
-    } else if (isDragonEscape()) {
-      ctx().fillText("DISTANCE", 18, 14);
+      ctx().fillText(`${aliveCount} / ${game.totalRacers}`, 18, 72);
+    } else if (dragon) {
+      ctx().fillText("DISTANCE", 18, 12);
       ctx().fillStyle = "#fff";
       ctx().font = "bold 22px 'SFMono-Regular', Consolas, monospace";
       const distKm = (game.player.x / 1000).toFixed(1);
-      ctx().fillText(`${distKm} km`, 18, 28);
+      ctx().fillText(`${distKm} km`, 18, 26);
 
       ctx().fillStyle = "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("SURVIVAL", 130, 14);
+      ctx().fillText("SURVIVAL", 126, 12);
       ctx().fillStyle = "#fff";
-      ctx().font = "bold 22px 'SFMono-Regular', Consolas, monospace";
-      ctx().fillText(formatTime(game.raceTime), 130, 32);
+      ctx().font = "bold 20px 'SFMono-Regular', Consolas, monospace";
+      ctx().fillText(formatTime(game.raceTime), 126, 29);
 
       ctx().fillStyle = "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("POSITION", 18, 64);
+      ctx().fillText("POSITION", 18, 58);
       ctx().fillStyle = positionColor(game.hudPosition);
       ctx().font = "bold 22px sans-serif";
-      ctx().fillText(`${ordinal(game.hudPosition)} / ${game.totalRacers}`, 18, 78);
+      ctx().fillText(`${ordinal(game.hudPosition)} / ${game.totalRacers}`, 18, 72);
     } else {
-      ctx().fillText("LAP", 18, 14);
+      ctx().fillText("LAP", 18, 12);
       ctx().fillStyle = "#fff";
-      ctx().font = "bold 28px sans-serif";
-      ctx().fillText(`${Math.min(game.player.lap + 1, getTotalLaps())} / ${getTotalLaps()}`, 18, 28);
+      ctx().font = "bold 26px sans-serif";
+      ctx().fillText(`${Math.min(game.player.lap + 1, getTotalLaps())} / ${getTotalLaps()}`, 18, 25);
 
       ctx().fillStyle = "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("TIME", 130, 14);
+      ctx().fillText("TIME", 124, 12);
       ctx().fillStyle = "#fff";
-      ctx().font = "bold 22px 'SFMono-Regular', Consolas, monospace";
-      ctx().fillText(formatTime(game.raceTime), 130, 32);
+      ctx().font = "bold 20px 'SFMono-Regular', Consolas, monospace";
+      ctx().fillText(formatTime(game.raceTime), 124, 29);
 
-      if (game.mapRecordCache && Number.isFinite(game.mapRecordCache.bestTotal)) {
+      if (hasBest) {
         ctx().fillStyle = "#ffd86b";
         ctx().font = "11px sans-serif";
-        ctx().fillText("BEST", 240, 14);
-        ctx().font = "bold 18px 'SFMono-Regular', Consolas, monospace";
-        ctx().fillText(formatTime(game.mapRecordCache.bestTotal), 240, 31);
+        ctx().fillText("BEST", 224, 12);
+        ctx().font = "bold 17px 'SFMono-Regular', Consolas, monospace";
+        ctx().fillText(formatTime(game.mapRecordCache.bestTotal), 224, 30);
       }
 
       ctx().fillStyle = "#a8acd0";
       ctx().font = "11px sans-serif";
-      ctx().fillText("POSITION", 18, 64);
+      ctx().fillText("POSITION", 18, 58);
       ctx().fillStyle = positionColor(game.hudPosition);
       ctx().font = "bold 22px sans-serif";
-      ctx().fillText(`${ordinal(game.hudPosition)} / ${game.totalRacers}`, 18, 78);
+      ctx().fillText(`${ordinal(game.hudPosition)} / ${game.totalRacers}`, 18, 72);
     }
   });
 
   // Top-right: Coins / Item Roulette slot
-  drawHUDPanel(VIEW_W() - 220 - 20, 20, 220, 92, () => {
+  drawHUDPanel(vw - 220 - 20, 20, 220, 102, () => {
     ctx().fillStyle = "#a8acd0";
     ctx().font = "11px sans-serif";
     ctx().textAlign = "left"; ctx().textBaseline = "top";
-    ctx().fillText("CITATIONS", 18, 14);
+    ctx().fillText("CITATIONS", 18, 12);
 
     // Coin icon
     ctx().fillStyle = "#ffd86b";
-    ctx().beginPath(); ctx().arc(28, 42, 9, 0, TAU); ctx().fill();
+    ctx().beginPath(); ctx().arc(28, 44, 9, 0, TAU); ctx().fill();
     ctx().fillStyle = "#a87a13";
-    ctx().beginPath(); ctx().arc(28, 42, 5, 0, TAU); ctx().fill();
+    ctx().beginPath(); ctx().arc(28, 44, 5, 0, TAU); ctx().fill();
     ctx().fillStyle = "#fff";
     ctx().font = "bold 22px sans-serif";
-    ctx().fillText(`${game.player.coinsCollected}`, 50, 32);
+    ctx().fillText(`${game.player.coinsCollected}`, 50, 34);
 
     ctx().fillStyle = "#a8acd0";
     ctx().font = "11px sans-serif";
-    ctx().fillText("ITEM", 132, 14);
+    ctx().fillText("ITEM", 132, 12);
   });
 
-  // Draw the Item Slot panel perfectly overlapping the top-right panel slot
-  drawItemSlot(ctx(), VIEW_W() - 20 - 90, 42, 70, game.player, time);
+  // Draw the Item Slot panel cleanly below the ITEM label inside the top-right panel
+  drawItemSlot(vw - 20 - 88, 48, 64, game.player, time);
+
+  // Responsive bottom HUD layout (1P)
+  const narrow = vw < 680;
+  const speedoSize = narrow ? (vw < 520 ? 104 : 118) : 140;
+  const mapSize = narrow ? (vw < 520 ? 120 : 144) : 180;
+  const speedoX = narrow ? 16 : 20;
+  const speedoY = vh - speedoSize - (narrow ? 16 : 20);
+  const mapX = vw - mapSize - (narrow ? 16 : 20);
+  const mapY = vh - mapSize - (narrow ? 16 : 20);
 
   // Bottom-left: Speedometer
-  drawSpeedo(20, VIEW_H() - 160, 140, game.player);
+  drawSpeedo(speedoX, speedoY, speedoSize, game.player, time);
 
   // Bottom-right: Mini-map
-  drawMinimap(VIEW_W() - 200, VIEW_H() - 200, 180);
+  drawMinimap(mapX, mapY, mapSize);
 
-  // Drift charge bar (center bottom)
-  if (game.player.driftCharge > 5) {
-    const w = 160, h = 8;
-    const x = (VIEW_W() - w) / 2, y = VIEW_H() - 30;
-    ctx().fillStyle = "rgba(0,0,0,0.4)";
-    ctx().fillRect(x, y, w, h);
-    const charge = clamp(game.player.driftCharge / TUNING.DRIFT_TIER3, 0, 1);
-    let col = "#00e5ff"; // Blue (Tier 1)
-    if (game.player.driftCharge >= TUNING.DRIFT_TIER3) col = "#ff4d6d"; // Pink (Tier 3)
-    else if (game.player.driftCharge >= TUNING.DRIFT_TIER2) col = "#fd9927"; // Orange (Tier 2)
-    ctx().fillStyle = col;
-    ctx().fillRect(x, y, w * charge, h);
-    ctx().strokeStyle = col;
-    ctx().strokeRect(x - 1, y - 1, w + 2, h + 2);
-    ctx().font = "bold 10px sans-serif";
-    ctx().textAlign = "center";
-    ctx().fillText(game.player.driftCharge >= TUNING.DRIFT_TIER3 ? "ULTRA TURBO READY" : game.player.driftCharge >= TUNING.DRIFT_TIER2 ? "SUPER TURBO" : "MINI TURBO", x + w / 2, y - 7);
-  }
+  // Center bottom: Drift charge bar & Ultimate meter (responsive)
+  const gapLeft = speedoX + speedoSize + 10;
+  const gapRight = mapX - 10;
+  const availGap = gapRight - gapLeft;
+  const liftBars = narrow && availGap < 110;
+  const barW = liftBars ? Math.min(160, vw - 40) : Math.min(160, Math.max(104, availGap));
+  const barX = liftBars ? (vw - barW) / 2 : gapLeft + (availGap - barW) / 2;
+  const driftY = liftBars ? Math.min(speedoY, mapY) - 22 : vh - 32;
+  const ultY = liftBars ? driftY - 24 : vh - 56;
 
-  // Ultimate charge meter (left of center bottom)
-  drawUltimateMeter(ctx(), (VIEW_W() - 140) / 2, VIEW_H() - 52, 140, game.player, time);
+  drawDriftBar(barX, driftY, barW, 8, game.player, narrow);
+  drawUltimateMeter(barX, ultY, Math.min(140, barW), game.player, time);
 
-  // Regulaido Autopilot Active Watermark Panel (top-center, beautifully glassmorphic)
-  const wmW = 200, wmH = 24;
-  const wmX = (VIEW_W() - wmW) / 2, wmY = 20;
+  // Regulaido Autopilot Active Watermark Panel (top-center, crisp dark stroke)
+  const wmW = vw < 720 ? 176 : 200, wmH = 24;
+  const wmX = (vw - wmW) / 2, wmY = 20;
 
   ctx().save();
-  ctx().shadowBlur = 8;
-  ctx().shadowColor = "rgba(123, 117, 255, 0.4)";
-  ctx().fillStyle = "rgba(13, 11, 33, 0.75)";
+  ctx().fillStyle = "rgba(13, 11, 33, 0.82)";
+  ctx().strokeStyle = "rgba(4, 3, 14, 0.9)";
+  ctx().lineWidth = 2.5;
+  ctx().beginPath();
+  roundRect(ctx(), wmX, wmY, wmW, wmH, 5);
+  ctx().stroke();
+  ctx().fill();
   ctx().strokeStyle = "#7b75ff";
   ctx().lineWidth = 1;
-  ctx().beginPath();
-  ctx().roundRect ? ctx().roundRect(wmX, wmY, wmW, wmH, 5) : ctx().rect(wmX, wmY, wmW, wmH);
-  ctx().fill();
   ctx().stroke();
   ctx().restore();
 
@@ -583,65 +880,78 @@ export function drawHUD(time) {
   ctx().textBaseline = "middle";
   const dotPulse = Math.sin(time * 0.005) > 0 ? "●" : " ";
   ctx().fillStyle = "#a4ff80"; // Mint Green
-  ctx().fillText(dotPulse, wmX + 22, wmY + wmH / 2);
+  ctx().fillText(dotPulse, wmX + 18, wmY + wmH / 2);
   ctx().fillStyle = "#ffffff";
-  ctx().fillText("REGULAIDO AUTOPILOT ACTIVE", wmX + 110, wmY + wmH / 2);
+  ctx().fillText(vw < 720 ? "AUTOPILOT ACTIVE" : "REGULAIDO AUTOPILOT ACTIVE", wmX + wmW / 2 + 6, wmY + wmH / 2);
 
-  // Active status effects panel (right side, above minimap)
-  drawStatusEffects(VIEW_W() - 200, VIEW_H() - 400, game.player, time);
-
-  // Hit flash overlay
-  drawHitFlash(game.player, 0, 0, VIEW_W(), VIEW_H(), time);
-
-  // Battle spectator banner: shown after you're rejected while you watch the kill chain play out
-  if (isBattleMode() && game.player && game.player.eliminated) {
-    drawSpectateBanner(VIEW_W() / 2, 70, time);
-  }
-
-  // Wrong-way overlay
-  drawWrongWay(game.player, 0, 0, VIEW_W(), VIEW_H(), time);
-
-  // Position change callout
-  drawPositionChange(VIEW_W() / 2, VIEW_H() * 0.18, game.player);
-
-  // Item name popup
-  drawItemNamePopup(VIEW_W() - 20 - 55, 118, game.player, time);
-
-  // Mute indicator
+  // Mute / P2P badges top-right below top-right panel
+  let badgesBottom = 122;
   if (Sound.muted) {
-    ctx().fillStyle = "rgba(0,0,0,0.45)";
-    ctx().fillRect(VIEW_W() - 70, 130, 56, 22);
+    ctx().fillStyle = "rgba(0,0,0,0.55)";
+    ctx().fillRect(vw - 70, 130, 56, 22);
     ctx().fillStyle = "#fff";
     ctx().font = "bold 11px sans-serif";
     ctx().textAlign = "center"; ctx().textBaseline = "middle";
-    ctx().fillText("MUTED", VIEW_W() - 42, 141);
+    ctx().fillText("MUTED", vw - 42, 141);
+    badgesBottom = 154;
   }
 
   if (game.p2pMode && game.p2pPing > 0) {
     const pingY = Sound.muted ? 158 : 130;
     const pingColor = game.p2pPing < 60 ? "#a4ff80" : game.p2pPing < 120 ? "#ffd86b" : "#ff4d6d";
-    ctx().fillStyle = "rgba(0,0,0,0.45)";
-    ctx().fillRect(VIEW_W() - 82, pingY, 68, 20);
+    ctx().fillStyle = "rgba(0,0,0,0.55)";
+    ctx().fillRect(vw - 82, pingY, 68, 20);
     ctx().fillStyle = pingColor;
     ctx().font = "bold 10px monospace";
     ctx().textAlign = "center"; ctx().textBaseline = "middle";
-    ctx().fillText(`${game.p2pPing}ms`, VIEW_W() - 48, pingY + 10);
+    ctx().fillText(`${game.p2pPing}ms`, vw - 48, pingY + 10);
+    badgesBottom = pingY + 22;
   }
 
   if (game.p2pConnectionUnstable) {
     const unstableY = (game.p2pMode && game.p2pPing > 0) ? (Sound.muted ? 184 : 156) : (Sound.muted ? 158 : 130);
-    ctx().fillStyle = "rgba(0,0,0,0.45)";
-    ctx().fillRect(VIEW_W() - 152, unstableY, 138, 20);
+    ctx().fillStyle = "rgba(0,0,0,0.55)";
+    ctx().fillRect(vw - 152, unstableY, 138, 20);
     ctx().fillStyle = "#ffd86b";
     ctx().font = "bold 9px monospace";
     ctx().textAlign = "center"; ctx().textBaseline = "middle";
-    ctx().fillText("CONNECTION UNSTABLE", VIEW_W() - 83, unstableY + 10);
+    ctx().fillText("CONNECTION UNSTABLE", vw - 83, unstableY + 10);
+    badgesBottom = unstableY + 22;
   }
+
+  // Active status effects panel (right-aligned, stacked upwards safely above minimap)
+  drawStatusEffects(vw - 20, mapY - 12, game.player, time, {
+    alignRight: true,
+    rightEdge: vw - 20,
+    stackUp: true,
+    bottomEdge: mapY - 12,
+    minTop: badgesBottom + 8,
+  });
+
+  // Rear projectile threat warning chevron
+  drawRearThreatIndicator(ctx(), game.player, 0, 0, vw, vh, time);
+
+  // Hit flash overlay
+  drawHitFlash(game.player, 0, 0, vw, vh, time);
+
+  // Battle spectator banner: shown after you're rejected while you watch the kill chain play out
+  if (battle && game.player && game.player.eliminated) {
+    drawSpectateBanner(vw / 2, 70, time);
+  }
+
+  // Wrong-way overlay
+  drawWrongWay(game.player, 0, 0, vw, vh, time);
+
+  // Position change callout
+  drawPositionChange(vw / 2, vh * 0.18, game.player);
+
+  // Item name popup
+  drawItemNamePopup(vw - 20 - 55, 118, game.player, time);
 
   ctx().restore();
 }
 
-export function drawItemSlot( x, y, size, kart, time) {
+export function drawItemSlot(x, y, size, kart, time) {
   ctx().save();
   ctx().translate(x, y);
 
@@ -664,9 +974,9 @@ export function drawItemSlot( x, y, size, kart, time) {
     const items = ["boost", "shield", "handling", "conflict", "placebo", "doubleblind", "dossier", "deauth", "mergerequest", "hotfix", "fasttrack"];
     const frameIdx = Math.floor(time * 0.05) % items.length;
     const item = items[frameIdx];
-    drawItemIcon(ctx(), size / 2, size / 2, size * 0.55, item, time);
+    drawItemIcon(size / 2, size / 2, size * 0.55, item, time);
   } else if (kart.itemState === "active" && kart.itemSlot) {
-    drawItemIcon(ctx(), size / 2, size / 2, size * 0.6, kart.itemSlot, time);
+    drawItemIcon(size / 2, size / 2, size * 0.6, kart.itemSlot, time);
 
     const pulse = 0.5 + 0.5 * Math.sin(time * 0.015);
     ctx().strokeStyle = `rgba(255, 216, 107, ${pulse})`;
@@ -685,46 +995,48 @@ export function drawItemSlot( x, y, size, kart, time) {
   ctx().restore();
 }
 
-export function drawItemIcon( cx, cy, sz, item, time) {
+export function drawItemIcon(cx, cy, sz, item, time) {
   ctx().save();
   ctx().translate(cx, cy);
 
   if (item === "boost") {
-    ctx().fillStyle = "#fd9927";
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#fd9927";
     ctx().beginPath();
     ctx().moveTo(0, -sz / 2);
     ctx().lineTo(sz / 2, sz / 2 - 2);
     ctx().lineTo(0, sz / 4);
     ctx().lineTo(-sz / 2, sz / 2 - 2);
     ctx().closePath();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 3;
+    ctx().stroke();
+    ctx().fillStyle = "#fd9927";
     ctx().fill();
   } else if (item === "shield") {
-    ctx().fillStyle = "rgba(87, 242, 255, 0.25)";
-    ctx().strokeStyle = "#57f2ff";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#57f2ff";
-
     ctx().beginPath();
     ctx().moveTo(0, -sz / 2);
     ctx().lineTo(sz / 2 - 2, -sz / 4);
     ctx().quadraticCurveTo(sz / 2 - 2, sz / 4, 0, sz / 2);
     ctx().quadraticCurveTo(-sz / 2 + 2, sz / 4, -sz / 2 + 2, -sz / 4);
     ctx().closePath();
+    ctx().fillStyle = "rgba(87, 242, 255, 0.28)";
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
+    ctx().stroke();
+    ctx().strokeStyle = "#57f2ff";
+    ctx().lineWidth = 2.4;
     ctx().stroke();
   } else if (item === "handling") {
-    ctx().strokeStyle = "#a4ff80";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#a4ff80";
     ctx().save();
     ctx().rotate(time * 0.003);
 
     ctx().beginPath();
     ctx().arc(0, 0, sz / 3, 0, TAU);
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4.2;
+    ctx().stroke();
+    ctx().strokeStyle = "#a4ff80";
+    ctx().lineWidth = 2.5;
     ctx().stroke();
 
     ctx().lineWidth = 3;
@@ -737,53 +1049,52 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     }
     ctx().restore();
   } else if (item === "conflict") {
-    ctx().fillStyle = "rgba(255, 77, 109, 0.25)";
-    ctx().strokeStyle = "#ff4d6d";
-    ctx().lineWidth = 2;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#ff4d6d";
-
+    ctx().fillStyle = "rgba(255, 77, 109, 0.28)";
     ctx().beginPath();
     ctx().rect(-sz / 2, -sz / 2, sz, sz);
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 3.5;
+    ctx().stroke();
+    ctx().strokeStyle = "#ff4d6d";
+    ctx().lineWidth = 2;
     ctx().stroke();
 
-    ctx().shadowBlur = 0;
     ctx().fillStyle = "#fff";
     ctx().font = "bold 9px monospace";
     ctx().textAlign = "center";
     ctx().textBaseline = "middle";
     ctx().fillText("Err", 0, 0);
   } else if (item === "placebo") {
-    ctx().fillStyle = "rgba(255, 204, 0, 0.25)";
-    ctx().strokeStyle = "#ffcc00";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#ffcc00";
+    ctx().fillStyle = "rgba(255, 204, 0, 0.28)";
     roundRect(ctx(), -sz * 0.48, -sz * 0.22, sz * 0.96, sz * 0.44, sz * 0.22);
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
+    ctx().stroke();
+    ctx().strokeStyle = "#ffcc00";
+    ctx().lineWidth = 2.4;
     ctx().stroke();
     ctx().beginPath();
     ctx().moveTo(0, -sz * 0.2);
     ctx().lineTo(0, sz * 0.2);
     ctx().stroke();
-    ctx().shadowBlur = 0;
     ctx().fillStyle = "#fff";
     ctx().font = "bold 9px monospace";
     ctx().textAlign = "center";
     ctx().textBaseline = "middle";
     ctx().fillText("Rx", -sz * 0.18, 0);
   } else if (item === "doubleblind") {
-    ctx().fillStyle = "rgba(189, 87, 255, 0.24)";
-    ctx().strokeStyle = "#bd57ff";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 10;
-    ctx().shadowColor = "#bd57ff";
+    ctx().fillStyle = "rgba(189, 87, 255, 0.28)";
     ctx().beginPath();
     ctx().arc(0, 0, sz * 0.42, 0, TAU);
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
     ctx().stroke();
-    ctx().shadowBlur = 0;
+    ctx().strokeStyle = "#bd57ff";
+    ctx().lineWidth = 2.4;
+    ctx().stroke();
     ctx().strokeStyle = "#fff";
     ctx().lineWidth = 2;
     ctx().beginPath();
@@ -796,12 +1107,7 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().lineTo(sz * 0.36, sz * 0.28);
     ctx().stroke();
   } else if (item === "dossier") {
-    ctx().fillStyle = "rgba(87, 242, 255, 0.25)";
-    ctx().strokeStyle = "#57f2ff";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#57f2ff";
-
+    ctx().fillStyle = "rgba(87, 242, 255, 0.28)";
     ctx().beginPath();
     ctx().rect(-sz / 2, -sz * 0.35, sz, sz * 0.7);
     ctx().moveTo(-sz / 2, -sz * 0.35);
@@ -809,10 +1115,14 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().lineTo(-sz / 8, -sz / 2);
     ctx().lineTo(0, -sz * 0.35);
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
+    ctx().stroke();
+    ctx().strokeStyle = "#57f2ff";
+    ctx().lineWidth = 2.4;
     ctx().stroke();
 
-    ctx().shadowBlur = 0;
-    ctx().strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx().strokeStyle = "rgba(255, 255, 255, 0.85)";
     ctx().lineWidth = 1.5;
     ctx().beginPath();
     ctx().moveTo(-sz * 0.3, -sz * 0.1);
@@ -823,31 +1133,29 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().lineTo(sz * 0.25, sz * 0.25);
     ctx().stroke();
   } else if (item === "deauth") {
-    ctx().strokeStyle = "#ff3366";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#ff3366";
-
-    // Draw concentric antenna waves
     ctx().beginPath();
     ctx().arc(0, sz * 0.15, sz * 0.12, 0, TAU);
     ctx().fillStyle = "#ff3366";
     ctx().fill();
 
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
     ctx().beginPath();
     ctx().arc(0, sz * 0.15, sz * 0.3, Math.PI * 1.2, Math.PI * 1.8);
     ctx().stroke();
+    ctx().beginPath();
+    ctx().arc(0, sz * 0.15, sz * 0.52, Math.PI * 1.25, Math.PI * 1.75);
+    ctx().stroke();
 
+    ctx().strokeStyle = "#ff3366";
+    ctx().lineWidth = 2.4;
+    ctx().beginPath();
+    ctx().arc(0, sz * 0.15, sz * 0.3, Math.PI * 1.2, Math.PI * 1.8);
+    ctx().stroke();
     ctx().beginPath();
     ctx().arc(0, sz * 0.15, sz * 0.52, Math.PI * 1.25, Math.PI * 1.75);
     ctx().stroke();
   } else if (item === "mergerequest") {
-    ctx().strokeStyle = "#39ff14";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 8;
-    ctx().shadowColor = "#39ff14";
-
-    // Draw bracket < > with a center pull arrow
     ctx().beginPath();
     ctx().moveTo(-sz * 0.35, -sz * 0.3);
     ctx().lineTo(-sz * 0.5, 0);
@@ -856,12 +1164,14 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().moveTo(sz * 0.35, -sz * 0.3);
     ctx().lineTo(sz * 0.5, 0);
     ctx().lineTo(sz * 0.35, sz * 0.3);
-    ctx().stroke();
 
-    // Center arrow pointing down/in
-    ctx().beginPath();
     ctx().moveTo(0, -sz * 0.25);
     ctx().lineTo(0, sz * 0.25);
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
+    ctx().stroke();
+    ctx().strokeStyle = "#39ff14";
+    ctx().lineWidth = 2.4;
     ctx().stroke();
 
     ctx().fillStyle = "#39ff14";
@@ -872,13 +1182,7 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().closePath();
     ctx().fill();
   } else if (item === "hotfix") {
-    const pulse = 0.6 + 0.4 * Math.sin(time * 0.008);
-    ctx().fillStyle = `rgba(255, 200, 0, ${pulse})`;
-    ctx().strokeStyle = "#ffcc00";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 12;
-    ctx().shadowColor = "#ffcc00";
-
+    const pulse = 0.65 + 0.35 * Math.sin(time * 0.008);
     ctx().beginPath();
     ctx().moveTo(0, -sz * 0.5);
     ctx().lineTo(sz * 0.2, -sz * 0.1);
@@ -891,14 +1195,15 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().lineTo(-sz * 0.5, -sz * 0.1);
     ctx().lineTo(-sz * 0.2, -sz * 0.1);
     ctx().closePath();
+    ctx().fillStyle = `rgba(255, 200, 0, ${pulse})`;
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
+    ctx().stroke();
+    ctx().strokeStyle = "#ffcc00";
+    ctx().lineWidth = 2.4;
     ctx().stroke();
   } else if (item === "fasttrack") {
-    ctx().strokeStyle = "#a4ff80";
-    ctx().fillStyle = "rgba(164, 255, 128, 0.22)";
-    ctx().lineWidth = 2.5;
-    ctx().shadowBlur = 12;
-    ctx().shadowColor = "#a4ff80";
     ctx().beginPath();
     ctx().moveTo(-sz * 0.42, sz * 0.2);
     ctx().lineTo(-sz * 0.12, -sz * 0.42);
@@ -907,9 +1212,14 @@ export function drawItemIcon( cx, cy, sz, item, time) {
     ctx().lineTo(sz * 0.42, sz * 0.04);
     ctx().lineTo(-sz * 0.1, sz * 0.46);
     ctx().closePath();
+    ctx().fillStyle = "rgba(164, 255, 128, 0.25)";
     ctx().fill();
+    ctx().strokeStyle = "rgba(8, 10, 24, 0.85)";
+    ctx().lineWidth = 4;
     ctx().stroke();
-    ctx().shadowBlur = 0;
+    ctx().strokeStyle = "#a4ff80";
+    ctx().lineWidth = 2.4;
+    ctx().stroke();
     ctx().fillStyle = "#fff";
     ctx().font = "bold 8px monospace";
     ctx().textAlign = "center";
@@ -924,119 +1234,165 @@ export function drawHUDMultiplayer(time) {
   if (!game.player || !game.player2) return;
   ctx().save();
 
+  const vw = VIEW_W();
+  const vh = VIEW_H();
+  const battle = isBattleMode();
+  const dragon = isDragonEscape();
+  const narrow = vw < 720;
+  const panelW = narrow ? 172 : 185;
+
   const ranking = uiRuntime.rankAll();
   const p1Pos = ranking.indexOf(game.player) + 1;
   const p2Pos = ranking.indexOf(game.player2) + 1;
+  const aliveCount = battle ? getActiveKarts().filter((k) => k && !k.eliminated).length : 0;
 
-  // 1. Player 1 HUD (Left side)
-  drawHUDPanel(15, 15, 185, 105, () => {
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().textAlign = "left"; ctx().textBaseline = "top";
+  const drawPlayerBattleOrRacePanel = (kart, pos, isRight) => {
+    const px = isRight ? vw - panelW - 15 : 15;
+    drawHUDPanel(px, 15, panelW, 114, () => {
+      ctx().fillStyle = "#a8acd0";
+      ctx().font = "10px sans-serif";
+      ctx().textAlign = "left"; ctx().textBaseline = "top";
 
-    if (isDragonEscape()) { ctx().fillText("DIST", 12, 10); ctx().fillStyle = "#fff"; ctx().font = "bold 18px 'SFMono-Regular', Consolas, monospace"; ctx().fillText(`${(game.player.x / 1000).toFixed(1)}km`, 12, 22); }
-    else { ctx().fillText("LAP", 12, 10); ctx().fillStyle = "#fff"; ctx().font = "bold 20px sans-serif"; ctx().fillText(`${Math.min(game.player.lap + 1, getTotalLaps())} / ${getTotalLaps()}`, 12, 22); }
+      if (battle) {
+        const appr = kart.approvals || 0;
+        ctx().fillText("APPROVALS", 12, 10);
+        if (kart.eliminated || appr <= 0) {
+          ctx().fillStyle = "rgba(255, 51, 102, 0.22)";
+          roundRect(ctx(), 12, 24, 78, 18, 4);
+          ctx().fill();
+          ctx().strokeStyle = "#ff3366";
+          ctx().lineWidth = 1;
+          ctx().stroke();
+          ctx().fillStyle = "#ff4d6d";
+          ctx().font = "bold 10px sans-serif";
+          ctx().fillText("ELIMINATED", 17, 28);
+        } else {
+          const cap = appr > 5 ? 4 : appr;
+          for (let i = 0; i < cap; i++) {
+            const sx = 18 + i * 16;
+            ctx().fillStyle = COMPASS_VISUAL.sealFill;
+            ctx().beginPath(); ctx().arc(sx, 31, 5.5, 0, TAU); ctx().fill();
+            ctx().strokeStyle = COMPASS_VISUAL.sealRing;
+            ctx().lineWidth = 1.1;
+            ctx().stroke();
+            ctx().fillStyle = COMPASS_VISUAL.sealMark;
+            ctx().font = "bold 7.5px sans-serif";
+            ctx().fillText("✓", sx - 3, 27);
+          }
+          if (appr > 5) {
+            ctx().fillStyle = "#ffd86b";
+            ctx().font = "bold 11px monospace";
+            ctx().fillText(`×${appr}`, 18 + cap * 16 - 3, 25);
+          }
+        }
+      } else if (dragon) {
+        ctx().fillText("DIST", 12, 10);
+        ctx().fillStyle = "#fff";
+        ctx().font = "bold 18px 'SFMono-Regular', Consolas, monospace";
+        ctx().fillText(`${(kart.x / 1000).toFixed(1)}km`, 12, 22);
+      } else {
+        ctx().fillText("LAP", 12, 10);
+        ctx().fillStyle = "#fff";
+        ctx().font = "bold 20px sans-serif";
+        ctx().fillText(`${Math.min(kart.lap + 1, getTotalLaps())} / ${getTotalLaps()}`, 12, 22);
+      }
 
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("CITATIONS", 12, 54);
-    ctx().fillStyle = "#ffd86b";
-    ctx().font = "bold 18px sans-serif";
-    ctx().fillText(`${game.player.coinsCollected}`, 12, 66);
+      ctx().fillStyle = "#a8acd0";
+      ctx().font = "10px sans-serif";
+      ctx().fillText("CITATIONS", 12, 54);
+      ctx().fillStyle = "#ffd86b";
+      ctx().font = "bold 18px sans-serif";
+      ctx().fillText(`${kart.coinsCollected}`, 12, 66);
 
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("POS", 110, 10);
-    ctx().fillStyle = positionColor(p1Pos);
-    ctx().font = "bold 20px sans-serif";
-    ctx().fillText(`${ordinal(p1Pos)}`, 110, 22);
+      ctx().fillStyle = "#a8acd0";
+      ctx().font = "10px sans-serif";
+      const rightColX = narrow ? 100 : 110;
+      if (battle) {
+        ctx().fillText("STATUS", rightColX, 10);
+        ctx().fillStyle = kart.eliminated ? "#ff4d6d" : "#a4ff80";
+        ctx().font = "bold 15px sans-serif";
+        ctx().fillText(kart.eliminated ? "OUT" : "ALIVE", rightColX, 24);
+      } else {
+        ctx().fillText("POS", rightColX, 10);
+        ctx().fillStyle = positionColor(pos);
+        ctx().font = "bold 20px sans-serif";
+        ctx().fillText(`${ordinal(pos)}`, rightColX, 22);
+      }
 
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("ITEM", 110, 54);
-  });
+      ctx().fillStyle = "#a8acd0";
+      ctx().font = "10px sans-serif";
+      ctx().fillText("ITEM", rightColX, 46);
+    });
+    drawItemSlot(px + (narrow ? 96 : 105), 74, 44, kart, time);
+  };
 
-  drawItemSlot(ctx(), 120, 68, 48, game.player, time);
-  drawSpeedo(15, VIEW_H() - 135, 120, game.player);
+  // 1. Player 1 & Player 2 Top Panels
+  drawPlayerBattleOrRacePanel(game.player, p1Pos, false);
+  drawPlayerBattleOrRacePanel(game.player2, p2Pos, true);
 
-  // 2. Player 2 HUD (Right side)
-  drawHUDPanel(VIEW_W() - 200, 15, 185, 105, () => {
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().textAlign = "left"; ctx().textBaseline = "top";
-
-    if (isDragonEscape()) { ctx().fillText("DIST", 12, 10); ctx().fillStyle = "#fff"; ctx().font = "bold 18px 'SFMono-Regular', Consolas, monospace"; ctx().fillText(`${(game.player2.x / 1000).toFixed(1)}km`, 12, 22); }
-    else { ctx().fillText("LAP", 12, 10); ctx().fillStyle = "#fff"; ctx().font = "bold 20px sans-serif"; ctx().fillText(`${Math.min(game.player2.lap + 1, getTotalLaps())} / ${getTotalLaps()}`, 12, 22); }
-
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("CITATIONS", 12, 54);
-    ctx().fillStyle = "#ffd86b";
-    ctx().font = "bold 18px sans-serif";
-    ctx().fillText(`${game.player2.coinsCollected}`, 12, 66);
-
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("POS", 110, 10);
-    ctx().fillStyle = positionColor(p2Pos);
-    ctx().font = "bold 20px sans-serif";
-    ctx().fillText(`${ordinal(p2Pos)}`, 110, 22);
-
-    ctx().fillStyle = "#a8acd0";
-    ctx().font = "10px sans-serif";
-    ctx().fillText("ITEM", 110, 54);
-  });
-
-  drawItemSlot(ctx(), VIEW_W() - 200 + 110, 68, 48, game.player2, time);
-  drawSpeedo(VIEW_W() - 135, VIEW_H() - 135, 120, game.player2);
-
-  // 3. Central Mini-map (Overlapping divider)
-  drawMinimap(VIEW_W() / 2 - 75, VIEW_H() - 165, 150);
-
-  // 4. Drift charge bars
-  if (game.player.driftCharge > 5) {
-    const w = 120, h = 6;
-    const x = 145, y = VIEW_H() - 25;
-    ctx().fillStyle = "rgba(0,0,0,0.4)";
-    ctx().fillRect(x, y, w, h);
-    const charge = clamp(game.player.driftCharge / TUNING.DRIFT_TIER3, 0, 1);
-    let col = "#00e5ff"; // Blue (Tier 1)
-    if (game.player.driftCharge >= TUNING.DRIFT_TIER3) col = "#ff4d6d"; // Pink (Tier 3)
-    else if (game.player.driftCharge >= TUNING.DRIFT_TIER2) col = "#fd9927"; // Orange (Tier 2)
-    ctx().fillStyle = col;
-    ctx().fillRect(x, y, w * charge, h);
+  // Shared Battle Time Left + Alive count pill (top-center)
+  if (battle) {
+    const untimed = isUntimedHumanBattle();
+    const tl = untimed ? game.battleDuration : Math.max(0, game.battleTimeLeft || 0);
+    const lowTime = !untimed && tl < 15;
+    const bw = 178, bh = 24;
+    const bx = vw / 2 - bw / 2, by = 66;
+    ctx().save();
+    ctx().fillStyle = "rgba(10, 12, 28, 0.86)";
+    roundRect(ctx(), bx, by, bw, bh, 6);
+    ctx().fill();
+    ctx().strokeStyle = lowTime ? "#ff4d6d" : COMPASS_VISUAL.hudBorder;
+    ctx().lineWidth = 1.2;
+    ctx().stroke();
+    ctx().font = "bold 10px 'SFMono-Regular', Consolas, monospace";
+    ctx().textAlign = "center";
+    ctx().textBaseline = "middle";
+    ctx().fillStyle = lowTime ? "#ff4d6d" : "#fff";
+    const tStr = untimed ? "∞" : formatTime(tl);
+    ctx().fillText(`TIME ${tStr}  |  ALIVE ${aliveCount}/${game.totalRacers}`, vw / 2, by + bh / 2);
+    ctx().restore();
   }
 
-  if (game.player2.driftCharge > 5) {
-    const w = 120, h = 6;
-    const x = VIEW_W() - 135 - 130, y = VIEW_H() - 25;
-    ctx().fillStyle = "rgba(0,0,0,0.4)";
-    ctx().fillRect(x, y, w, h);
-    const charge = clamp(game.player2.driftCharge / TUNING.DRIFT_TIER3, 0, 1);
-    let col = "#00e5ff"; // Blue (Tier 1)
-    if (game.player2.driftCharge >= TUNING.DRIFT_TIER3) col = "#ff4d6d"; // Pink (Tier 3)
-    else if (game.player2.driftCharge >= TUNING.DRIFT_TIER2) col = "#fd9927"; // Orange (Tier 2)
-    ctx().fillStyle = col;
-    ctx().fillRect(x, y, w * charge, h);
-  }
+  // Responsive Bottom HUD (Speedos, Central Minimap, Drift & Ultimate bars)
+  const mapSize = narrow ? clamp(Math.floor(vw * 0.19), 96, 130) : 150;
+  const mapX = vw / 2 - mapSize / 2;
+  const mapY = vh - mapSize - 15;
+  const speedoSize = narrow ? 104 : 120;
+  const speedoY = vh - speedoSize - 15;
 
-  // 5. Ultimate meters
-  drawUltimateMeter(ctx(), 15, VIEW_H() - 48, 110, game.player, time);
-  drawUltimateMeter(ctx(), VIEW_W() - 125, VIEW_H() - 48, 110, game.player2, time);
+  drawSpeedo(15, speedoY, speedoSize, game.player, time);
+  drawSpeedo(vw - 15 - speedoSize, speedoY, speedoSize, game.player2, time);
+  drawMinimap(mapX, mapY, mapSize);
+
+  // Ultimate meters cleanly above each speedometer
+  drawUltimateMeter(15, speedoY - 18, speedoSize, game.player, time);
+  drawUltimateMeter(vw - 15 - speedoSize, speedoY - 18, speedoSize, game.player2, time);
+
+  // Drift charge bars (never overlap minimap on narrow widths < 720px)
+  const gapP1 = mapX - (15 + speedoSize + 14);
+  if (gapP1 >= 76) {
+    const dw = Math.min(120, gapP1);
+    drawDriftBar(15 + speedoSize + 7, vh - 26, dw, 6, game.player, true);
+    drawDriftBar(vw - 15 - speedoSize - 7 - dw, vh - 26, dw, 6, game.player2, true);
+  } else {
+    drawDriftBar(15, speedoY - 36, speedoSize, 6, game.player, true);
+    drawDriftBar(vw - 15 - speedoSize, speedoY - 36, speedoSize, 6, game.player2, true);
+  }
 
   // Regulaido Autopilot Active Watermark (top-center below split border)
   const wmW = 180, wmH = 20;
-  const wmX = (VIEW_W() - wmW) / 2, wmY = 40;
+  const wmX = (vw - wmW) / 2, wmY = 40;
 
   ctx().save();
-  ctx().shadowBlur = 6;
-  ctx().shadowColor = "rgba(123, 117, 255, 0.3)";
-  ctx().fillStyle = "rgba(13, 11, 33, 0.8)";
+  ctx().fillStyle = "rgba(13, 11, 33, 0.85)";
+  ctx().strokeStyle = "rgba(4, 3, 14, 0.9)";
+  ctx().lineWidth = 2.5;
+  ctx().beginPath();
+  roundRect(ctx(), wmX, wmY, wmW, wmH, 4);
+  ctx().stroke();
+  ctx().fill();
   ctx().strokeStyle = "#7b75ff";
   ctx().lineWidth = 1;
-  ctx().beginPath();
-  ctx().roundRect ? ctx().roundRect(wmX, wmY, wmW, wmH, 4) : ctx().rect(wmX, wmY, wmW, wmH);
-  ctx().fill();
   ctx().stroke();
   ctx().restore();
 
@@ -1049,37 +1405,50 @@ export function drawHUDMultiplayer(time) {
   ctx().fillStyle = "#ffffff";
   ctx().fillText("REGULAIDO SYSTEM ACTIVE", wmX + 95, wmY + wmH / 2);
 
-  // Active status effects panels
-  drawStatusEffects(15, VIEW_H() / 2 - 60, game.player, time);
-  drawStatusEffects(VIEW_W() - 140, VIEW_H() / 2 - 60, game.player2, time);
+  // Active status effects panels (stacked cleanly above speedometers)
+  drawStatusEffects(15, speedoY - 46, game.player, time, {
+    stackUp: true,
+    bottomEdge: speedoY - 46,
+    minTop: 126,
+  });
+  drawStatusEffects(vw - 15, speedoY - 46, game.player2, time, {
+    alignRight: true,
+    rightEdge: vw - 15,
+    stackUp: true,
+    bottomEdge: speedoY - 46,
+    minTop: 126,
+  });
 
-  // Per-player hit flash overlays (clipped to each viewport)
-  const p1W = VIEW_W() / 2 - 2;
-  const p2W = VIEW_W() / 2 - 2;
-  const p2X = VIEW_W() / 2 + 2;
-  drawHitFlash(game.player, 0, 0, p1W, VIEW_H(), time);
-  drawHitFlash(game.player2, p2X, 0, p2W, VIEW_H(), time);
+  // Per-player hit flash, rear threat, wrong-way, and position callouts (clipped to each viewport)
+  const p1W = vw / 2 - 2;
+  const p2W = vw / 2 - 2;
+  const p2X = vw / 2 + 2;
+  drawRearThreatIndicator(ctx(), game.player, 0, 0, p1W, vh, time);
+  drawRearThreatIndicator(ctx(), game.player2, p2X, 0, p2W, vh, time);
+
+  drawHitFlash(game.player, 0, 0, p1W, vh, time);
+  drawHitFlash(game.player2, p2X, 0, p2W, vh, time);
 
   // Wrong-way overlays
-  drawWrongWay(game.player, 0, 0, p1W, VIEW_H(), time);
-  drawWrongWay(game.player2, p2X, 0, p2W, VIEW_H(), time);
+  drawWrongWay(game.player, 0, 0, p1W, vh, time);
+  drawWrongWay(game.player2, p2X, 0, p2W, vh, time);
 
   // Position change callouts
-  drawPositionChange(p1W / 2, VIEW_H() * 0.18, game.player);
-  drawPositionChange(p2X + p2W / 2, VIEW_H() * 0.18, game.player2);
+  drawPositionChange(p1W / 2, vh * 0.18, game.player);
+  drawPositionChange(p2X + p2W / 2, vh * 0.18, game.player2);
 
   // Item name popups
   drawItemNamePopup(145, 120, game.player, time);
-  drawItemNamePopup(VIEW_W() - 200 + 135, 120, game.player2, time);
+  drawItemNamePopup(vw - panelW - 15 + 125, 120, game.player2, time);
 
   // Mute indicator
   if (Sound.muted) {
-    ctx().fillStyle = "rgba(0,0,0,0.45)";
-    ctx().fillRect(VIEW_W() / 2 - 28, 15, 56, 20);
+    ctx().fillStyle = "rgba(0,0,0,0.55)";
+    ctx().fillRect(vw / 2 - 28, 15, 56, 20);
     ctx().fillStyle = "#fff";
     ctx().font = "bold 9px sans-serif";
     ctx().textAlign = "center"; ctx().textBaseline = "middle";
-    ctx().fillText("MUTED", VIEW_W() / 2, 25);
+    ctx().fillText("MUTED", vw / 2, 25);
   }
 
   ctx().restore();
@@ -1099,7 +1468,7 @@ export function drawHUDPanel(x, y, w, h, drawFn) {
   ctx().restore();
 }
 
-export function drawSpeedo(x, y, size, player) {
+export function drawSpeedo(x, y, size, player, time = 0) {
   if (!player) return;
   ctx().save();
   ctx().translate(x, y);
@@ -1112,7 +1481,7 @@ export function drawSpeedo(x, y, size, player) {
   const radius = size / 2 - 22;
 
   // Tick marks around the arc
-  ctx().strokeStyle = "rgba(255,255,255,0.25)";
+  ctx().strokeStyle = "rgba(255,255,255,0.28)";
   ctx().lineWidth = 1;
   for (let i = 0; i <= 10; i++) {
     const tickAng = Math.PI + (Math.PI * i / 10);
@@ -1128,7 +1497,7 @@ export function drawSpeedo(x, y, size, player) {
 
   // Arc background
   ctx().lineWidth = 8;
-  ctx().strokeStyle = "rgba(255,255,255,0.08)";
+  ctx().strokeStyle = "rgba(255,255,255,0.1)";
   ctx().beginPath();
   ctx().arc(cx, cy, radius, Math.PI, TAU);
   ctx().stroke();
@@ -1138,27 +1507,35 @@ export function drawSpeedo(x, y, size, player) {
   const frac = clamp(sp / maxDisplay, 0, 1);
   const col = sp > 7 ? COMPASS_VISUAL.accent : sp > 5 ? COMPASS_VISUAL.primaryDark : COMPASS_VISUAL.primary;
 
-  // Arc filled with glow
-  ctx().shadowBlur = 10;
-  ctx().shadowColor = col;
+  // Arc filled with crisp dark backing stroke
+  ctx().lineCap = "round";
+  ctx().strokeStyle = "rgba(5, 6, 16, 0.85)";
+  ctx().lineWidth = 11;
+  ctx().beginPath();
+  ctx().arc(cx, cy, radius, Math.PI, Math.PI + Math.PI * frac);
+  ctx().stroke();
+
   ctx().strokeStyle = col;
   ctx().lineWidth = 8;
   ctx().beginPath();
   ctx().arc(cx, cy, radius, Math.PI, Math.PI + Math.PI * frac);
   ctx().stroke();
-  ctx().shadowBlur = 0;
 
-  // Needle with glow
+  // Needle with crisp dark outline
   const ang = Math.PI + Math.PI * frac;
-  ctx().shadowBlur = 8;
-  ctx().shadowColor = col;
+  ctx().strokeStyle = "rgba(5, 6, 16, 0.9)";
+  ctx().lineWidth = 4.5;
+  ctx().beginPath();
+  ctx().moveTo(cx, cy);
+  ctx().lineTo(cx + Math.cos(ang) * (radius - 4), cy + Math.sin(ang) * (radius - 4));
+  ctx().stroke();
+
   ctx().strokeStyle = col;
   ctx().lineWidth = 2.5;
   ctx().beginPath();
   ctx().moveTo(cx, cy);
   ctx().lineTo(cx + Math.cos(ang) * (radius - 4), cy + Math.sin(ang) * (radius - 4));
   ctx().stroke();
-  ctx().shadowBlur = 0;
 
   // Center hub
   ctx().fillStyle = col;
@@ -1167,19 +1544,26 @@ export function drawSpeedo(x, y, size, player) {
   ctx().beginPath(); ctx().arc(cx, cy, 2, 0, TAU); ctx().fill();
 
   // Numeric
-  ctx().fillStyle = "#fff";
-  ctx().font = "bold 22px 'SFMono-Regular', Consolas, monospace";
+  const numFontPx = size < 115 ? 18 : 22;
+  ctx().font = `bold ${numFontPx}px 'SFMono-Regular', Consolas, monospace`;
   ctx().textAlign = "center"; ctx().textBaseline = "middle";
+  ctx().strokeStyle = "rgba(5, 6, 16, 0.85)";
+  ctx().lineWidth = 3;
+  ctx().strokeText(`${Math.round(sp * 28)}`, cx, cy - 12);
+  ctx().fillStyle = "#fff";
   ctx().fillText(`${Math.round(sp * 28)}`, cx, cy - 12);
   ctx().fillStyle = "#a8acd0";
   ctx().font = "10px sans-serif";
   ctx().fillText("KM/H", cx, cy + 8);
 
   if (player.boostTimer > 0) {
-    const pulse = 0.7 + 0.3 * Math.sin(performance.now() * 0.01);
+    const pulse = 0.7 + 0.3 * Math.sin(time * 0.01);
     ctx().globalAlpha = pulse;
-    ctx().fillStyle = "#ff8a3b";
     ctx().font = "bold 10px sans-serif";
+    ctx().strokeStyle = "rgba(5, 6, 16, 0.85)";
+    ctx().lineWidth = 2.5;
+    ctx().strokeText("BOOST", cx, 18);
+    ctx().fillStyle = "#ff8a3b";
     ctx().fillText("BOOST", cx, 18);
     ctx().globalAlpha = 1;
   }
@@ -1286,8 +1670,12 @@ export function drawCountdown() {
   ctx().globalAlpha = a;
   ctx().font = "bold 180px sans-serif";
   ctx().textAlign = "center"; ctx().textBaseline = "middle";
-  ctx().fillStyle = game.countdownText === "GO!" ? "#7aff66" : "#ff4d6d";
-  ctx().shadowBlur = 30; ctx().shadowColor = ctx().fillStyle;
+  const countColor = game.countdownText === "GO!" ? "#7aff66" : "#ff4d6d";
+  ctx().lineJoin = "round";
+  ctx().strokeStyle = "rgba(8, 10, 24, 0.92)";
+  ctx().lineWidth = 10;
+  ctx().strokeText(game.countdownText, 0, 0);
+  ctx().fillStyle = countColor;
   ctx().fillText(game.countdownText, 0, 0);
   ctx().restore();
 

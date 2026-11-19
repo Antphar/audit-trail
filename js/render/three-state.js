@@ -20,7 +20,8 @@ export const THREE_STATE = {
   dragonModel: null,
   dragonEscapeModel: null,
   particles3d: [],
-  camSmooth: { x: 0, y: 0, z: 0, lx: 0, ly: 0, lz: 0 },
+  camSmooth: { x: 0, y: 0, z: 0, lx: 0, ly: 0, lz: 0, fov: 66, roll: 0 },
+  camSmoothP2: { x: 0, y: 0, z: 0, lx: 0, ly: 0, lz: 0, fov: 66, roll: 0 },
   // Visual enhancements
   nameTagSprites: new Map(),
   speechBubbleSprites: new Map(),
@@ -30,6 +31,12 @@ export const THREE_STATE = {
   startLineMesh: null,
   edgeGlowLines: [],
   pillarRings: [],
+  chevronMeshes: [],
+  contactShadowTex: null,
+  particleGlowTex: null,
+  hemiLight: null,
+  ambientLight: null,
+  gridHelper: null,
   arenaMarkerPanelMesh: null,
   arenaMarkerCapMesh: null,
 };
@@ -44,25 +51,68 @@ export const hudCanvas = document.getElementById("hud-overlay");
 export const hudCtx = hudCanvas ? hudCanvas.getContext("2d") : null;
 
 
-export function loadThreeJS(callback) {
-  if (window.THREE) { callback(); return; }
+const _pendingThreeLoadListeners = [];
+
+export function loadThreeJS(callback, onError) {
+  if (window.THREE) {
+    THREE_STATE.loaded = true;
+    THREE_STATE.loading = false;
+    callback?.();
+    return;
+  }
+  _pendingThreeLoadListeners.push({ callback, onError });
   if (THREE_STATE.loading) return;
   THREE_STATE.loading = true;
   const script = document.createElement("script");
   script.src = "three.min.js";
-  script.onload = () => { THREE_STATE.loaded = true; callback(); };
-  script.onerror = () => { alert("Could not load Three.js"); THREE_STATE.loading = false; };
+  script.onload = () => {
+    THREE_STATE.loaded = true;
+    THREE_STATE.loading = false;
+    const listeners = _pendingThreeLoadListeners.splice(0);
+    for (const entry of listeners) {
+      entry.callback?.();
+    }
+  };
+  script.onerror = () => {
+    script.remove();
+    THREE_STATE.loaded = false;
+    THREE_STATE.loading = false;
+    const listeners = _pendingThreeLoadListeners.splice(0);
+    let handled = false;
+    for (const entry of listeners) {
+      if (typeof entry.onError === "function") {
+        handled = true;
+        entry.onError();
+      }
+    }
+    if (!handled) {
+      window.showGameToast?.("Could not load 3D engine (Three.js)", "error");
+    }
+  };
   document.head.appendChild(script);
 }
 
+
+const _DISPOSABLE_TEXTURE_PROPS = ["map", "emissiveMap", "roughnessMap", "normalMap"];
+
+function disposeMaterial3D(mat) {
+  if (!mat) return;
+  for (const prop of _DISPOSABLE_TEXTURE_PROPS) {
+    const tex = mat[prop];
+    if (tex && !tex.userData?.shared) {
+      tex.dispose?.();
+    }
+  }
+  mat.dispose?.();
+}
 
 export function dispose3DObject(obj) {
   if (!obj) return;
   obj.traverse?.((child) => {
     if (child.geometry) child.geometry.dispose();
     if (child.material) {
-      if (Array.isArray(child.material)) child.material.forEach(m => m.dispose?.());
-      else child.material.dispose?.();
+      if (Array.isArray(child.material)) child.material.forEach(disposeMaterial3D);
+      else disposeMaterial3D(child.material);
     }
   });
 }
@@ -124,7 +174,50 @@ export function getCompassSurfaceTexture3D(T, surface, day) {
   if (THREE_STATE.renderer?.capabilities) {
     texture.anisotropy = Math.min(4, THREE_STATE.renderer.capabilities.getMaxAnisotropy());
   }
+  texture.userData = { shared: true };
   texture.needsUpdate = true;
   _compassSurfaceTexture3DCache.set(key, texture);
   return texture;
+}
+
+export function getContactShadowTexture3D(T) {
+  if (THREE_STATE.contactShadowTex) return THREE_STATE.contactShadowTex;
+  const size = 64;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const cx = c.getContext("2d");
+  const grad = cx.createRadialGradient(size / 2, size / 2, 2, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(0, 0, 0, 0.72)");
+  grad.addColorStop(0.45, "rgba(0, 0, 0, 0.42)");
+  grad.addColorStop(0.8, "rgba(0, 0, 0, 0.12)");
+  grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+  cx.fillStyle = grad;
+  cx.fillRect(0, 0, size, size);
+  const tex = new T.CanvasTexture(c);
+  tex.userData = { shared: true };
+  tex.needsUpdate = true;
+  THREE_STATE.contactShadowTex = tex;
+  return tex;
+}
+
+export function getParticleGlowTexture3D(T) {
+  if (THREE_STATE.particleGlowTex) return THREE_STATE.particleGlowTex;
+  const size = 64;
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const cx = c.getContext("2d");
+  const grad = cx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+  grad.addColorStop(0.28, "rgba(255, 255, 255, 0.72)");
+  grad.addColorStop(0.65, "rgba(255, 255, 255, 0.18)");
+  grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+  cx.fillStyle = grad;
+  cx.fillRect(0, 0, size, size);
+  const tex = new T.CanvasTexture(c);
+  tex.userData = { shared: true };
+  tex.needsUpdate = true;
+  THREE_STATE.particleGlowTex = tex;
+  return tex;
 }

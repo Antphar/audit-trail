@@ -7,7 +7,7 @@ import { simNow } from "../core/clock.js";
 import { HEADLESS_MODE } from "../core/env.js";
 import { bus } from "../core/events.js";
 import {
-  STATE, game, isBattleMode, isGrandPrixActive, getActiveKarts,
+  STATE, game, isBattleMode, isGrandPrixActive, getActiveKarts, getActiveHumanKarts,
   isP2pBattleGuest, isP2pBattleHost, canResolveBattleCombat,
 } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
@@ -74,6 +74,14 @@ export function buildRaceSim() {
   game.skidMarks = [];
   game.shake = 0;
   game.flash = 0;
+  game.slowMoEnd = 0;
+  game.raceFinishedAt = 0;
+  game.finalRanking = null;
+  game.spectateTarget = null;
+  game.battleTimeLeft = 0;
+  game.rlSteals = 0;
+  game.rlLosses = 0;
+  game.rlHits = 0;
   game.coinsCollected = 0;
   game.finishOrder = [];
   game.finishScheduled = false;
@@ -501,8 +509,18 @@ export function checkProgress(kart) {
   const completingLapAtGoalLine = !open && checkpointIdx === 0 && kart.checkpointsThisLap >= checkpointCount - 1;
 
   if (completingLapAtGoalLine) {
-    hitCheckpoint = game.track.crossedStartLine(kart.progressPrevX, kart.progressPrevY, kart.x, kart.y)
-      || game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y);
+    const crossed = game.track.crossedStartLine(kart.progressPrevX, kart.progressPrevY, kart.x, kart.y);
+    let pastGate = false;
+    if (!crossed && game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y)) {
+      const gate = game.track.startLineGate();
+      if (!gate) {
+        pastGate = true;
+      } else {
+        const currAlong = (kart.x - gate.x) * gate.ux + (kart.y - gate.y) * gate.uy;
+        pastGate = currAlong >= 0;
+      }
+    }
+    hitCheckpoint = crossed || pastGate;
   } else if (game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y)) {
     hitCheckpoint = true;
   } else if (open && !game.track.hasCustomCheckpoints) {
@@ -563,18 +581,28 @@ export function checkProgress(kart) {
 /* ============================================================
    ITEMS — collisions & rewards
    ============================================================ */
+export function updateTrackPickups(dt) {
+  if (!game.track) return;
+  for (const c of game.track.coins || []) {
+    if (c.collected && c.respawn > 0) {
+      c.respawn = Math.max(0, c.respawn - dt);
+      if (c.respawn <= 0) c.collected = false;
+    }
+  }
+  for (const b of game.track.itemBoxes || []) {
+    if (!b.active && b.respawn > 0) {
+      b.respawn = Math.max(0, b.respawn - dt);
+      if (b.respawn <= 0) b.active = true;
+    }
+  }
+}
+
 export function checkItems(kart) {
-  if (!isKartGrounded(kart)) return;
+  if (!kart || kart.finished || kart.eliminated || !isKartGrounded(kart)) return;
   // Coins
   for (let i = 0; i < game.track.coins.length; i++) {
     const c = game.track.coins[i];
-    if (c.collected) {
-      if (c.respawn > 0) {
-        c.respawn--;
-        if (c.respawn <= 0) c.collected = false;
-      }
-      continue;
-    }
+    if (c.collected) continue;
     if (dist(kart.x, kart.y, c.x, c.y) < kartPickupThreshold(18, kart)) {
       c.collected = true;
       c.respawn = 700;
@@ -614,7 +642,7 @@ export function checkItems(kart) {
   for (const p of game.track.boostPads) {
     if (dist(kart.x, kart.y, p.x, p.y) < kartPickupThreshold(28, kart)) {
       const now = simNow();
-      const last = p.cooldown.get(kart) || 0;
+      const last = p.cooldown.get(kart) ?? -Infinity;
       if (now - last > 1100) {
         p.cooldown.set(kart, now);
         kart.boostTimer = Math.max(kart.boostTimer, 60);
@@ -631,11 +659,7 @@ export function checkItems(kart) {
   // Item boxes
   for (let i = 0; i < game.track.itemBoxes.length; i++) {
     const b = game.track.itemBoxes[i];
-    if (!b.active) {
-      b.respawn--;
-      if (b.respawn <= 0) b.active = true;
-      continue;
-    }
+    if (!b.active) continue;
     if (dist(kart.x, kart.y, b.x, b.y) < kartPickupThreshold(24, kart)) {
       b.active = false;
       b.respawn = 240;
@@ -664,14 +688,23 @@ export function kartCollisions() {
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
       const a = all[i], b = all[j];
+      if (a.eliminated || b.eliminated) continue;
       if (isKartAirborne(a) || isKartAirborne(b)) continue;
       const rA = getKartCollisionRadius(a);
       const rB = getKartCollisionRadius(b);
       const dx = b.x - a.x, dy = b.y - a.y;
-      const d = len2d(dx, dy);
-      if (d < rA + rB && d > 0.001) {
+      let d = len2d(dx, dy);
+      if (d < rA + rB) {
+        let nx, ny;
+        if (d <= 0.001) {
+          nx = 1;
+          ny = 0;
+          d = 0.001;
+        } else {
+          nx = dx / d;
+          ny = dy / d;
+        }
         const overlap = rA + rB - d;
-        const nx = dx / d, ny = dy / d;
 
         // Weight-based position resolution: heavier kart pushes more, moves less
         const totalW = a.weight + b.weight;
@@ -692,12 +725,14 @@ export function kartCollisions() {
         let tfA = transfer * (b.weight / totalW);
         let tfB = transfer * (a.weight / totalW);
 
-        // Apply Pia's savage 2.5x ramming multiplier
+        // Apply Pia's savage 2.5x ramming multiplier ONLY to the rival (capped)
         let piaMult = 1.0;
-        if (a.charId === "pia" || b.charId === "pia") {
+        if (a.charId === "pia" && b.charId !== "pia") {
           piaMult = 2.5;
-          tfA *= piaMult;
-          tfB *= piaMult;
+          tfB = clamp(tfB * piaMult, -8.5, 8.5);
+        } else if (b.charId === "pia" && a.charId !== "pia") {
+          piaMult = 2.5;
+          tfA = clamp(tfA * piaMult, -8.5, 8.5);
         }
 
         a.vx += nx * tfA; a.vy += ny * tfA;

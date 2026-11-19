@@ -23,7 +23,7 @@ import {
   eliminateKart, registerBattleHit, absorbFatalHitWithShield, triggerHitFlash, triggerQuote,
 } from "../modes/battle.js";
 import {
-  checkProgress, checkItems, kartCollisions, rankAll, progressValue,
+  checkProgress, checkItems, updateTrackPickups, kartCollisions, rankAll, progressValue,
   isDragonEscape, getDragonTarget, updateDragonEscapeEntity,
   getKartCollisionRadius, shouldSkipGroundHazardForKart,
   applyMovingObstacleHit,   applyRocketStart, isGroundHazardImmuneWhenAirborne, startRaceSim,
@@ -107,6 +107,8 @@ export function simulationStep(dt, time) {
     // Dynamic Retro Soundtrack Final Lap Tempo surge (only for retro music)
     runtime.updateRetroTempo?.();
 
+    if (!game.headlessNoItems) updateTrackPickups(dt);
+
     // Player 1
     game.player.update(dt, game.track);
     checkProgress(game.player);
@@ -115,7 +117,6 @@ export function simulationStep(dt, time) {
     // Player 2
     if (game.multiplayer && game.player2) {
       if (game.p2pMode) {
-        if (game.player2.quoteTimer > 0) game.player2.quoteTimer -= dt;
         if (game.player2.boostTimer > 0) game.player2.boostTimer -= dt;
         if (game.player2.shieldTimer > 0) game.player2.shieldTimer -= dt;
         if (game.player2.spinoutTimer > 0) game.player2.spinoutTimer -= dt;
@@ -150,7 +151,6 @@ export function simulationStep(dt, time) {
 
     if (game.p2pMode && game.remotePlayers) {
       for (const remote of game.remotePlayers) {
-        if (remote.quoteTimer > 0) remote.quoteTimer -= dt;
         if (remote.boostTimer > 0) remote.boostTimer -= dt;
         if (remote.shieldTimer > 0) remote.shieldTimer -= dt;
         if (remote.spinoutTimer > 0) remote.spinoutTimer -= dt;
@@ -211,7 +211,7 @@ export function simulationStep(dt, time) {
             continue;
           }
 
-          if (!kart.eliminated && kart.spinoutTimer <= 0 && (kart.recoverGraceTimer || 0) <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24) + getKartCollisionRadius(kart) - DEFAULT_KART_COLLISION_RADIUS) {
+          if (!kart.eliminated && kart.spinoutTimer <= 0 && (kart.invuln || 0) <= 0 && (kart.recoverGraceTimer || 0) <= 0 && dist(kart.x, kart.y, h.x, h.y) < (h.r || 24) + getKartCollisionRadius(kart) - DEFAULT_KART_COLLISION_RADIUS) {
             if (shouldSkipGroundHazardForKart(kart, h)) continue;
             if (isP2pBattleGuest()) break;
             game.hazards.splice(i, 1);
@@ -371,7 +371,7 @@ export function simulationStep(dt, time) {
             if (isKartAirborne(kart)) continue;
             if (dist(kart.x, kart.y, obj.x, obj.y) < obj.r + getKartCollisionRadius(kart) - 1) {
               const now = simNow();
-              const lastHit = obj.cooldown?.get(kart) || 0;
+              const lastHit = obj.cooldown?.get(kart) ?? -Infinity;
               if (now - lastHit < 700) continue;
               obj.cooldown?.set(kart, now);
               applyMovingObstacleHit(kart, obj);
