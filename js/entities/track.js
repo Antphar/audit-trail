@@ -207,10 +207,10 @@ export class Track {
     return { x: sum.x / group.length, y: sum.y / group.length };
   }
 
-  hitCheckpoint(idx, x, y) {
+  hitCheckpoint(idx, x, y, extraRadius = 0) {
     const group = this.checkpointGroups[idx];
     if (!group || !group.length) return false;
-    return group.some(point => dist(x, y, point.x, point.y) <= (point.r || CHECKPOINT_RADIUS));
+    return group.some(point => dist(x, y, point.x, point.y) <= (point.r || CHECKPOINT_RADIUS) + extraRadius);
   }
 
   startLineGate() {
@@ -241,7 +241,7 @@ export class Track {
     const ix = lerp(prevX, x, t);
     const iy = lerp(prevY, y, t);
     const lateral = Math.abs((ix - gate.x) * gate.nx + (iy - gate.y) * gate.ny);
-    return lateral <= gate.halfW + 75;
+    return lateral <= gate.halfW + 110;
   }
 
   // Find closest segment to a world point

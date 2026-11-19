@@ -34,6 +34,8 @@ export const THREE_STATE = {
   chevronMeshes: [],
   contactShadowTex: null,
   particleGlowTex: null,
+  kartEnvMap: null,
+  _kartEnvRenderer: null,
   hemiLight: null,
   ambientLight: null,
   gridHelper: null,

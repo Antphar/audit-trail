@@ -11,264 +11,174 @@ import {
 
 export function getCompassKartMats3D(T, charColor) {
   const railColor = new T.Color(charColor);
-  const shellColor = new T.Color(charColor).lerp(new T.Color(0x131019), 0.22);
+  const shellColor = new T.Color(charColor).lerp(new T.Color(0x131019), 0.16);
   return {
     shell: new T.MeshStandardMaterial({
-      color: shellColor, emissive: railColor, emissiveIntensity: 0.08,
-      roughness: 0.32, metalness: 0.55,
+      color: shellColor, emissive: railColor, emissiveIntensity: 0.12,
+      roughness: 0.24, metalness: 0.45,
     }),
     frame: new T.MeshStandardMaterial({
-      color: 0x131019, emissive: 0x131019, emissiveIntensity: 0,
-      roughness: 0.35, metalness: 0.55,
+      color: 0x161822, emissive: 0x000000, emissiveIntensity: 0,
+      roughness: 0.48, metalness: 0.35,
     }),
     nose: new T.MeshStandardMaterial({
-      color: 0xfd9927, emissive: 0xfd9927, emissiveIntensity: 0.35,
-      roughness: 0.2, metalness: 0.45,
+      color: 0xfd9927, emissive: 0xfd9927, emissiveIntensity: 0.3,
+      roughness: 0.22, metalness: 0.4,
     }),
     rear: new T.MeshStandardMaterial({
       color: 0x7b75ff, emissive: 0x7b75ff, emissiveIntensity: 0.15,
       roughness: 0.3, metalness: 0.4,
     }),
     rail: new T.MeshStandardMaterial({
-      color: railColor, emissive: railColor, emissiveIntensity: 0.18,
-      roughness: 0.22, metalness: 0.65,
+      color: railColor, emissive: railColor, emissiveIntensity: 0.22,
+      roughness: 0.22, metalness: 0.55,
     }),
   };
 }
 
 export function applyCompassKartRestyle3D(group, charColor, T, charId) {
+  if (!group || group.userData.sculptedKart) return;
   const mats = getCompassKartMats3D(T, charColor);
-  const usedMats = new Set();
   const bodyMesh = group.userData.mainBody;
   if (!bodyMesh) {
     for (const mat of Object.values(mats)) mat.dispose();
     return;
   }
-
   const style = getVehicleProfile(charId).style || "generic";
-
-  const bodyBox = new T.Box3().setFromObject(bodyMesh);
-  const bodySize = bodyBox.getSize(new T.Vector3());
-  const bodyCenter = bodyBox.getCenter(new T.Vector3());
-  let cosmeticTopY = bodyBox.max.y;
-  group.traverse((child) => {
-    if (!child.isMesh || child.parent !== group) return;
-    const box = new T.Box3().setFromObject(child);
-    const size = box.getSize(new T.Vector3());
-    const center = box.getCenter(new T.Vector3());
-    const mat = child.material;
-    if (mat && mat.transparent && mat.opacity <= 0.15) return;
-    const centered = Math.abs(center.x - bodyCenter.x) < bodySize.x * 0.25
-      && Math.abs(center.z - bodyCenter.z) < bodySize.z * 0.25;
-    if (centered && size.x > bodySize.x * 0.45 && size.z > bodySize.z * 0.2) {
-      cosmeticTopY = Math.max(cosmeticTopY, box.max.y);
-    }
-  });
-
-  const replacedMats = new Set();
-  group.traverse((child) => {
-    if (!child.isMesh || child.parent !== group) return;
-    const box = new T.Box3().setFromObject(child);
-    const size = box.getSize(new T.Vector3());
-    const pos = child.position;
-    let nextMat = null;
-    if (child === bodyMesh) {
-      nextMat = mats.shell;
-    } else if (Math.abs(pos.x) > 7 && size.x < 3 && size.z > 10) {
-      nextMat = mats.rail;
-    } else if (pos.z > 10 && size.x > 4 && size.z < 12 && size.y < 6) {
-      nextMat = mats.nose;
-    } else if (pos.z < -12 && size.x > 8 && size.z < 5) {
-      nextMat = mats.rear;
-    } else if (
-      box.max.y <= bodyBox.min.y + bodySize.y * 0.65
-      && (size.x > 8 || size.z > 8)
-    ) {
-      nextMat = mats.frame;
-    }
-    if (nextMat) {
-      if (child.material && child.material !== nextMat) {
-        replacedMats.add(child.material);
-      }
-      child.material = nextMat;
-      usedMats.add(nextMat);
-    }
-  });
-
-  if (replacedMats.size > 0) {
-    const stillUsedMats = new Set();
-    group.traverse((child) => {
-      if (!child.isMesh || !child.material) return;
-      if (Array.isArray(child.material)) child.material.forEach(m => stillUsedMats.add(m));
-      else stillUsedMats.add(child.material);
-    });
-    for (const oldMat of replacedMats) {
-      if (!stillUsedMats.has(oldMat) && !usedMats.has(oldMat)) {
-        oldMat.dispose?.();
-      }
-    }
-  }
-
-  if (!group.userData.compassCosmetic) {
-    const topY = cosmeticTopY + 0.3;
-    const panelInsetX = bodySize.x * 0.18;
-    const panelRear = bodyCenter.z - bodySize.z * 0.28;
-    const panelFront = bodyCenter.z + bodySize.z * 0.18;
-    const noseRear = panelFront + 0.2;
-    const noseFront = bodyBox.max.z + 0.2;
-    const noseHalfRear = bodySize.x * 0.11;
-    const noseHalfFront = bodySize.x * 0.18;
-    let positions;
-    let colors;
-    let indices;
-
-    if (style === "formula") {
-      const narrowInset = bodySize.x * 0.28;
-      positions = [
-        bodyBox.min.x + narrowInset, topY, panelRear,
-        bodyBox.max.x - narrowInset, topY, panelRear,
-        bodyBox.max.x - narrowInset, topY, panelFront,
-        bodyBox.min.x + narrowInset, topY, panelFront,
-        bodyCenter.x - noseHalfRear * 0.7, topY + 0.04, noseRear,
-        bodyCenter.x + noseHalfRear * 0.7, topY + 0.04, noseRear,
-        bodyCenter.x + noseHalfFront * 0.55, topY + 0.04, noseFront,
-        bodyCenter.x - noseHalfFront * 0.55, topY + 0.04, noseFront,
-        bodyCenter.x - bodySize.x * 0.42, topY + 0.5, bodyCenter.z - bodySize.z * 0.42,
-        bodyCenter.x + bodySize.x * 0.42, topY + 0.5, bodyCenter.z - bodySize.z * 0.42,
-        bodyCenter.x + bodySize.x * 0.35, topY + 0.5, bodyBox.min.z - 0.4,
-        bodyCenter.x - bodySize.x * 0.35, topY + 0.5, bodyBox.min.z - 0.4,
-      ];
-      colors = [
-        0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1,
-        1, 0.6, 0.15, 1, 0.6, 0.15, 1, 0.72, 0.28, 1, 0.72, 0.28,
-        0.75, 0.72, 0.95, 0.75, 0.72, 0.95, 0.75, 0.72, 0.95, 0.75, 0.72, 0.95,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
-    } else if (style === "muscle") {
-      const hoodFront = bodyCenter.z + bodySize.z * 0.35;
-      const hoodRear = bodyCenter.z - bodySize.z * 0.05;
-      positions = [
-        bodyBox.min.x + panelInsetX * 0.6, topY, hoodRear,
-        bodyBox.max.x - panelInsetX * 0.6, topY, hoodRear,
-        bodyBox.max.x - panelInsetX * 0.6, topY + 0.15, hoodFront,
-        bodyBox.min.x + panelInsetX * 0.6, topY + 0.15, hoodFront,
-        bodyCenter.x - bodySize.x * 0.08, topY + 0.35, hoodRear + 1,
-        bodyCenter.x + bodySize.x * 0.08, topY + 0.35, hoodRear + 1,
-        bodyCenter.x + bodySize.x * 0.08, topY + 0.35, hoodFront - 1,
-        bodyCenter.x - bodySize.x * 0.08, topY + 0.35, hoodFront - 1,
-        bodyCenter.x - noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfFront, topY + 0.02, noseFront,
-        bodyCenter.x - noseHalfFront, topY + 0.02, noseFront,
-      ];
-      colors = [
-        0.95, 0.9, 0.82, 0.95, 0.9, 0.82, 0.95, 0.9, 0.82, 0.95, 0.9, 0.82,
-        1, 0.55, 0.12, 1, 0.55, 0.12, 1, 0.55, 0.12, 1, 0.55, 0.12,
-        1, 0.62, 0.18, 1, 0.62, 0.18, 1, 0.72, 0.28, 1, 0.72, 0.28,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
-    } else if (style === "compact") {
-      const canopyR = bodySize.x * 0.22;
-      positions = [
-        bodyCenter.x - canopyR, topY, bodyCenter.z - bodySize.z * 0.12,
-        bodyCenter.x + canopyR, topY, bodyCenter.z - bodySize.z * 0.12,
-        bodyCenter.x + canopyR * 0.8, topY + 0.25, bodyCenter.z + bodySize.z * 0.08,
-        bodyCenter.x - canopyR * 0.8, topY + 0.25, bodyCenter.z + bodySize.z * 0.08,
-        bodyCenter.x - canopyR * 1.1, topY + 0.05, bodyCenter.z - bodySize.z * 0.2,
-        bodyCenter.x + canopyR * 1.1, topY + 0.05, bodyCenter.z - bodySize.z * 0.2,
-        bodyCenter.x + canopyR * 0.9, topY + 0.05, bodyCenter.z + bodySize.z * 0.15,
-        bodyCenter.x - canopyR * 0.9, topY + 0.05, bodyCenter.z + bodySize.z * 0.15,
-      ];
-      colors = [
-        0.55, 1, 0.85, 0.55, 1, 0.85, 0.7, 1, 0.92, 0.7, 1, 0.92,
-        0.45, 0.95, 0.75, 0.45, 0.95, 0.75, 0.45, 0.95, 0.75, 0.45, 0.95, 0.75,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
-    } else if (style === "armored") {
-      const rackFront = bodyCenter.z + bodySize.z * 0.22;
-      const rackRear = bodyCenter.z - bodySize.z * 0.32;
-      positions = [
-        bodyBox.min.x + panelInsetX * 0.4, topY + 0.2, rackRear,
-        bodyBox.max.x - panelInsetX * 0.4, topY + 0.2, rackRear,
-        bodyBox.max.x - panelInsetX * 0.4, topY + 0.2, rackFront,
-        bodyBox.min.x + panelInsetX * 0.4, topY + 0.2, rackFront,
-        bodyBox.min.x + 0.4, topY - bodySize.y * 0.15, bodyCenter.z - bodySize.z * 0.1,
-        bodyBox.min.x + 1.2, topY - bodySize.y * 0.15, bodyCenter.z + bodySize.z * 0.1,
-        bodyBox.min.x + 1.2, topY + bodySize.y * 0.05, bodyCenter.z + bodySize.z * 0.1,
-        bodyBox.min.x + 0.4, topY + bodySize.y * 0.05, bodyCenter.z - bodySize.z * 0.1,
-        bodyBox.max.x - 0.4, topY - bodySize.y * 0.15, bodyCenter.z - bodySize.z * 0.1,
-        bodyBox.max.x - 1.2, topY - bodySize.y * 0.15, bodyCenter.z + bodySize.z * 0.1,
-        bodyBox.max.x - 1.2, topY + bodySize.y * 0.05, bodyCenter.z + bodySize.z * 0.1,
-        bodyBox.max.x - 0.4, topY + bodySize.y * 0.05, bodyCenter.z - bodySize.z * 0.1,
-      ];
-      colors = [
-        0.82, 0.84, 0.92, 0.82, 0.84, 0.92, 0.82, 0.84, 0.92, 0.82, 0.84, 0.92,
-        0.55, 0.58, 0.68, 0.55, 0.58, 0.68, 0.55, 0.58, 0.68, 0.55, 0.58, 0.68,
-        0.55, 0.58, 0.68, 0.55, 0.58, 0.68, 0.55, 0.58, 0.68, 0.55, 0.58, 0.68,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
-    } else if (style === "coupe") {
-      const stripeRear = bodyCenter.z - bodySize.z * 0.35;
-      const stripeFront = bodyBox.max.z + 0.1;
-      const stripeHalf = bodySize.x * 0.06;
-      positions = [
-        bodyCenter.x - stripeHalf, topY + 0.05, stripeRear,
-        bodyCenter.x + stripeHalf, topY + 0.05, stripeRear,
-        bodyCenter.x + stripeHalf, topY + 0.05, stripeFront,
-        bodyCenter.x - stripeHalf, topY + 0.05, stripeFront,
-        bodyBox.min.x + panelInsetX, topY, panelRear,
-        bodyBox.max.x - panelInsetX, topY, panelRear,
-        bodyBox.max.x - panelInsetX, topY, panelFront,
-        bodyBox.min.x + panelInsetX, topY, panelFront,
-        bodyCenter.x - noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfFront, topY + 0.02, noseFront,
-        bodyCenter.x - noseHalfFront, topY + 0.02, noseFront,
-      ];
-      colors = [
-        0.35, 1, 0.5, 0.35, 1, 0.5, 0.45, 1, 0.6, 0.45, 1, 0.6,
-        0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1,
-        0.35, 0.95, 1, 0.35, 0.95, 1, 0.45, 1, 1, 0.45, 1, 1,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11];
-    } else {
-      positions = [
-        bodyBox.min.x + panelInsetX, topY, panelRear,
-        bodyBox.max.x - panelInsetX, topY, panelRear,
-        bodyBox.max.x - panelInsetX, topY, panelFront,
-        bodyBox.min.x + panelInsetX, topY, panelFront,
-        bodyCenter.x - noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfRear, topY + 0.02, noseRear,
-        bodyCenter.x + noseHalfFront, topY + 0.02, noseFront,
-        bodyCenter.x - noseHalfFront, topY + 0.02, noseFront,
-      ];
-      colors = [
-        0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1, 0.92, 0.89, 1,
-        1, 0.6, 0.15, 1, 0.6, 0.15, 1, 0.72, 0.28, 1, 0.72, 0.28,
-      ];
-      indices = [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
-    }
-
-    const geo = new T.BufferGeometry();
-    geo.setAttribute("position", new T.Float32BufferAttribute(positions, 3));
-    geo.setAttribute("color", new T.Float32BufferAttribute(colors, 3));
-    geo.setIndex(indices);
-    geo.computeVertexNormals();
-    const cosmetic = new T.Mesh(geo, new T.MeshStandardMaterial({ vertexColors: true, roughness: 0.3, metalness: 0.25, side: T.DoubleSide }));
-    cosmetic.position.y = 0;
-    group.add(cosmetic);
-    group.userData.compassCosmetic = cosmetic;
-    mats.panel = cosmetic.material;
-  }
-  for (const key of ["shell", "frame", "nose", "rear", "rail"]) {
-    if (!usedMats.has(mats[key])) {
-      mats[key].dispose();
-      mats[key] = null;
-    }
+  bodyMesh.material = mats.shell;
+  for (const key of ["frame", "nose", "rear", "rail"]) {
+    mats[key].dispose();
+    mats[key] = null;
   }
   group.userData.compassMaterials = mats;
   group.userData.boostMaterial = mats.shell;
   group.userData.boostBaseEmissiveIntensity = mats.shell.emissiveIntensity;
+  group.userData.vehicleStyle = style;
+}
+
+
+function getKartEnvMap3D(T) {
+  if (!THREE_STATE.renderer || !T.PMREMGenerator) return null;
+  if (THREE_STATE.kartEnvMap && THREE_STATE._kartEnvRenderer === THREE_STATE.renderer) {
+    return THREE_STATE.kartEnvMap;
+  }
+  try {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 64;
+    const cx = c.getContext("2d");
+    // Crisp automotive studio horizon gradient for glossy paint & chrome highlights
+    const bg = cx.createLinearGradient(0, 0, 0, 64);
+    bg.addColorStop(0.0, "#eef5ff");
+    bg.addColorStop(0.18, "#8fb6f0");
+    bg.addColorStop(0.45, "#232a46");
+    bg.addColorStop(0.50, "#f5f0ff");
+    bg.addColorStop(0.56, "#2c2238");
+    bg.addColorStop(1.0, "#0b0c14");
+    cx.fillStyle = bg;
+    cx.fillRect(0, 0, 128, 64);
+    // Overhead softbox specular bands
+    cx.fillStyle = "rgba(255,255,255,0.92)";
+    cx.fillRect(10, 6, 44, 7);
+    cx.fillRect(72, 9, 38, 6);
+    cx.fillStyle = "rgba(180,220,255,0.55)";
+    cx.fillRect(0, 29, 128, 3);
+
+    const srcTex = new T.CanvasTexture(c);
+    srcTex.mapping = T.EquirectangularReflectionMapping;
+    if (T.SRGBColorSpace) srcTex.colorSpace = T.SRGBColorSpace;
+    const pmrem = new T.PMREMGenerator(THREE_STATE.renderer);
+    const rt = pmrem.fromEquirectangular(srcTex);
+    srcTex.dispose();
+    pmrem.dispose();
+    const envTex = rt.texture;
+    envTex.userData = { shared: true };
+    THREE_STATE.kartEnvMap = envTex;
+    THREE_STATE._kartEnvRenderer = THREE_STATE.renderer;
+    return envTex;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function addMesh3D(T, parent, geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, shadow = false) {
+  const m = new T.Mesh(geo, mat);
+  m.position.set(x, y, z);
+  if (rx || ry || rz) m.rotation.set(rx, ry, rz);
+  if (shadow && ENABLE_3D_SHADOWS) {
+    m.castShadow = true;
+    m.receiveShadow = true;
+  }
+  parent.add(m);
+  return m;
+}
+
+function makeSculptedHullGeo(T, profilePts, width, bevel = 0.9, bevelSizeRatio = 0.72) {
+  const shape = new T.Shape();
+  shape.moveTo(profilePts[0][0], profilePts[0][1]);
+  for (let i = 1; i < profilePts.length; i++) {
+    shape.lineTo(profilePts[i][0], profilePts[i][1]);
+  }
+  shape.closePath();
+  const innerDepth = Math.max(0.4, width - bevel * 2);
+  const geo = new T.ExtrudeGeometry(shape, {
+    depth: innerDepth,
+    bevelEnabled: bevel > 0,
+    bevelThickness: bevel,
+    bevelSize: bevel * bevelSizeRatio,
+    bevelSegments: 2,
+    curveSegments: 6,
+  });
+  geo.translate(0, 0, -innerDepth / 2);
+  geo.rotateY(-Math.PI / 2);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function makeSpokeWheelGeo(T, rimR, width) {
+  const shape = new T.Shape();
+  const spokes = 6;
+  const rHub = rimR * 0.36;
+  const rOut = rimR * 0.94;
+  const halfAng = 0.14;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * TAU;
+    const aPrev = a - Math.PI / spokes;
+    const x0 = Math.cos(aPrev) * rHub, y0 = Math.sin(aPrev) * rHub;
+    const x1 = Math.cos(a - halfAng) * rOut, y1 = Math.sin(a - halfAng) * rOut;
+    const x2 = Math.cos(a + halfAng) * rOut, y2 = Math.sin(a + halfAng) * rOut;
+    if (i === 0) shape.moveTo(x0, y0);
+    else shape.lineTo(x0, y0);
+    shape.lineTo(x1, y1);
+    shape.lineTo(x2, y2);
+  }
+  shape.closePath();
+  const depth = width * 0.84;
+  const geo = new T.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+  geo.translate(0, 0, -depth / 2);
+  geo.rotateY(Math.PI / 2);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function makeTireGeo(T, radius, width) {
+  const hw = width * 0.5;
+  const rimR = radius * 0.58;
+  const shoulderR = radius * 0.93;
+  const pts = [
+    new T.Vector2(rimR * 0.88, -hw * 0.84),
+    new T.Vector2(rimR, -hw * 0.95),
+    new T.Vector2(shoulderR, -hw),
+    new T.Vector2(radius, -hw * 0.7),
+    new T.Vector2(radius, hw * 0.7),
+    new T.Vector2(shoulderR, hw),
+    new T.Vector2(rimR, hw * 0.95),
+    new T.Vector2(rimR * 0.88, hw * 0.84),
+  ];
+  const geo = new T.LatheGeometry(pts, 18);
+  geo.rotateZ(Math.PI / 2);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 
@@ -341,413 +251,744 @@ export function buildKartModel3D(charId, color) {
   if (!window.THREE) return null;
   const T = window.THREE;
   const group = new T.Group();
+  const envMap = getKartEnvMap3D(T);
 
-  const parseCol = (hex) => new T.Color(hex);
-  const c = parseCol(color);
-  const cDark = c.clone().multiplyScalar(0.5);
-  const cBright = c.clone().lerp(new T.Color(0xffffff), 0.35);
-  const wheelMat = new T.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.92, metalness: 0.05 });
-  const hubMat = new T.MeshStandardMaterial({ color: 0x666666, metalness: 0.85, roughness: 0.15 });
-  const headlightMat = new T.MeshStandardMaterial({ color: 0xfff8d0, emissive: 0xfff5b0, emissiveIntensity: 1.4 });
-  const taillightMat = new T.MeshStandardMaterial({ color: 0xff2020, emissive: 0xff2828, emissiveIntensity: 0.9 });
-  const glassMat = new T.MeshStandardMaterial({ color: 0x88ccff, emissive: 0x88ccff, emissiveIntensity: 0.2, transparent: true, opacity: 0.5, metalness: 0.95, roughness: 0.05 });
-  const cockpitMat = new T.MeshStandardMaterial({ color: 0x12151e, roughness: 0.25, metalness: 0.7 });
+  const c = new T.Color(color);
+  const cDark = c.clone().multiplyScalar(0.42);
+  const cBright = c.clone().lerp(new T.Color(0xffffff), 0.42);
 
-  function addWheels(positions) {
-    group._wheels = [];
-    group._frontWheelPivots = [];
-    const tireGeo = new T.TorusGeometry(3.2, 1.6, 10, 16);
-    const cylGeo = new T.CylinderGeometry(2.8, 2.8, 3.8, 14);
-    const hubGeo = new T.CylinderGeometry(1.8, 1.8, 4.0, 8);
-    const rimGeo = new T.TorusGeometry(2.2, 0.3, 6, 12);
-    const rimMat = new T.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.1 });
-    positions.forEach(([wx, wy, wz], idx) => {
+  // Shared materials per kart (kept local to this kart group for safe disposal)
+  const paintMat = new T.MeshStandardMaterial({
+    color: c,
+    emissive: c,
+    emissiveIntensity: 0.13,
+    roughness: 0.22,
+    metalness: 0.48,
+    envMap,
+    envMapIntensity: 1.05,
+  });
+  const trimMat = new T.MeshStandardMaterial({
+    color: cDark,
+    emissive: cDark,
+    emissiveIntensity: 0.04,
+    roughness: 0.34,
+    metalness: 0.45,
+    envMap,
+    envMapIntensity: 0.7,
+  });
+  let _accentPaintMat = null;
+  const getAccentPaintMat = () => _accentPaintMat || (_accentPaintMat = new T.MeshStandardMaterial({
+    color: cBright,
+    emissive: c,
+    emissiveIntensity: 0.2,
+    roughness: 0.18,
+    metalness: 0.55,
+    envMap,
+    envMapIntensity: 1.15,
+  }));
+  const carbonMat = new T.MeshStandardMaterial({
+    color: 0x171923,
+    roughness: 0.5,
+    metalness: 0.35,
+    envMap,
+    envMapIntensity: 0.5,
+  });
+  const chromeMat = new T.MeshStandardMaterial({
+    color: 0xdce4f0,
+    roughness: 0.12,
+    metalness: 0.9,
+    envMap,
+    envMapIntensity: 1.35,
+  });
+  const tireMat = new T.MeshStandardMaterial({
+    color: 0x121318,
+    roughness: 0.88,
+    metalness: 0.08,
+  });
+  const rimBarrelMat = new T.MeshStandardMaterial({
+    color: 0x262a36,
+    roughness: 0.35,
+    metalness: 0.72,
+    envMap,
+    envMapIntensity: 0.8,
+  });
+  const alloyMat = new T.MeshStandardMaterial({
+    color: 0xcfd6e4,
+    roughness: 0.18,
+    metalness: 0.88,
+    envMap,
+    envMapIntensity: 1.25,
+  });
+  const rimRingMat = new T.MeshStandardMaterial({
+    color: cBright,
+    emissive: c,
+    emissiveIntensity: 0.38,
+    roughness: 0.22,
+    metalness: 0.65,
+  });
+  const headlightMat = new T.MeshStandardMaterial({
+    color: 0xfffbe0,
+    emissive: 0xfff4b8,
+    emissiveIntensity: 1.65,
+    roughness: 0.12,
+    metalness: 0.2,
+  });
+  const taillightMat = new T.MeshStandardMaterial({
+    color: 0xff2233,
+    emissive: 0xff2438,
+    emissiveIntensity: 0.95,
+    roughness: 0.18,
+    metalness: 0.2,
+  });
+  const glassMat = new T.MeshStandardMaterial({
+    color: 0x1a2840,
+    emissive: 0x18304d,
+    emissiveIntensity: 0.18,
+    roughness: 0.06,
+    metalness: 0.85,
+    transparent: true,
+    opacity: 0.78,
+    envMap,
+    envMapIntensity: 1.5,
+  });
+  const cockpitMat = new T.MeshStandardMaterial({
+    color: 0x11131b,
+    roughness: 0.65,
+    metalness: 0.2,
+  });
+  let _neonMat = null;
+  const getNeonMat = () => _neonMat || (_neonMat = new T.MeshStandardMaterial({
+    color: cBright,
+    emissive: c,
+    emissiveIntensity: 1.1,
+    roughness: 0.2,
+    metalness: 0.3,
+  }));
+  const exhaustGlowMat = new T.MeshStandardMaterial({
+    color: 0xff7722,
+    emissive: 0xff5511,
+    emissiveIntensity: 0.9,
+    roughness: 0.3,
+  });
+
+  group._wheels = [];
+  group._frontWheelPivots = [];
+  group._taillights = [taillightMat];
+
+  // Properly oriented LatheGeometry wheels with 6 spinning alloy spokes + outboard accent ring
+  function addWheels(specs) {
+    const geoCache = new Map();
+    const getWheelGeos = (radius, width) => {
+      const key = `${radius.toFixed(2)}:${width.toFixed(2)}`;
+      if (geoCache.has(key)) return geoCache.get(key);
+      const rimR = radius * 0.58;
+      const geos = {
+        tire: makeTireGeo(T, radius, width),
+        barrel: new T.CylinderGeometry(rimR * 0.95, rimR * 0.95, width * 0.76, 14),
+        spokes: makeSpokeWheelGeo(T, rimR, width),
+        ring: new T.TorusGeometry(rimR * 0.93, 0.22, 6, 18),
+      };
+      geos.barrel.rotateZ(Math.PI / 2);
+      geos.ring.rotateY(Math.PI / 2);
+      geoCache.set(key, geos);
+      return geos;
+    };
+
+    specs.forEach((spec, idx) => {
+      const [wx, wz, radius = 3.8, width = 3.6, isFront = idx < 2] = spec;
+      const wy = radius + 0.4;
+      const geos = getWheelGeos(radius, width);
+      const side = Math.sign(wx) || 1;
+
       const steerPivot = new T.Group();
       steerPivot.position.set(wx, wy, wz);
       const wheelGroup = new T.Group();
-      const tire = new T.Mesh(tireGeo, wheelMat);
-      tire.rotation.x = Math.PI / 2;
-      wheelGroup.add(tire);
-      const inner = new T.Mesh(cylGeo, wheelMat);
-      inner.rotation.z = Math.PI / 2;
-      wheelGroup.add(inner);
-      const hub = new T.Mesh(hubGeo, hubMat);
-      hub.rotation.z = Math.PI / 2;
-      wheelGroup.add(hub);
-      const rim = new T.Mesh(rimGeo, rimMat);
-      rim.rotation.x = Math.PI / 2;
-      wheelGroup.add(rim);
-      wheelGroup.castShadow = true;
+
+      addMesh3D(T, wheelGroup, geos.tire, tireMat, 0, 0, 0, 0, 0, 0, true);
+      addMesh3D(T, wheelGroup, geos.barrel, rimBarrelMat);
+      addMesh3D(T, wheelGroup, geos.spokes, alloyMat);
+      addMesh3D(T, wheelGroup, geos.ring, rimRingMat, side * width * 0.43, 0, 0);
+
       steerPivot.add(wheelGroup);
       group.add(steerPivot);
       group._wheels.push(wheelGroup);
-      if (wz > 0 || idx < 2) {
-        group._frontWheelPivots.push(steerPivot);
-      }
+      if (isFront) group._frontWheelPivots.push(steerPivot);
     });
   }
-  group._taillights = [taillightMat];
+
+  function addDriver(x, y, z, visorHex = 0x162238, visorEmissive = color, helmetScale = 1) {
+    // Racing seat & shoulders
+    addMesh3D(T, group, new T.BoxGeometry(5.6 * helmetScale, 3.2 * helmetScale, 3.2 * helmetScale), cockpitMat, x, y - 2.3 * helmetScale, z - 0.5);
+    addMesh3D(T, group, new T.BoxGeometry(4.2 * helmetScale, 3.6 * helmetScale, 1.4 * helmetScale), trimMat, x, y - 1.2 * helmetScale, z - 2.2 * helmetScale);
+    // Glossy helmet shell
+    const helmetMat = new T.MeshStandardMaterial({
+      color: cBright,
+      emissive: c,
+      emissiveIntensity: 0.22,
+      roughness: 0.16,
+      metalness: 0.55,
+      envMap,
+      envMapIntensity: 1.2,
+    });
+    const r = 2.85 * helmetScale;
+    addMesh3D(T, group, new T.SphereGeometry(r, 14, 10), helmetMat, x, y + 0.5 * helmetScale, z);
+    // Front-facing wrap-around visor (+Z is phi = PI/2)
+    const visorMat = new T.MeshStandardMaterial({
+      color: visorHex,
+      emissive: visorEmissive,
+      emissiveIntensity: 0.32,
+      roughness: 0.06,
+      metalness: 0.92,
+      envMap,
+      envMapIntensity: 1.5,
+    });
+    const visorGeo = new T.SphereGeometry(r * 1.03, 12, 6, Math.PI / 2 - 1.15, 2.3, 0.72, 0.62);
+    addMesh3D(T, group, visorGeo, visorMat, x, y + 0.5 * helmetScale, z);
+  }
+
+  function addExhaustPair(xs, y, z, radius = 1.25, len = 3.8) {
+    const pipeGeo = new T.CylinderGeometry(radius * 0.85, radius, len, 10);
+    pipeGeo.rotateX(Math.PI / 2);
+    const glowGeo = new T.CylinderGeometry(radius * 0.62, radius * 0.62, 0.7, 8);
+    glowGeo.rotateX(Math.PI / 2);
+    for (const ex of xs) {
+      addMesh3D(T, group, pipeGeo, chromeMat, ex, y, z);
+      addMesh3D(T, group, glowGeo, exhaustGlowMat, ex, y, z - len * 0.45);
+    }
+  }
+
+  let body;
+  let flameZ = -26;
+  let flameY = 5.2;
+  let shadowW = 36;
+  let shadowL = 46;
 
   if (charId === "anton") {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.18, metalness: 0.75 });
-    const body = new T.Mesh(new T.BoxGeometry(16, 6, 34, 2, 1, 2), bodyMat);
-    body.position.y = 5; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    const noseMat = new T.MeshStandardMaterial({ color: cBright, roughness: 0.15, metalness: 0.8 });
-    const nose = new T.Mesh(new T.BoxGeometry(12, 4, 10), noseMat);
-    nose.position.set(0, 5, 18); nose.castShadow = true;
-    group.add(nose);
-    const sideSkirtMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.3, metalness: 0.6 });
-    for (let s of [-1, 1]) {
-      const skirt = new T.Mesh(new T.BoxGeometry(1.5, 3, 30), sideSkirtMat);
-      skirt.position.set(s * 8.5, 3, 0);
-      group.add(skirt);
+    // FORMULA RACER: needle nosecone, sculpted sidepods, halo cockpit, dorsal fin, multi-plane F1 wings
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-15.5, 2.6], [11.5, 2.2], [19.2, 3.0], [18.6, 4.4],
+      [9.5, 6.2], [3.5, 7.6], [-2.5, 7.4], [-5.2, 10.6],
+      [-12.5, 9.2], [-15.8, 6.2],
+    ], 8.6, 0.85);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+
+    // Carbon undertray floor plank + rear diffuser
+    addMesh3D(T, group, new T.BoxGeometry(15.6, 1.0, 27), carbonMat, 0, 2.1, -1.5);
+    addMesh3D(T, group, new T.BoxGeometry(11.5, 2.4, 3.2), carbonMat, 0, 3.0, -15.4);
+    for (const sx of [-3.6, 0, 3.6]) {
+      addMesh3D(T, group, new T.BoxGeometry(0.55, 2.2, 3.4), trimMat, sx, 2.8, -15.6);
     }
-    group.add(new T.Mesh(new T.BoxGeometry(10, 4, 8), cockpitMat)).position.set(0, 9, -2);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.4, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3, 12, 8), helmetMat)).position.set(0, 12, -2);
-    const visorMat = new T.MeshStandardMaterial({ color: 0x222244, emissive: 0x3344ff, emissiveIntensity: 0.3, metalness: 0.9, roughness: 0.05 });
-    const visor = new T.Mesh(new T.SphereGeometry(2.8, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.5), visorMat);
-    visor.position.set(0, 12.5, -1); visor.rotation.x = -0.6;
-    group.add(visor);
-    const ws = new T.Mesh(new T.BoxGeometry(9, 3, 1.5), glassMat);
-    ws.position.set(0, 10, 4); ws.rotation.x = -0.3;
-    group.add(ws);
-    group.add(new T.Mesh(new T.CylinderGeometry(0.3, 0.3, 14, 6), new T.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.8 }))).position.set(0, 16, -10);
-    group.add(new T.Mesh(new T.SphereGeometry(1.5, 8, 6), new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.2 }))).position.set(0, 23, -10);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(1, 0.8, 30), new T.MeshStandardMaterial({ color: cBright, emissive: c, emissiveIntensity: 0.6 }))).position.set(s * 5, 8.5, 0);
+
+    // Sculpted sidepods + radiator air intakes + neon accent strips
+    const sidepodGeo = makeSculptedHullGeo(T, [
+      [-12.5, 2.6], [6.5, 2.6], [8.0, 5.8], [4.5, 6.8], [-5.5, 6.4], [-13.2, 4.4],
+    ], 4.4, 0.55);
+    const intakeGeo = new T.BoxGeometry(3.2, 2.6, 0.9);
+    const stripGeo = new T.BoxGeometry(0.45, 0.55, 18.5);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, sidepodGeo, paintMat, s * 6.0, 0, 0, 0, 0, 0, true);
+      addMesh3D(T, group, intakeGeo, cockpitMat, s * 6.0, 4.8, 7.8);
+      addMesh3D(T, group, stripGeo, getNeonMat(), s * 8.2, 5.2, -2.0);
     }
-    const wingMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.3, metalness: 0.6 });
-    group.add(new T.Mesh(new T.BoxGeometry(20, 1.5, 3), wingMat)).position.set(0, 10, -16);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(1.2, 4, 1.2), wingMat)).position.set(s * 7, 8, -16);
+
+    // Nose racing stripe & dorsal shark fin
+    addMesh3D(T, group, new T.BoxGeometry(2.0, 0.35, 16.5), getAccentPaintMat(), 0, 5.6, 10.2, 0.14, 0, 0);
+    const finGeo = makeSculptedHullGeo(T, [[-14.5, 6.8], [-5.0, 7.6], [-5.5, 11.4], [-14.2, 10.0]], 0.7, 0.12);
+    addMesh3D(T, group, finGeo, trimMat);
+
+    // Open cockpit tub, driver, aero windscreen & F1 halo arch
+    addMesh3D(T, group, new T.BoxGeometry(6.2, 2.4, 8.8), cockpitMat, 0, 6.9, -0.8);
+    addDriver(0, 9.6, -1.6, 0x161a36, 0x57f2ff, 0.92);
+    addMesh3D(T, group, new T.BoxGeometry(5.6, 1.9, 0.5), glassMat, 0, 8.5, 3.8, -0.58, 0, 0);
+    const haloArc = new T.TorusGeometry(3.5, 0.42, 6, 14, Math.PI);
+    addMesh3D(T, group, haloArc, carbonMat, 0, 10.6, 1.4, Math.PI / 2 - 0.16, 0, 0);
+    addMesh3D(T, group, new T.CylinderGeometry(0.32, 0.36, 3.0, 6), carbonMat, 0, 9.2, 4.6, -0.35, 0, 0);
+
+    // Wide multi-plane front wing + endplates
+    addMesh3D(T, group, new T.BoxGeometry(19.6, 0.75, 4.2), carbonMat, 0, 2.5, 18.2);
+    addMesh3D(T, group, new T.BoxGeometry(17.8, 0.55, 2.0), getAccentPaintMat(), 0, 3.4, 17.0, 0.18, 0, 0);
+    const frontPlateGeo = new T.BoxGeometry(0.65, 2.9, 5.0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, frontPlateGeo, paintMat, s * 9.8, 3.4, 18.0);
     }
-    addWheels([[-7, 2.5, 12], [7, 2.5, 12], [-7, 2.5, -12], [7, 2.5, -12]]);
-    [[-5, 5, 18], [5, 5, 18]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.5, 8, 6), headlightMat)).position.set(...p));
-    [[-5, 5, -17], [5, 5, -17]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.2, 8, 6), taillightMat)).position.set(...p));
+
+    // High swan-neck F1 rear wing + endplates
+    addMesh3D(T, group, new T.BoxGeometry(19.2, 0.85, 3.6), paintMat, 0, 12.2, -16.4, 0.14, 0, 0);
+    addMesh3D(T, group, new T.BoxGeometry(18.6, 0.55, 1.9), getAccentPaintMat(), 0, 13.4, -17.3, 0.32, 0, 0);
+    const rearPlateGeo = new T.BoxGeometry(0.75, 5.2, 4.8);
+    const pylonGeo = new T.BoxGeometry(0.7, 5.6, 1.6);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, rearPlateGeo, carbonMat, s * 9.5, 11.4, -16.6);
+      addMesh3D(T, group, pylonGeo, carbonMat, s * 3.0, 9.2, -15.8, -0.15, 0, 0);
+    }
+
+    // Spring-mounted telemetry antenna (animated by sync3DKartFlair)
+    addMesh3D(T, group, new T.CylinderGeometry(0.2, 0.32, 8.2, 6), chromeMat, 0, 14.5, -8.5);
+    const antTip = addMesh3D(T, group, new T.SphereGeometry(1.15, 10, 8), getNeonMat(), 0, 18.8, -8.5);
+    group._antennaTip = antTip;
+    group._antennaTipBaseY = 18.8;
+
+    // Suspension wishbones + exposed open wheels (wider rear slicks)
+    const wishboneGeo = new T.BoxGeometry(14.5, 0.45, 0.7);
+    addMesh3D(T, group, wishboneGeo, carbonMat, 0, 4.2, 12.4);
+    addMesh3D(T, group, wishboneGeo, carbonMat, 0, 4.5, -11.8);
+    addWheels([
+      [-8.8, 12.4, 3.7, 3.4, true],
+      [8.8, 12.4, 3.7, 3.4, true],
+      [-9.2, -11.8, 4.2, 4.4, false],
+      [9.2, -11.8, 4.2, 4.4, false],
+    ]);
+
+    // Nose LED headlights + central F1 rain/brake light + side rear LEDs + dual exhaust
+    const hlGeo = new T.BoxGeometry(2.2, 0.75, 1.0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, hlGeo, headlightMat, s * 4.0, 4.3, 15.6);
+      addMesh3D(T, group, new T.BoxGeometry(0.65, 2.2, 0.6), taillightMat, s * 9.5, 10.6, -18.8);
+    }
+    addMesh3D(T, group, new T.BoxGeometry(2.4, 1.8, 0.8), taillightMat, 0, 4.4, -17.0);
+    addExhaustPair([-2.1, 2.1], 4.6, -16.2, 1.0, 3.0);
+    flameZ = -27;
 
   } else if (charId === "artur") {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.22, metalness: 0.7 });
-    const body = new T.Mesh(new T.BoxGeometry(22, 8, 30, 2, 1, 2), bodyMat);
-    body.position.y = 6; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    const engineMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.4, metalness: 0.75 });
-    group.add(new T.Mesh(new T.BoxGeometry(18, 6, 8), engineMat)).position.set(0, 12, -10);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(4, 4, 6), engineMat)).position.set(s * 5, 11, 4);
+    // MUSCLE INTERCEPTOR: chiseled widebody fastback, chrome V8 supercharger blower, quad exhausts, GT wing
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-16.2, 2.8], [16.5, 2.6], [17.4, 5.2], [16.2, 8.2],
+      [6.5, 9.0], [1.5, 12.8], [-6.8, 12.6], [-14.2, 9.4],
+      [-16.8, 8.6], [-16.6, 4.6],
+    ], 19.2, 1.0);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+
+    // Aggressive front splitter, dark honeycomb grille & rear diffuser
+    addMesh3D(T, group, new T.BoxGeometry(21.4, 1.0, 3.8), carbonMat, 0, 2.4, 16.5);
+    addMesh3D(T, group, new T.BoxGeometry(15.6, 3.2, 1.2), cockpitMat, 0, 5.6, 17.5);
+    addMesh3D(T, group, new T.BoxGeometry(19.6, 2.2, 2.8), carbonMat, 0, 3.2, -16.4);
+
+    // Widebody fender flares + swept flame accent side strakes
+    const flareGeo = new T.BoxGeometry(1.6, 4.4, 9.2);
+    const flameAccentMat = new T.MeshStandardMaterial({
+      color: 0xffb347,
+      emissive: 0xff6a00,
+      emissiveIntensity: 0.75,
+      roughness: 0.25,
+      metalness: 0.4,
+    });
+    const strakeGeo = makeSculptedHullGeo(T, [[-8.0, 4.8], [7.5, 5.6], [5.0, 7.0], [-6.5, 6.2]], 0.5, 0.08);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, flareGeo, trimMat, s * 10.1, 4.8, 10.6);
+      addMesh3D(T, group, flareGeo, trimMat, s * 10.3, 5.1, -10.4);
+      addMesh3D(T, group, strakeGeo, flameAccentMat, s * 9.8, 0, 0);
     }
-    group.add(new T.Mesh(new T.BoxGeometry(14, 5, 10), cockpitMat)).position.set(0, 11, 0);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3.5, 12, 8), helmetMat)).position.set(0, 14.5, -1);
-    const visorMat = new T.MeshStandardMaterial({ color: 0x332200, emissive: 0xff6600, emissiveIntensity: 0.2, metalness: 0.9, roughness: 0.05 });
-    const visor = new T.Mesh(new T.SphereGeometry(3.3, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.5), visorMat);
-    visor.position.set(0, 15, 0); visor.rotation.x = -0.6;
-    group.add(visor);
-    const ws = new T.Mesh(new T.BoxGeometry(13, 4, 1.5), glassMat);
-    ws.position.set(0, 13, 6); ws.rotation.x = -0.35;
-    group.add(ws);
-    const flameMat = new T.MeshStandardMaterial({ color: 0xff6600, emissive: 0xff8a3b, emissiveIntensity: 0.8, transparent: true, opacity: 0.75, side: T.DoubleSide });
-    for (let s of [-1, 1]) {
-      const flameGeo = new T.BufferGeometry();
-      flameGeo.setAttribute("position", new T.Float32BufferAttribute([
-        -8, 0, 0, 8, 0, -3, 0, 0, 3,
-        -6, 0, -1, 10, 0, -4, 2, 0, 4,
-      ], 3));
-      flameGeo.computeVertexNormals();
-      const flame = new T.Mesh(flameGeo, flameMat);
-      flame.position.set(s * 11.5, 6, 6);
-      flame.rotation.y = s * Math.PI / 2;
-      group.add(flame);
+
+    // Chrome V8 supercharger blower & intake butterflies poking through the hood
+    addMesh3D(T, group, new T.BoxGeometry(6.6, 3.2, 7.4), carbonMat, 0, 10.2, 9.8);
+    addMesh3D(T, group, new T.BoxGeometry(5.6, 2.2, 6.2), chromeMat, 0, 12.1, 10.0);
+    for (const s of [-1.4, 1.4]) {
+      addMesh3D(T, group, new T.CylinderGeometry(1.05, 1.05, 1.2, 10), exhaustGlowMat, s, 12.2, 13.1, Math.PI / 2, 0, 0);
     }
-    const spoilerMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.3, metalness: 0.6 });
-    group.add(new T.Mesh(new T.BoxGeometry(24, 2, 3), spoilerMat)).position.set(0, 16, -14);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(2, 6, 2), spoilerMat)).position.set(s * 9, 13, -14);
+
+    // Sculpted wrap-around fastback glasshouse (windshield, side windows & rear fastback glass)
+    const cabinGlassGeo = makeSculptedHullGeo(T, [
+      [-13.4, 9.8], [6.6, 9.6], [1.6, 13.0], [-6.8, 12.9],
+    ], 17.6, 0.75);
+    addMesh3D(T, group, cabinGlassGeo, glassMat, 0, 0.25, 0);
+    // Painted roof cap + rear window louvers + roof scoop
+    addMesh3D(T, group, new T.BoxGeometry(15.2, 0.7, 8.6), paintMat, 0, 13.75, -2.6);
+    for (let i = 0; i < 3; i++) {
+      addMesh3D(T, group, new T.BoxGeometry(14.4, 0.45, 0.9), carbonMat, 0, 13.2 - i * 0.9, -8.0 - i * 1.9, 0.44, 0, 0);
     }
-    const pipeMat = new T.MeshStandardMaterial({ color: 0x555555, metalness: 0.85, roughness: 0.2 });
-    const pipeGlowMat = new T.MeshStandardMaterial({ color: 0xff4400, emissive: 0xff4400, emissiveIntensity: 0.5, transparent: true, opacity: 0.6 });
-    for (let s of [-1, 1]) {
-      const pipe = new T.Mesh(new T.CylinderGeometry(2, 2.5, 6, 12), pipeMat);
-      pipe.position.set(s * 6, 4, -18); pipe.rotation.x = Math.PI / 2;
-      group.add(pipe);
-      const pipeGlow = new T.Mesh(new T.CylinderGeometry(1.5, 2, 2, 10), pipeGlowMat);
-      pipeGlow.position.set(s * 6, 4, -21); pipeGlow.rotation.x = Math.PI / 2;
-      group.add(pipeGlow);
+    addMesh3D(T, group, new T.BoxGeometry(5.2, 1.8, 5.2), trimMat, 0, 14.7, -2.2);
+    addDriver(0, 10.6, -1.6, 0x2a1808, 0xff8a3b, 0.88);
+
+    // Pedestal muscle GT spoiler
+    addMesh3D(T, group, new T.BoxGeometry(22.2, 1.1, 3.6), carbonMat, 0, 13.4, -15.6, 0.14, 0, 0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(1.2, 4.4, 2.2), trimMat, s * 7.8, 11.1, -15.4);
+      addMesh3D(T, group, new T.BoxGeometry(0.7, 2.6, 4.2), paintMat, s * 11.1, 13.5, -15.6);
     }
-    addWheels([[-10, 3, 11], [10, 3, 11], [-10, 3, -11], [10, 3, -11]]);
-    [[-8, 6, 16], [8, 6, 16]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.8, 8, 6), headlightMat)).position.set(...p));
-    [[-7, 6, -15], [7, 6, -15]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.4, 8, 6), taillightMat)).position.set(...p));
+
+    // Quad muscle exhausts, aggressive quad headlights & full-width muscle LED taillight bar
+    addExhaustPair([-5.8, -3.5, 3.5, 5.8], 3.4, -17.6, 1.15, 3.4);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(3.8, 1.4, 0.9), headlightMat, s * 6.8, 6.2, 17.8);
+    }
+    addMesh3D(T, group, new T.BoxGeometry(17.6, 1.65, 0.9), taillightMat, 0, 6.8, -17.4);
+
+    // Wide muscle tires (beefier rear)
+    addWheels([
+      [-10.4, 10.6, 3.9, 3.8, true],
+      [10.4, 10.6, 3.9, 3.8, true],
+      [-10.8, -10.4, 4.4, 4.8, false],
+      [10.8, -10.4, 4.4, 4.8, false],
+    ]);
+    shadowW = 40;
+    shadowL = 48;
+    flameZ = -27;
 
   } else if (charId === "rissal") {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.25, metalness: 0.65 });
-    const body = new T.Mesh(new T.BoxGeometry(20, 8, 26, 2, 1, 2), bodyMat);
-    body.position.y = 6; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    group.add(new T.Mesh(new T.SphereGeometry(10, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), bodyMat)).position.set(0, 10, -2);
-    group.add(new T.Mesh(new T.BoxGeometry(14, 4, 10), cockpitMat)).position.set(0, 11, -2);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3.5, 12, 8), helmetMat)).position.set(0, 14, -2);
-    const visorMat = new T.MeshStandardMaterial({ color: 0x112222, emissive: c, emissiveIntensity: 0.15, metalness: 0.9, roughness: 0.05 });
-    const visor = new T.Mesh(new T.SphereGeometry(3.3, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.5), visorMat);
-    visor.position.set(0, 14.5, -1); visor.rotation.x = -0.6;
-    group.add(visor);
-    const ws = new T.Mesh(new T.BoxGeometry(12, 4, 1.5), glassMat);
-    ws.position.set(0, 12, 4); ws.rotation.x = -0.35;
-    group.add(ws);
-    const glowMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 1.5, transparent: true, opacity: 0.7 });
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(1.5, 1.2, 28), glowMat)).position.set(s * 10.5, 1.5, 0);
+    // CYBER COMPACT COUPE: aerodynamic hot-hatch wedge, panoramic glasshouse, pulsing neon underglow (0 PointLights)
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-13.5, 2.6], [13.5, 2.4], [15.4, 4.8], [13.6, 7.6],
+      [6.2, 8.6], [0.8, 12.6], [-7.4, 12.4], [-13.6, 9.2],
+      [-14.2, 5.0],
+    ], 17.4, 1.1);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+
+    // Dark carbon lower aero kit, front intake air dam & rear diffuser
+    addMesh3D(T, group, new T.BoxGeometry(18.6, 1.2, 28.4), carbonMat, 0, 2.2, 0.2);
+    addMesh3D(T, group, new T.BoxGeometry(13.4, 2.2, 1.0), cockpitMat, 0, 4.0, 15.6);
+    addMesh3D(T, group, new T.BoxGeometry(14.0, 2.2, 2.4), carbonMat, 0, 3.2, -14.2);
+
+    // Sleek panoramic tinted canopy + sloped windshield + side windows + cyber mint roof rails
+    const canopyGeo = makeSculptedHullGeo(T, [
+      [-11.4, 9.0], [6.8, 9.0], [1.6, 13.5], [-7.2, 13.4],
+    ], 15.2, 0.75);
+    addMesh3D(T, group, canopyGeo, glassMat, 0, 0.2, 0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(0.6, 0.55, 11.2), getNeonMat(), s * 6.8, 13.8, -2.6);
     }
-    group.add(new T.Mesh(new T.BoxGeometry(20, 1.2, 1.5), glowMat)).position.set(0, 1.5, 13);
-    group.add(new T.Mesh(new T.BoxGeometry(20, 1.2, 1.5), glowMat)).position.set(0, 1.5, -13);
-    const underGlow = new T.PointLight(new T.Color(c), 0.5, 60);
-    underGlow.position.set(0, 1, 0);
-    group.add(underGlow);
-    const spoilerMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.3, metalness: 0.6 });
-    group.add(new T.Mesh(new T.BoxGeometry(18, 1.5, 2), spoilerMat)).position.set(0, 11, -13);
-    addWheels([[-9, 2.5, 10], [9, 2.5, 10], [-9, 2.5, -10], [9, 2.5, -10]]);
-    [[-7, 6, 14], [7, 6, 14]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.5, 8, 6), headlightMat)).position.set(...p));
-    [[-6, 6, -13], [6, 6, -13]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.2, 8, 6), taillightMat)).position.set(...p));
+    addDriver(0, 10.2, -1.8, 0x0a2626, 0x4dffaa, 0.86);
+
+    // Compact twin-post hatchback wing
+    addMesh3D(T, group, new T.BoxGeometry(17.8, 0.95, 3.0), trimMat, 0, 13.4, -12.8, 0.16, 0, 0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(1.0, 3.2, 1.8), carbonMat, s * 6.4, 11.7, -12.6);
+    }
+
+    // Signature neon underglow perimeter strips + subtle additive ground glow halo (animated by sync3DKartFlair)
+    const underglowMat = new T.MeshStandardMaterial({
+      color: 0x4dffaa,
+      emissive: 0x4dffaa,
+      emissiveIntensity: 1.5,
+      transparent: true,
+      opacity: 0.85,
+      roughness: 0.15,
+    });
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(0.8, 0.75, 25.0), underglowMat, s * 9.5, 1.6, 0);
+    }
+    addMesh3D(T, group, new T.BoxGeometry(17.8, 0.75, 0.8), underglowMat, 0, 1.6, 14.5);
+    addMesh3D(T, group, new T.BoxGeometry(17.8, 0.75, 0.8), underglowMat, 0, 1.6, -14.2);
+    const underPoolMat = new T.MeshBasicMaterial({
+      map: getParticleGlowTexture3D(T),
+      color: 0x4dffaa,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+      blending: T.AdditiveBlending,
+    });
+    const underPool = addMesh3D(T, group, new T.PlaneGeometry(30, 42), underPoolMat, 0, 0.74, 0, -Math.PI / 2, 0, 0);
+    underPool.renderOrder = 2;
+    group._underglowMat = underglowMat;
+
+    // Cyber full-width LED front lightbar & glowing rear lightbar + center twin titanium exhausts
+    addMesh3D(T, group, new T.BoxGeometry(14.8, 0.9, 0.8), headlightMat, 0, 6.1, 15.8);
+    addMesh3D(T, group, new T.BoxGeometry(15.6, 1.25, 0.8), taillightMat, 0, 6.8, -14.8);
+    addExhaustPair([-1.7, 1.7], 3.3, -15.2, 1.15, 2.8);
+
+    addWheels([
+      [-9.3, 9.4, 3.6, 3.5, true],
+      [9.3, 9.4, 3.6, 3.5, true],
+      [-9.5, -9.4, 3.8, 3.9, false],
+      [9.5, -9.4, 3.8, 3.9, false],
+    ]);
+    shadowW = 34;
+    shadowL = 42;
+    flameZ = -24;
 
   } else if (charId === "pia") {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.35, metalness: 0.55 });
-    const body = new T.Mesh(new T.BoxGeometry(26, 10, 30, 2, 1, 2), bodyMat);
-    body.position.y = 7; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    const rackMat = new T.MeshStandardMaterial({ color: 0x333344, metalness: 0.7, roughness: 0.3 });
-    group.add(new T.Mesh(new T.BoxGeometry(22, 1.5, 18), rackMat)).position.set(0, 13.5, -2);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(1.5, 3, 1.5), rackMat)).position.set(s * 10, 12.5, 6);
-      group.add(new T.Mesh(new T.BoxGeometry(1.5, 3, 1.5), rackMat)).position.set(s * 10, 12.5, -8);
+    // ARMORED TACTICAL SUV: tall chamfered hull, heavy bullbar, roof rack + 4 rally spotlights, oversized off-road tires
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-15.4, 4.0], [15.4, 4.0], [16.8, 6.6], [15.8, 10.2],
+      [7.8, 10.8], [4.2, 16.0], [-12.2, 15.8], [-15.8, 12.2],
+      [-16.2, 6.2],
+    ], 22.0, 1.0);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+
+    // Armored lower chassis & heavy rock-slider side plating
+    addMesh3D(T, group, new T.BoxGeometry(23.6, 2.4, 31.4), carbonMat, 0, 4.0, 0);
+    const sideArmorGeo = new T.BoxGeometry(1.5, 4.6, 25.0);
+    const fenderGeo = new T.BoxGeometry(2.2, 3.2, 10.5);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, sideArmorGeo, trimMat, s * 11.7, 6.8, 0);
+      addMesh3D(T, group, fenderGeo, carbonMat, s * 11.6, 8.6, 10.8);
+      addMesh3D(T, group, fenderGeo, carbonMat, s * 11.6, 8.6, -10.8);
     }
-    const spotlightBar = new T.MeshStandardMaterial({ color: 0xffdd44, emissive: 0xffdd44, emissiveIntensity: 0.6 });
-    for (let i = -1; i <= 1; i++) {
-      group.add(new T.Mesh(new T.SphereGeometry(1.2, 8, 6), spotlightBar)).position.set(i * 6, 15.5, -2);
+
+    // Sculpted wrap-around armored cabin glasshouse (windshield, side & rear tactical windows)
+    const suvGlassGeo = makeSculptedHullGeo(T, [
+      [-15.2, 11.6], [7.8, 11.4], [4.4, 15.8], [-12.2, 15.7],
+    ], 21.4, 0.72);
+    addMesh3D(T, group, suvGlassGeo, glassMat, 0, 0.15, 0);
+    // Painted roof cap & armored A/C pillars
+    addMesh3D(T, group, new T.BoxGeometry(20.6, 0.85, 16.4), paintMat, 0, 16.55, -4.0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(1.1, 4.2, 1.4), paintMat, s * 10.6, 13.9, -4.0);
     }
-    group.add(new T.Mesh(new T.BoxGeometry(18, 6, 14), cockpitMat)).position.set(0, 13, -1);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3.5, 12, 8), helmetMat)).position.set(0, 17, -1);
-    const ws = new T.Mesh(new T.BoxGeometry(16, 5, 1.5), glassMat);
-    ws.position.set(0, 14.5, 8); ws.rotation.x = -0.3;
-    group.add(ws);
-    const bumperMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.5, metalness: 0.55 });
-    group.add(new T.Mesh(new T.BoxGeometry(28, 4, 4), bumperMat)).position.set(0, 4, 17);
-    group.add(new T.Mesh(new T.BoxGeometry(28, 4, 4), bumperMat)).position.set(0, 4, -17);
-    const bullBarMat = new T.MeshStandardMaterial({ color: 0x777777, metalness: 0.85, roughness: 0.15 });
-    const bullBar = new T.Mesh(new T.CylinderGeometry(1.2, 1.2, 22, 10), bullBarMat);
-    bullBar.position.set(0, 8, 18); bullBar.rotation.z = Math.PI / 2;
-    group.add(bullBar);
-    const bullBarV = new T.Mesh(new T.CylinderGeometry(0.8, 0.8, 6, 8), bullBarMat);
-    bullBarV.position.set(0, 5, 18);
-    group.add(bullBarV);
-    for (let s of [-1, 1]) {
-      const armor = new T.Mesh(new T.BoxGeometry(2, 6, 26), bumperMat);
-      armor.position.set(s * 14, 5, 0); armor.castShadow = true;
-      group.add(armor);
+    addDriver(0, 12.4, -1.0, 0x1e1233, 0x9d4dff, 0.9);
+
+    // Front heavy bullbar, skid plate & armored bumpers
+    addMesh3D(T, group, new T.BoxGeometry(25.0, 3.0, 3.2), carbonMat, 0, 5.2, 17.2);
+    addMesh3D(T, group, new T.BoxGeometry(25.0, 3.0, 3.2), carbonMat, 0, 5.2, -17.0);
+    addMesh3D(T, group, new T.BoxGeometry(13.0, 2.6, 1.0), chromeMat, 0, 3.4, 17.8, 0.45, 0, 0);
+    const bullH = new T.CylinderGeometry(0.95, 0.95, 19.6, 10);
+    bullH.rotateZ(Math.PI / 2);
+    addMesh3D(T, group, bullH, chromeMat, 0, 9.2, 18.4);
+    addMesh3D(T, group, bullH, chromeMat, 0, 6.6, 18.8);
+    const bullPost = new T.CylinderGeometry(0.8, 0.8, 4.4, 8);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, bullPost, chromeMat, s * 6.5, 7.6, 18.4);
     }
-    addWheels([[-12, 3.5, 12], [12, 3.5, 12], [-12, 3.5, -12], [12, 3.5, -12]]);
-    [[-9, 7, 16], [9, 7, 16]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(2, 8, 6), headlightMat)).position.set(...p));
-    [[-9, 7, -15], [9, 7, -15]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.5, 8, 6), taillightMat)).position.set(...p));
+
+    // Tactical roof rack + 4 rally amber floodlight pods + rear roof spoiler
+    addMesh3D(T, group, new T.BoxGeometry(19.2, 0.9, 15.6), carbonMat, 0, 17.3, -4.0);
+    for (const sx of [-9.0, 9.0]) {
+      for (const sz of [3.0, -11.0]) {
+        addMesh3D(T, group, new T.BoxGeometry(1.0, 1.8, 1.0), carbonMat, sx, 16.5, sz);
+      }
+    }
+    const rallyLightMat = new T.MeshStandardMaterial({
+      color: 0xffe066,
+      emissive: 0xffc822,
+      emissiveIntensity: 1.4,
+      roughness: 0.15,
+    });
+    const podGeo = new T.CylinderGeometry(1.15, 1.15, 1.4, 10);
+    podGeo.rotateX(Math.PI / 2);
+    for (const rx of [-6.0, -2.0, 2.0, 6.0]) {
+      addMesh3D(T, group, podGeo, carbonMat, rx, 18.4, 3.6);
+      addMesh3D(T, group, new T.SphereGeometry(0.95, 8, 6), rallyLightMat, rx, 18.4, 4.2);
+    }
+    addMesh3D(T, group, new T.BoxGeometry(20.6, 1.0, 2.8), trimMat, 0, 16.6, -14.2, 0.12, 0, 0);
+
+    // Armored headlights, vertical tactical taillights & heavy twin exhausts
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(4.2, 1.6, 0.9), headlightMat, s * 8.2, 8.6, 17.2);
+      addMesh3D(T, group, new T.BoxGeometry(2.2, 4.4, 0.9), taillightMat, s * 9.6, 9.2, -16.8);
+    }
+    addExhaustPair([-6.2, 6.2], 4.2, -18.2, 1.4, 3.2);
+
+    // Oversized off-road wheels
+    addWheels([
+      [-12.2, 10.8, 4.7, 4.6, true],
+      [12.2, 10.8, 4.7, 4.6, true],
+      [-12.2, -10.8, 4.7, 4.6, false],
+      [12.2, -10.8, 4.7, 4.6, false],
+    ]);
+    shadowW = 44;
+    shadowL = 48;
+    flameY = 5.8;
+    flameZ = -28;
 
   } else if (charId === "florian") {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.15, metalness: 0.8 });
-    const body = new T.Mesh(new T.BoxGeometry(22, 8, 32, 2, 1, 2), bodyMat);
-    body.position.y = 6; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    const hoodMat = new T.MeshStandardMaterial({ color: cBright, roughness: 0.12, metalness: 0.85 });
-    const hood = new T.Mesh(new T.BoxGeometry(20, 3, 10), hoodMat);
-    hood.position.set(0, 9, 10); hood.rotation.x = -0.12; hood.castShadow = true;
-    group.add(hood);
-    group.add(new T.Mesh(new T.BoxGeometry(16, 6, 12), cockpitMat)).position.set(0, 12, -2);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3.5, 12, 8), helmetMat)).position.set(0, 16, -2);
-    const visorMat = new T.MeshStandardMaterial({ color: 0x112233, emissive: 0x57f2ff, emissiveIntensity: 0.15, metalness: 0.9, roughness: 0.05 });
-    const visor = new T.Mesh(new T.SphereGeometry(3.3, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.5), visorMat);
-    visor.position.set(0, 16.5, -1); visor.rotation.x = -0.6;
-    group.add(visor);
-    const ws = new T.Mesh(new T.BoxGeometry(14, 5, 1.5), glassMat);
-    ws.position.set(0, 14, 5); ws.rotation.x = -0.3;
-    group.add(ws);
-    const chromeMat = new T.MeshStandardMaterial({ color: 0xa4ff80, emissive: 0xa4ff80, emissiveIntensity: 0.5, metalness: 0.95, roughness: 0.05 });
-    group.add(new T.Mesh(new T.BoxGeometry(2, 0.8, 34), chromeMat)).position.set(0, 10.5, 0);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(0.8, 0.6, 28), chromeMat)).position.set(s * 8, 10.3, 0);
+    // EXECUTIVE GT SUPERCAR: sweeping hypercar fuselage, lime racing stripe, chrome rocker trim, spinning holographic badge
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-16.8, 2.6], [17.2, 2.4], [18.8, 4.4], [16.2, 6.8],
+      [7.2, 8.2], [1.4, 11.4], [-7.4, 11.2], [-15.2, 8.2],
+      [-17.4, 6.6], [-17.0, 3.8],
+    ], 19.0, 1.0);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+
+    // Carbon aero splitter, side air curtains & rear diffuser
+    addMesh3D(T, group, new T.BoxGeometry(20.6, 0.85, 34.4), carbonMat, 0, 2.2, 0.2);
+    addMesh3D(T, group, new T.BoxGeometry(16.2, 2.4, 2.6), carbonMat, 0, 3.1, -17.0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(1.1, 3.4, 9.0), cockpitMat, s * 9.5, 5.4, -4.5);
+      addMesh3D(T, group, new T.BoxGeometry(0.65, 0.9, 27.0), chromeMat, s * 9.9, 3.0, 0);
     }
-    const badgeMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 1.0, metalness: 0.8 });
-    const badge = new T.Mesh(new T.OctahedronGeometry(3, 1), badgeMat);
-    badge.position.set(0, 11, 12);
-    badge.scale.set(1, 0.4, 1);
-    group.add(badge);
-    const spoilerMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.25, metalness: 0.65 });
-    group.add(new T.Mesh(new T.BoxGeometry(20, 1.5, 3), spoilerMat)).position.set(0, 11, -16);
-    const trimMat = new T.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.95, roughness: 0.05 });
-    group.add(new T.Mesh(new T.BoxGeometry(22, 0.8, 32), trimMat)).position.set(0, 2, 0);
-    for (let s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(0.6, 7, 30), trimMat)).position.set(s * 11.2, 6, 0);
+
+    // Teardrop executive greenhouse canopy (proud of beveled hull) + driver
+    const canopyGeo = makeSculptedHullGeo(T, [
+      [-11.8, 8.2], [7.4, 8.2], [1.8, 12.5], [-7.2, 12.3],
+    ], 15.0, 0.75);
+    addMesh3D(T, group, canopyGeo, glassMat, 0, 0.25, 0);
+    addDriver(0, 9.8, -1.8, 0x0b2236, 0x57f2ff, 0.86);
+
+    // Signature luminous lime center racing stripe + twin pinstripe accents
+    const limeMat = new T.MeshStandardMaterial({
+      color: 0xa4ff80,
+      emissive: 0xa4ff80,
+      emissiveIntensity: 0.72,
+      roughness: 0.16,
+      metalness: 0.65,
+      envMap,
+      envMapIntensity: 1.2,
+    });
+    addMesh3D(T, group, new T.BoxGeometry(2.0, 0.3, 10.6), limeMat, 0, 8.2, 12.8, 0.16, 0, 0);
+    addMesh3D(T, group, new T.BoxGeometry(2.0, 0.3, 8.8), limeMat, 0, 13.35, -2.6);
+    addMesh3D(T, group, new T.BoxGeometry(2.0, 0.3, 5.8), limeMat, 0, 9.2, -13.8, -0.22, 0, 0);
+
+    // Floating spinning Regulatory Compliance Seal diamond crest (animated by sync3DKartFlair)
+    const badgeMat = new T.MeshStandardMaterial({
+      color: 0x57f2ff,
+      emissive: 0x57f2ff,
+      emissiveIntensity: 1.35,
+      roughness: 0.1,
+      metalness: 0.85,
+      envMap,
+      envMapIntensity: 1.5,
+    });
+    const badge = addMesh3D(T, group, new T.OctahedronGeometry(2.2, 0), badgeMat, 0, 10.4, 12.8);
+    badge.scale.set(1.0, 0.72, 1.0);
+    group._badge = badge;
+
+    // Low-drag swan-neck GT rear wing
+    addMesh3D(T, group, new T.BoxGeometry(20.6, 0.85, 3.2), carbonMat, 0, 11.4, -16.8, 0.12, 0, 0);
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(0.85, 3.6, 1.8), chromeMat, s * 5.8, 9.6, -16.4);
+      addMesh3D(T, group, new T.BoxGeometry(0.6, 2.2, 3.8), limeMat, s * 10.3, 11.4, -16.8);
     }
-    addWheels([[-10, 3, 12], [10, 3, 12], [-10, 3, -12], [10, 3, -12]]);
-    [[-8, 6, 17], [8, 6, 17]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.6, 10, 8), headlightMat)).position.set(...p));
-    [[-7, 6, -16], [7, 6, -16]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.3, 8, 6), taillightMat)).position.set(...p));
+
+    // Laser headlights, twin-blade LED taillights & quad chrome exhausts
+    for (const s of [-1, 1]) {
+      addMesh3D(T, group, new T.BoxGeometry(4.4, 0.9, 1.0), headlightMat, s * 6.5, 5.5, 18.3);
+      addMesh3D(T, group, new T.BoxGeometry(6.8, 1.15, 0.8), taillightMat, s * 5.4, 6.6, -17.8);
+    }
+    addExhaustPair([-4.8, -2.5, 2.5, 4.8], 3.3, -18.0, 1.05, 3.2);
+
+    addWheels([
+      [-10.0, 11.4, 3.8, 3.6, true],
+      [10.0, 11.4, 3.8, 3.6, true],
+      [-10.3, -11.2, 4.1, 4.4, false],
+      [10.3, -11.2, 4.1, 4.4, false],
+    ]);
+    shadowW = 38;
+    shadowL = 48;
+    flameZ = -28;
 
   } else {
-    const bodyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.15, roughness: 0.25, metalness: 0.65 });
-    const body = new T.Mesh(new T.BoxGeometry(20, 8, 28, 2, 1, 2), bodyMat);
-    body.position.y = 6; body.castShadow = true; body.receiveShadow = true;
-    group.add(body);
-    group.userData.mainBody = body;
-    // Rounded canopy on top
-    const canopyMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.1, roughness: 0.2, metalness: 0.7 });
-    const canopy = new T.Mesh(new T.SphereGeometry(10, 12, 8, 0, TAU, 0, Math.PI / 2), canopyMat);
-    canopy.scale.set(1, 0.5, 1.2);
-    canopy.position.set(0, 10, -2);
-    group.add(canopy);
-    // Nose taper
-    const noseMat = new T.MeshStandardMaterial({ color: cBright, roughness: 0.2, metalness: 0.75 });
-    const nose = new T.Mesh(new T.BoxGeometry(16, 5, 8), noseMat);
-    nose.position.set(0, 6, 16);
-    group.add(nose);
-    // Side skirts
-    const skirtMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.4, metalness: 0.5 });
+    // GENERIC SPORT KART FALLBACK
+    const hullGeo = makeSculptedHullGeo(T, [
+      [-14.5, 2.8], [14.5, 2.6], [16.5, 4.8], [14.0, 7.4],
+      [5.5, 8.6], [-12.5, 8.8], [-15.2, 6.2],
+    ], 17.6, 0.95);
+    body = addMesh3D(T, group, hullGeo, paintMat, 0, 0, 0, 0, 0, 0, true);
+    addMesh3D(T, group, new T.BoxGeometry(18.6, 1.2, 29.0), carbonMat, 0, 2.2, 0);
+    addMesh3D(T, group, new T.BoxGeometry(11.6, 3.2, 0.7), glassMat, 0, 10.2, 4.6, -0.5, 0, 0);
+    addDriver(0, 10.4, -1.6, 0x1a1e38, color, 0.92);
+    addMesh3D(T, group, new T.BoxGeometry(19.6, 1.0, 3.0), trimMat, 0, 11.8, -14.8, 0.14, 0, 0);
     for (const s of [-1, 1]) {
-      const skirt = new T.Mesh(new T.BoxGeometry(1.5, 4, 24), skirtMat);
-      skirt.position.set(s * 10.5, 4, 0);
-      group.add(skirt);
+      addMesh3D(T, group, new T.BoxGeometry(1.0, 3.6, 1.6), carbonMat, s * 6.8, 10.0, -14.6);
+      addMesh3D(T, group, new T.BoxGeometry(3.4, 1.2, 0.8), headlightMat, s * 5.8, 5.6, 16.4);
+      addMesh3D(T, group, new T.BoxGeometry(4.4, 1.2, 0.8), taillightMat, s * 5.2, 6.2, -15.4);
     }
-    group.add(new T.Mesh(new T.BoxGeometry(12, 5, 10), cockpitMat)).position.set(0, 11, -2);
-    const helmetMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.3, metalness: 0.5, roughness: 0.2 });
-    group.add(new T.Mesh(new T.SphereGeometry(3.5, 12, 8), helmetMat)).position.set(0, 14, -2);
-    // Visor
-    const visorMat = new T.MeshStandardMaterial({ color: 0x222244, emissive: c, emissiveIntensity: 0.15, metalness: 0.9, roughness: 0.05 });
-    const visor = new T.Mesh(new T.SphereGeometry(3.2, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2.5), visorMat);
-    visor.position.set(0, 14.5, -1); visor.rotation.x = -0.6;
-    group.add(visor);
-    // Windshield
-    const ws = new T.Mesh(new T.BoxGeometry(12, 4, 1.5), glassMat);
-    ws.position.set(0, 12, 4); ws.rotation.x = -0.35;
-    group.add(ws);
-    // Exhaust pipes
-    const pipeMat = new T.MeshStandardMaterial({ color: 0x444444, metalness: 0.85, roughness: 0.2 });
-    const pipeGlowMat = new T.MeshStandardMaterial({ color: 0xff4400, emissive: 0xff4400, emissiveIntensity: 0.4, transparent: true, opacity: 0.5 });
-    for (const s of [-1, 1]) {
-      const pipe = new T.Mesh(new T.CylinderGeometry(1.5, 2, 4, 8), pipeMat);
-      pipe.position.set(s * 5, 4, -16); pipe.rotation.x = Math.PI / 2;
-      group.add(pipe);
-      const glow = new T.Mesh(new T.CylinderGeometry(1, 1.5, 1.5, 8), pipeGlowMat);
-      glow.position.set(s * 5, 4, -18); glow.rotation.x = Math.PI / 2;
-      group.add(glow);
-    }
-    // Glow accent trim
-    const accentMat = new T.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.8, transparent: true, opacity: 0.6 });
-    for (const s of [-1, 1]) {
-      const trim = new T.Mesh(new T.BoxGeometry(0.6, 0.6, 24), accentMat);
-      trim.position.set(s * 10.2, 9, 0);
-      group.add(trim);
-    }
-    addWheels([[-8, 3, 10], [8, 3, 10], [-8, 3, -10], [8, 3, -10]]);
-    [[-6, 6, 15], [6, 6, 15]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.5, 8, 6), headlightMat)).position.set(...p));
-    [[-6, 6, -14], [6, 6, -14]].forEach(p => group.add(new T.Mesh(new T.SphereGeometry(1.2, 8, 6), taillightMat)).position.set(...p));
-    const spoilerMat = new T.MeshStandardMaterial({ color: cDark, roughness: 0.3, metalness: 0.6 });
-    group.add(new T.Mesh(new T.BoxGeometry(22, 2, 3), spoilerMat)).position.set(0, 12, -14);
-    for (const s of [-1, 1]) {
-      group.add(new T.Mesh(new T.BoxGeometry(1.5, 4, 1.5), spoilerMat)).position.set(s * 8, 11, -14);
-    }
+    addExhaustPair([-4.2, 4.2], 3.5, -16.0, 1.15, 3.0);
+    addWheels([
+      [-9.5, 10.2, 3.7, 3.6, true],
+      [9.5, 10.2, 3.7, 3.6, true],
+      [-9.8, -10.2, 4.0, 4.2, false],
+      [9.8, -10.2, 4.0, 4.2, false],
+    ]);
+    flameZ = -25;
   }
 
-  // Universal: headlight beam cones (all karts)
-  const beamMat = new T.MeshBasicMaterial({ color: 0xfff8d0, transparent: true, opacity: 0.06, side: T.DoubleSide, depthWrite: false });
-  for (const s of [-1, 1]) {
-    const beamGeo = new T.ConeGeometry(8, 40, 8, 1, true);
-    const beam = new T.Mesh(beamGeo, beamMat);
-    beam.rotation.x = -Math.PI / 2;
-    beam.position.set(s * 6, 6, 30);
-    group.add(beam);
-  }
+  group.userData.mainBody = body;
+  group.userData.sculptedKart = true;
+  group.userData.boostMaterial = paintMat;
+  group.userData.boostBaseEmissiveIntensity = paintMat.emissiveIntensity;
+  group._flairAdded = true;
 
-  // Universal: subtle body emissive on first child (main body) if not already set
-  if (group.children[0] && group.children[0].material && group.children[0].material.emissiveIntensity < 0.05) {
-    group.children[0].material.emissive = c;
-    group.children[0].material.emissiveIntensity = 0.12;
-  }
-
-  // Shield (wireframe icosahedron for hex-grid look + solid inner glow)
+  // Shield (wireframe icosahedron hex-grid + subtle inner glow)
   const shieldGeo = new T.IcosahedronGeometry(22, 1);
-  const shieldMat = new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.5, transparent: true, opacity: 0, wireframe: true, side: T.DoubleSide });
-  const shield = new T.Mesh(shieldGeo, shieldMat);
-  shield.position.y = 8;
-  group.add(shield);
-  const shieldInner = new T.Mesh(
+  const shieldMat = new T.MeshStandardMaterial({
+    color: 0x57f2ff,
+    emissive: 0x57f2ff,
+    emissiveIntensity: 0.55,
+    transparent: true,
+    opacity: 0,
+    wireframe: true,
+    side: T.DoubleSide,
+  });
+  const shield = addMesh3D(T, group, shieldGeo, shieldMat, 0, 8, 0);
+  const shieldInner = addMesh3D(
+    T,
+    group,
     new T.IcosahedronGeometry(20, 1),
-    new T.MeshStandardMaterial({ color: 0x57f2ff, emissive: 0x57f2ff, emissiveIntensity: 0.2, transparent: true, opacity: 0, side: T.DoubleSide })
+    new T.MeshStandardMaterial({
+      color: 0x57f2ff,
+      emissive: 0x57f2ff,
+      emissiveIntensity: 0.25,
+      transparent: true,
+      opacity: 0,
+      side: T.DoubleSide,
+    }),
+    0,
+    8,
+    0
   );
-  shieldInner.position.y = 8;
-  group.add(shieldInner);
   group._shield = shield;
   group._shieldMat = shieldMat;
   group._shieldInner = shieldInner;
 
+  // Boost exhaust flame (emissive dual cones, zero PointLight overhead)
   const flameGroup = new T.Group();
   flameGroup.rotation.x = -Math.PI / 2;
-  flameGroup.position.set(0, 5, -28);
-  const flameGeo = new T.ConeGeometry(7, 28, 12);
-  const flameMat = new T.MeshStandardMaterial({
-    color: 0xff8a3b,
-    emissive: 0xff4d00,
-    emissiveIntensity: 1.5,
+  flameGroup.position.set(0, flameY, flameZ);
+  flameGroup.visible = false;
+  const flameMat = new T.MeshBasicMaterial({
+    color: 0xff6e20,
     transparent: true,
     opacity: 0,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
   });
-  flameGroup.add(new T.Mesh(flameGeo, flameMat));
-  const flameCore = new T.Mesh(
-    new T.ConeGeometry(3.5, 22, 8),
-    new T.MeshStandardMaterial({ color: 0xffdd66, emissive: 0xffaa00, emissiveIntensity: 2.0, transparent: true, opacity: 0 })
-  );
-  flameCore.position.y = 3;
-  flameGroup.add(flameCore);
-  flameGroup._coreMat = flameCore.material;
-  const flameLight = new T.PointLight(0xff6600, 0, 80);
-  flameLight.position.y = -5;
-  flameGroup.add(flameLight);
-  flameGroup._flameLight = flameLight;
+  addMesh3D(T, flameGroup, new T.ConeGeometry(6.2, 26, 10), flameMat);
+  const flameCoreMat = new T.MeshBasicMaterial({
+    color: 0xffe480,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
+  });
+  addMesh3D(T, flameGroup, new T.ConeGeometry(3.2, 20, 8), flameCoreMat, 0, 2.5, 0);
+  flameGroup._coreMat = flameCoreMat;
   group.add(flameGroup);
   group._flame = flameGroup;
   group._flameMat = flameMat;
 
-  applyCompassKartRestyle3D(group, color, T, charId);
-
-  // Ground contact shadow + night headlight pool (added after restyle so restyle won't touch them)
+  // Ground contact shadow + night headlight pool
   const contactShadowMat = new T.MeshBasicMaterial({
     map: getContactShadowTexture3D(T),
     transparent: true,
     opacity: 0.72,
     depthWrite: false,
   });
-  const contactShadow = new T.Mesh(new T.PlaneGeometry(36, 46), contactShadowMat);
-  contactShadow.rotation.x = -Math.PI / 2;
-  contactShadow.position.set(0, 0.68, 0);
+  const contactShadow = addMesh3D(
+    T,
+    group,
+    new T.PlaneGeometry(shadowW, shadowL),
+    contactShadowMat,
+    0,
+    0.68,
+    0,
+    -Math.PI / 2,
+    0,
+    0
+  );
   contactShadow.renderOrder = 2;
-  group.add(contactShadow);
   group._contactShadow = contactShadow;
 
   const headlightPoolMat = new T.MeshBasicMaterial({
     map: getParticleGlowTexture3D(T),
     color: 0xfff3c4,
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.24,
     depthWrite: false,
     blending: T.AdditiveBlending,
   });
-  const headlightPool = new T.Mesh(new T.PlaneGeometry(34, 72), headlightPoolMat);
-  headlightPool.rotation.x = -Math.PI / 2;
-  headlightPool.position.set(0, 0.72, 46);
+  const headlightPool = addMesh3D(
+    T,
+    group,
+    new T.PlaneGeometry(34, 72),
+    headlightPoolMat,
+    0,
+    0.72,
+    46,
+    -Math.PI / 2,
+    0,
+    0
+  );
   headlightPool.renderOrder = 2;
   headlightPool.visible = !isDayMode();
-  group.add(headlightPool);
   group._headlightPool = headlightPool;
 
   group.rotation.order = "YXZ";

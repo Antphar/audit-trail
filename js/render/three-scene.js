@@ -209,8 +209,12 @@ export function build3DScenery(theme) {
         g.add(post);
       }
       // Top beams
-      g.add(new T.Mesh(new T.BoxGeometry(90, 6, 8), toriiMat)).position.y = 115;
-      g.add(new T.Mesh(new T.BoxGeometry(80, 4, 6), toriiMat)).position.y = 100;
+      const topBeam = new T.Mesh(new T.BoxGeometry(90, 6, 8), toriiMat);
+      topBeam.position.y = 115;
+      g.add(topBeam);
+      const lowerBeam = new T.Mesh(new T.BoxGeometry(80, 4, 6), toriiMat);
+      lowerBeam.position.y = 100;
+      g.add(lowerBeam);
       g.position.set(x, 0, z);
       g.rotation.y = Math.random() * TAU;
       sg.add(g);
@@ -281,6 +285,8 @@ export function init3DScene() {
     });
     canvas3d.addEventListener("webglcontextrestored", () => {
       THREE_STATE.contextLost = false;
+      THREE_STATE.kartEnvMap = null;
+      THREE_STATE._kartEnvRenderer = null;
       apply3DMapTheme();
       rebuild3DTrack();
     });

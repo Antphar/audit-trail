@@ -685,40 +685,46 @@ export function rebuild3DTrack() {
 
   build3DCornerChevrons(group, game.track, edges);
 
-  if (!game.track.isOpen && edges.length > 1) {
-    const e = edges[0];
-    const archW = Math.hypot(e.left.x - e.right.x, e.left.y - e.right.y);
-    const archH = 45;
-    const archGroup = new T.Group();
-    const archMat = new T.MeshStandardMaterial({ color: 0xffd86b, emissive: 0xffd86b, emissiveIntensity: 0.6, metalness: 0.8, roughness: 0.2 });
-    const pillarGeo = new T.CylinderGeometry(2.5, 3, archH, 10);
-    const lp = new T.Mesh(pillarGeo, archMat);
-    lp.position.set(e.left.x, archH / 2, e.left.y);
-    lp.castShadow = true;
-    archGroup.add(lp);
-    const rp = new T.Mesh(pillarGeo, archMat);
-    rp.position.set(e.right.x, archH / 2, e.right.y);
-    rp.castShadow = true;
-    archGroup.add(rp);
-    const beamLen = archW;
-    const beamGeo = new T.BoxGeometry(beamLen, 5, 7);
-    const beam = new T.Mesh(beamGeo, archMat);
-    beam.position.set((e.left.x + e.right.x) / 2, archH, (e.left.y + e.right.y) / 2);
-    beam.rotation.y = -Math.atan2(e.left.y - e.right.y, e.left.x - e.right.x);
-    beam.castShadow = true;
-    archGroup.add(beam);
-    const bannerGeo = new T.PlaneGeometry(beamLen * 0.9, 10);
-    const bannerMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 0.4, side: T.DoubleSide, transparent: true, opacity: 0.9 });
-    const banner = new T.Mesh(bannerGeo, bannerMat);
-    banner.position.set((e.left.x + e.right.x) / 2, archH - 7, (e.left.y + e.right.y) / 2);
-    banner.rotation.y = -Math.atan2(e.left.y - e.right.y, e.left.x - e.right.x);
-    archGroup.add(banner);
-    if (ENABLE_DECORATIVE_3D_LIGHTS) {
-      const archLight = new T.PointLight(0xffd86b, 0.6, 150);
-      archLight.position.set((e.left.x + e.right.x) / 2, archH + 5, (e.left.y + e.right.y) / 2);
-      archGroup.add(archLight);
+  if (!game.track.isOpen && !isBattleMode()) {
+    const gate = game.track.startLineGate();
+    if (gate) {
+      const lx = gate.x + gate.nx * (gate.halfW + 4);
+      const ly = gate.y + gate.ny * (gate.halfW + 4);
+      const rx = gate.x - gate.nx * (gate.halfW + 4);
+      const ry = gate.y - gate.ny * (gate.halfW + 4);
+      const archW = (gate.halfW + 4) * 2;
+      const archH = 45;
+      const archYaw = -Math.atan2(gate.ny, gate.nx);
+      const archGroup = new T.Group();
+      const archMat = new T.MeshStandardMaterial({ color: 0xffd86b, emissive: 0xffd86b, emissiveIntensity: 0.6, metalness: 0.8, roughness: 0.2 });
+      const pillarGeo = new T.CylinderGeometry(2.5, 3, archH, 10);
+      const lp = new T.Mesh(pillarGeo, archMat);
+      lp.position.set(lx, archH / 2, ly);
+      lp.castShadow = true;
+      archGroup.add(lp);
+      const rp = new T.Mesh(pillarGeo, archMat);
+      rp.position.set(rx, archH / 2, ry);
+      rp.castShadow = true;
+      archGroup.add(rp);
+      const beamGeo = new T.BoxGeometry(archW, 5, 7);
+      const beam = new T.Mesh(beamGeo, archMat);
+      beam.position.set(gate.x, archH, gate.y);
+      beam.rotation.y = archYaw;
+      beam.castShadow = true;
+      archGroup.add(beam);
+      const bannerGeo = new T.PlaneGeometry(archW * 0.9, 10);
+      const bannerMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 0.4, side: T.DoubleSide, transparent: true, opacity: 0.9 });
+      const banner = new T.Mesh(bannerGeo, bannerMat);
+      banner.position.set(gate.x, archH - 7, gate.y);
+      banner.rotation.y = archYaw;
+      archGroup.add(banner);
+      if (ENABLE_DECORATIVE_3D_LIGHTS) {
+        const archLight = new T.PointLight(0xffd86b, 0.6, 150);
+        archLight.position.set(gate.x, archH + 5, gate.y);
+        archGroup.add(archLight);
+      }
+      group.add(archGroup);
     }
-    group.add(archGroup);
   }
 
   // Build kart models for all active karts

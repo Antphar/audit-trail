@@ -504,50 +504,28 @@ export function checkProgress(kart) {
   if (kart.finished) return;
   const open = game.track.isOpen;
   const checkpointCount = game.track.checkpointCount || game.track.n;
-  const checkpointIdx = open ? Math.min(kart.nextCheckpoint, checkpointCount - 1) : (kart.nextCheckpoint % checkpointCount);
-  let hitCheckpoint = false;
-  const completingLapAtGoalLine = !open && checkpointIdx === 0 && kart.checkpointsThisLap >= checkpointCount - 1;
+  if (checkpointCount <= 0) return;
 
-  if (completingLapAtGoalLine) {
-    const crossed = game.track.crossedStartLine(kart.progressPrevX, kart.progressPrevY, kart.x, kart.y);
-    let pastGate = false;
-    if (!crossed && game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y)) {
-      const gate = game.track.startLineGate();
-      if (!gate) {
-        pastGate = true;
-      } else {
-        const currAlong = (kart.x - gate.x) * gate.ux + (kart.y - gate.y) * gate.uy;
-        pastGate = currAlong >= 0;
+  if (open) {
+    const checkpointIdx = Math.min(kart.nextCheckpoint, checkpointCount - 1);
+    let advancedTo = -1;
+
+    if (game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y)) {
+      advancedTo = checkpointIdx;
+    } else {
+      const cs = game.track.closestSegment(kart.x, kart.y);
+      const seg = game.track.segments[cs.idx];
+      const maxDist = seg ? seg.halfW + 100 : 180;
+      if (cs.dist <= maxDist && cs.idx >= checkpointIdx && cs.idx <= Math.min(checkpointCount - 1, checkpointIdx + 6)) {
+        advancedTo = cs.idx;
       }
     }
-    hitCheckpoint = crossed || pastGate;
-  } else if (game.track.hitCheckpoint(checkpointIdx, kart.x, kart.y)) {
-    hitCheckpoint = true;
-  } else if (open && !game.track.hasCustomCheckpoints) {
-    const cs = game.track.closestSegment(kart.x, kart.y);
-    const openSeg = game.track.segments[kart.nextCheckpoint];
-    const openMaxDist = openSeg ? openSeg.halfW + 30 : 140;
-    if (cs.dist < openMaxDist && cs.idx === kart.nextCheckpoint) {
-      hitCheckpoint = true;
-    }
-  }
 
-  if (!hitCheckpoint && !open && !game.track.hasCustomCheckpoints && !completingLapAtGoalLine) {
-    const cs = game.track.closestSegment(kart.x, kart.y);
-    const cpSeg = game.track.segments[kart.nextCheckpoint];
-    const maxDist = cpSeg ? cpSeg.halfW + 20 : 100;
-    if (cs.dist < maxDist && cs.idx === kart.nextCheckpoint) {
-      hitCheckpoint = true;
-    }
-  }
-
-  if (hitCheckpoint) {
-    kart.nextCheckpoint++;
-    kart.checkpointsThisLap++;
-
-    if (open) {
-      // Lap milestone every 30 checkpoints (Battle has no laps — checkpoints only steer the AI).
-      if (kart.checkpointsThisLap >= 30) {
+    if (advancedTo >= 0) {
+      const gained = (advancedTo - checkpointIdx) + 1;
+      kart.nextCheckpoint = Math.min(checkpointCount - 1, advancedTo + 1);
+      kart.checkpointsThisLap += gained;
+      while (kart.checkpointsThisLap >= 30) {
         if (!isBattleMode()) {
           kart.lap++;
           triggerQuote(kart, "lap");
@@ -556,21 +534,73 @@ export function checkProgress(kart) {
             game.bestLap = Math.max(game.bestLap || 0, kart.lap);
           }
         }
-        kart.checkpointsThisLap = 0;
+        kart.checkpointsThisLap -= 30;
       }
-      // End-of-trail safety (shouldn't happen)
-      if (kart.nextCheckpoint >= checkpointCount) {
-        kart.nextCheckpoint = checkpointCount - 1;
+    }
+
+    kart.progressPrevX = kart.x;
+    kart.progressPrevY = kart.y;
+    return;
+  }
+
+  // Closed circuit: allow generous forward catch-up when a kart goes off-track for an extended
+  // stretch and rejoins ahead, while still requiring meaningful forward lap coverage before the
+  // goal line counts a lap (blocking reverse or short-loop cheats).
+  const checkpointIdx = ((kart.nextCheckpoint % checkpointCount) + checkpointCount) % checkpointCount;
+  const maxSkip = Math.max(3, Math.floor(checkpointCount * 0.48));
+  const minLapCheckpoints = Math.max(2, Math.floor(checkpointCount * 0.55));
+  const canCompleteLap = kart.checkpointsThisLap >= minLapCheckpoints
+    && (checkpointIdx === 0 || checkpointIdx >= checkpointCount - maxSkip);
+
+  if (canCompleteLap) {
+    const crossed = game.track.crossedStartLine(kart.progressPrevX, kart.progressPrevY, kart.x, kart.y);
+    let pastGate = false;
+    if (!crossed && checkpointIdx === 0 && game.track.hitCheckpoint(0, kart.x, kart.y, 60)) {
+      const gate = game.track.startLineGate();
+      if (!gate) {
+        pastGate = true;
+      } else {
+        const currAlong = (kart.x - gate.x) * gate.ux + (kart.y - gate.y) * gate.uy;
+        pastGate = currAlong >= 0;
       }
-    } else {
-      // Closed circuit: final checkpoint arms the lap, the goal-line crossing completes it.
-      // In Battle we still loop nextCheckpoint (so AI keeps circling) but never count a lap.
-      if (kart.nextCheckpoint >= checkpointCount) {
-        kart.nextCheckpoint = 0;
-      } else if (kart.nextCheckpoint === 1 && kart.checkpointsThisLap >= checkpointCount) {
-        if (!isBattleMode()) completeClosedCircuitLap(kart);
-        kart.checkpointsThisLap = 0;
+    }
+    if (crossed || pastGate) {
+      if (!isBattleMode()) completeClosedCircuitLap(kart);
+      kart.nextCheckpoint = 1 % checkpointCount;
+      kart.checkpointsThisLap = 0;
+      kart.progressPrevX = kart.x;
+      kart.progressPrevY = kart.y;
+      return;
+    }
+  }
+
+  if (checkpointIdx !== 0) {
+    const windowEnd = Math.min(checkpointCount - 1, checkpointIdx + maxSkip);
+    let advancedTo = -1;
+
+    // Direct hit on expected checkpoint or a forward catch-up checkpoint (handles split lanes and
+    // extended off-track detours across the full drivable off-road corridor).
+    const offRoadPad = game.track.hasCustomCheckpoints ? 110 : 60;
+    for (let cand = checkpointIdx; cand <= windowEnd; cand++) {
+      if (game.track.hitCheckpoint(cand, kart.x, kart.y, offRoadPad)) {
+        advancedTo = cand;
       }
+    }
+
+    // Segment fallback across the full drivable off-road corridor (wallLimit is halfW + 70)
+    // on standard waypoint circuits where segment indices match checkpoint indices 1:1.
+    if (!game.track.hasCustomCheckpoints) {
+      const cs = game.track.closestSegment(kart.x, kart.y);
+      const cpSeg = game.track.segments[cs.idx];
+      const maxDist = cpSeg ? Math.max(cpSeg.halfW + 110, 190) : 190;
+      if (cs.dist <= maxDist && cs.idx >= checkpointIdx && cs.idx <= windowEnd) {
+        advancedTo = Math.max(advancedTo, cs.idx);
+      }
+    }
+
+    if (advancedTo >= 0) {
+      kart.nextCheckpoint = (advancedTo + 1) % checkpointCount;
+      kart.checkpointsThisLap = Math.max(kart.checkpointsThisLap + 1, advancedTo);
     }
   }
 

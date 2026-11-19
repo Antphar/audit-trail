@@ -1358,13 +1358,14 @@ function sync3DKartFlair(time) {
   for (const [kart, model] of THREE_STATE.kartModels) {
     // Antenna bob for Anton
     if (kart.charId === "anton" && model._antennaTip) {
-      model._antennaTip.position.y = 19.5 + Math.sin(time * 0.008 + kart.speed() * 0.3) * 1.5;
-      model._antennaTip.position.x = Math.sin(time * 0.006) * 0.5;
+      const baseY = model._antennaTipBaseY ?? 19.5;
+      model._antennaTip.position.y = baseY + Math.sin(time * 0.008 + kart.speed() * 0.3) * 1.1;
+      model._antennaTip.position.x = Math.sin(time * 0.006) * 0.45;
     }
     // Rissal underglow pulse
     if (kart.charId === "rissal" && model._underglowMat) {
-      model._underglowMat.emissiveIntensity = 1.0 + 0.8 * Math.sin(time * 0.008);
-      model._underglowMat.opacity = 0.5 + 0.3 * Math.sin(time * 0.006);
+      model._underglowMat.emissiveIntensity = 1.0 + 0.7 * Math.sin(time * 0.008);
+      model._underglowMat.opacity = 0.65 + 0.25 * Math.sin(time * 0.006);
     }
     // Florian badge spin
     if (kart.charId === "florian" && model._badge) {
