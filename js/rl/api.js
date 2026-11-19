@@ -79,7 +79,7 @@ export function setupExternalRlApi() {
     game.rlLosses = 0;
     game.rlHits = 0;
     selectHeadlessCharacter(config.character);
-    const map = selectHeadlessMap(config.map);
+    const map = selectHeadlessMap(config.map, config.seed);
     applyHeadlessEpisodeSeed(config);
     rlRuntime.hideAll();
     rlRuntime.buildRace();

@@ -1,6 +1,6 @@
 import { TAU, lerp, clamp, dist, rand } from "../core/math.js";
 import { COMPASS_VISUAL } from "../config/themes.js";
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { game, STATE, isBattleMode, isDayMode, getActiveKarts } from "../core/state.js";
 import {
   COMPASS_FX_3D_OVERLAY_MAX,
@@ -723,7 +723,7 @@ export function setCameraForKart(kart, time, dt = game.lastDt || 1, cs = THREE_S
   const lx = -fy, ly = fx;
   const sp = kart.speed();
   const latV = kart.vx * lx + kart.vy * ly;
-  const mapId = MAPS[game.selectedMapIdx || 0].id;
+  const mapId = getActiveMapConfig(game).id;
   const isDragonChaseView = !!(
     (game.track?.regulatoryDragon?.active && mapId === "regulatory_dragon_run") ||
     (game.dragonEscape?.active && mapId === "dragon_escape")
@@ -1193,7 +1193,9 @@ export function build3DStartLine() {
   const gate = game.track.startLineGate();
   if (!gate) return;
   const roadW = gate.halfW * 2;
-  const lineW = 12;
+  const lineW = 14;
+
+  const startGroup = new T.Group();
 
   const c = document.createElement("canvas");
   c.width = 128; c.height = 32;
@@ -1211,21 +1213,86 @@ export function build3DStartLine() {
 
   const geo = new T.PlaneGeometry(roadW, lineW);
   const mat = new T.MeshStandardMaterial({
-    map: tex, roughness: 0.5, metalness: 0.2,
-    transparent: true, opacity: 0.85, side: T.DoubleSide,
+    map: tex, roughness: 0.45, metalness: 0.18,
+    transparent: true, opacity: 0.92, side: T.DoubleSide,
   });
   const mesh = new T.Mesh(geo, mat);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(gate.x, 0.7, gate.y);
+  mesh.position.set(gate.x, 0.72, gate.y);
   mesh.rotation.z = -Math.atan2(gate.ny, gate.nx);
-  THREE_STATE.scene.add(mesh);
-  THREE_STATE.startLineMesh = mesh;
+  startGroup.add(mesh);
+
+  // Painted F1-style starting grid boxes behind the start line (matching gridSlot)
+  const seg0 = game.track.segments[0];
+  if (seg0) {
+    const ang = Math.atan2(seg0.dy, seg0.dx);
+    const sx = seg0.a.x + seg0.dx * 0.04;
+    const sy = seg0.a.y + seg0.dy * 0.04;
+    const fx = Math.cos(ang), fy = Math.sin(ang);
+    const lx = -Math.sin(ang), ly = Math.cos(ang);
+    const gridMat = new T.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.55,
+      side: T.DoubleSide,
+    });
+    const frontBarGeo = new T.PlaneGeometry(24, 2.2);
+    const sideBarGeo = new T.PlaneGeometry(2.2, 16);
+    for (let i = 0; i < 5; i++) {
+      const f = -5 - 40 * i;
+      const l = i % 2 === 0 ? -28 : 28;
+      const gx = sx + fx * f + lx * l;
+      const gy = sy + fy * f + ly * l;
+      const box = new T.Group();
+      box.position.set(gx, 0.68, gy);
+      box.rotation.y = -ang + Math.PI / 2;
+      const front = new T.Mesh(frontBarGeo, gridMat);
+      front.rotation.x = -Math.PI / 2;
+      front.position.set(0, 0, 12);
+      box.add(front);
+      for (const s of [-1, 1]) {
+        const sb = new T.Mesh(sideBarGeo, gridMat);
+        sb.rotation.x = -Math.PI / 2;
+        sb.position.set(s * 11, 0, 4);
+        box.add(sb);
+      }
+      startGroup.add(box);
+    }
+  }
+
+  THREE_STATE.scene.add(startGroup);
+  THREE_STATE.startLineMesh = startGroup;
 }
 
 
 function sync3DPillarRings(time) {
   for (const ring of THREE_STATE.pillarRings) {
     ring.rotation.z = time * 0.001 + ring.position.y * 0.1;
+  }
+  const lights = THREE_STATE.startLightMats;
+  if (lights && lights.length) {
+    const isCountdown = game.state === STATE.COUNTDOWN;
+    const cdText = game.countdownText || "";
+    const litCount = isCountdown
+      ? (cdText === "3" ? 2 : cdText === "2" ? 4 : cdText === "1" ? 5 : 5)
+      : 5;
+    const isGo = !isCountdown || cdText === "GO!";
+    for (let i = 0; i < lights.length; i++) {
+      const m = lights[i];
+      if (isGo) {
+        m.color.setHex(0x30ff88);
+        m.emissive.setHex(0x28ff77);
+        m.emissiveIntensity = 1.2;
+      } else if (i < litCount) {
+        m.color.setHex(0xff3b52);
+        m.emissive.setHex(0xff2244);
+        m.emissiveIntensity = 1.5;
+      } else {
+        m.color.setHex(0x281c22);
+        m.emissive.setHex(0x18080c);
+        m.emissiveIntensity = 0.2;
+      }
+    }
   }
 }
 

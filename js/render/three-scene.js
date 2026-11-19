@@ -1,6 +1,6 @@
 import { TAU } from "../core/math.js";
 import { game, isDayMode } from "../core/state.js";
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { getMap3DTheme } from "../config/themes.js";
 import { WORLD_W, WORLD_H } from "../entities/track.js";
 import { renderRuntime } from "./render-runtime.js";
@@ -18,10 +18,11 @@ import { rebuild3DTrack } from "./three-track.js";
 export function apply3DMapTheme() {
   if (!window.THREE || !THREE_STATE.scene || !THREE_STATE.renderer) return;
   const T = window.THREE;
-  const mapId = MAPS[game.selectedMapIdx || 0].id;
+  const activeMap = getActiveMapConfig(game);
+  const mapId = activeMap.id;
   const day = isDayMode();
   const theme = getMap3DTheme(mapId, day);
-  const isArenaDay = day && !!MAPS[game.selectedMapIdx || 0].arena;
+  const isArenaDay = day && !!activeMap.arena;
 
   THREE_STATE.renderer.setClearColor(theme.clearColor);
   THREE_STATE.renderer.toneMappingExposure = isArenaDay ? 0.9 : 1.15;
@@ -73,7 +74,7 @@ export function apply3DMapTheme() {
     cx.fillRect(0, 0, 1, 256);
     skyMat.map.image = c;
     skyMat.map.needsUpdate = true;
-    skyMat.toneMapped = !(isArenaDay || (day && !MAPS[game.selectedMapIdx || 0].arena));
+    skyMat.toneMapped = !(isArenaDay || (day && !activeMap.arena));
     skyMat.needsUpdate = true;
   }
 

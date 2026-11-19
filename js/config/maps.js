@@ -1,9 +1,173 @@
-import { clamp, TAU } from "../core/math.js";
+import { clamp, TAU, mulberry32 } from "../core/math.js";
 import { simRandom, seedSimRng } from "../core/rng.js";
 // Arena waypoints are computed at module load, before headless mode installs
 // the deterministic Math patch — use the engine-independent ports directly so
 // browser and Node build bit-identical tracks.
 import { dsin, dcos } from "../core/det-math.js";
+
+const PROCEDURAL_MAP_ID = "procedural";
+
+function isProceduralMapId(mapId) {
+  if (typeof mapId !== "string") return false;
+  return mapId === PROCEDURAL_MAP_ID || mapId.startsWith(`${PROCEDURAL_MAP_ID}:`);
+}
+
+function parseProceduralMapSeed(mapId, fallbackSeed) {
+  if (typeof mapId === "string" && mapId.startsWith(`${PROCEDURAL_MAP_ID}:`)) {
+    const raw = mapId.slice(PROCEDURAL_MAP_ID.length + 1).trim();
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed >>> 0;
+    let h = 2166136261 >>> 0;
+    for (let i = 0; i < raw.length; i++) {
+      h ^= raw.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+  }
+  if (Number.isFinite(Number(fallbackSeed))) return Number(fallbackSeed) >>> 0;
+  return (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1337;
+}
+
+/**
+ * Deterministic, fast, guaranteed non-self-intersecting closed-circuit generator
+ * for RL generalization training (and optional procedural races).
+ * Uses polar harmonic modulation + straight start-zone smoothing so Node and
+ * browser builds stay bit-identical for any given 32-bit seed.
+ */
+function generateProceduralRaceMap(seed = 1337) {
+  const s = (Number(seed) >>> 0) || 1337;
+  const rng = mulberry32(s ^ 0x9e3779b9);
+
+  const worldW = 3800;
+  const worldH = 2800;
+  const cx = worldW * 0.5;
+  const cy = worldH * 0.5;
+
+  const n = 12 + Math.floor(rng() * 9); // 12..20 waypoints
+  const aspectX = 1.15 + rng() * 0.35;  // 1.15..1.50
+  const aspectY = 0.78 + rng() * 0.24;  // 0.78..1.02
+  const baseRx = 820 + rng() * 240;     // 820..1060
+  const baseRy = 760 + rng() * 220;     // 760..980
+
+  // Harmonic radial lobes (2..5 lobes create kidneys, figure-eights-without-crossing, S-bends, hairpins)
+  const a2 = (rng() - 0.5) * 0.42;
+  const p2 = rng() * TAU;
+  const a3 = (rng() - 0.5) * 0.36;
+  const p3 = rng() * TAU;
+  const a4 = (rng() - 0.5) * 0.26;
+  const p4 = rng() * TAU;
+  const a5 = (rng() - 0.5) * 0.18;
+  const p5 = rng() * TAU;
+  const rot = rng() * TAU;
+  const ccw = rng() < 0.5 ? -1 : 1;
+
+  const raw = [];
+  for (let i = 0; i < n; i++) {
+    const frac = i / n;
+    const angleJitter = (rng() - 0.5) * (TAU / n) * 0.26;
+    const theta = rot + ccw * (frac * TAU + angleJitter);
+    let mod =
+      1.0 +
+      a2 * dcos(2 * frac * TAU + p2) +
+      a3 * dcos(3 * frac * TAU + p3) +
+      a4 * dcos(4 * frac * TAU + p4) +
+      a5 * dcos(5 * frac * TAU + p5) +
+      (rng() - 0.5) * 0.14;
+    mod = clamp(mod, 0.48, 1.38);
+
+    const x = cx + dcos(theta) * baseRx * aspectX * mod;
+    const y = cy + dsin(theta) * baseRy * aspectY * mod;
+    raw.push({
+      x: clamp(x, 280, worldW - 280),
+      y: clamp(y, 260, worldH - 260),
+    });
+  }
+
+  // Light Laplacian smoothing pass on corners that are excessively sharp, then
+  // rotate the waypoint array so segment 0 is the longest, cleanest straight for the starting grid.
+  const pts = raw.map((p) => ({ x: p.x, y: p.y }));
+  for (let pass = 0; pass < 1; pass++) {
+    for (let i = 0; i < n; i++) {
+      const prev = pts[(i - 1 + n) % n];
+      const curr = pts[i];
+      const next = pts[(i + 1) % n];
+      const d1 = Math.hypot(curr.x - prev.x, curr.y - prev.y) || 1;
+      const d2 = Math.hypot(next.x - curr.x, next.y - curr.y) || 1;
+      const dot = ((curr.x - prev.x) * (next.x - curr.x) + (curr.y - prev.y) * (next.y - curr.y)) / (d1 * d2);
+      if (dot < -0.35 || d1 < 230 || d2 < 230) {
+        curr.x = curr.x * 0.65 + (prev.x + next.x) * 0.175;
+        curr.y = curr.y * 0.65 + (prev.y + next.y) * 0.175;
+      }
+    }
+  }
+
+  let bestStart = 0;
+  let bestScore = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const prev = pts[(i - 1 + n) % n];
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const prevLen = Math.hypot(a.x - prev.x, a.y - prev.y) || 1;
+    const align = ((a.x - prev.x) * (b.x - a.x) + (a.y - prev.y) * (b.y - a.y)) / (prevLen * Math.max(1, len));
+    const score = len + align * 180;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+
+  const waypoints = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[(bestStart + i) % n];
+    waypoints.push({ x: Math.round(p.x), y: Math.round(p.y) });
+  }
+
+  const roadHalfBase = Math.round(82 + rng() * 30); // 82..112
+  const segWidth = {};
+  const narrowCount = 2 + Math.floor(rng() * 3);
+  for (let k = 0; k < narrowCount; k++) {
+    const segIdx = 2 + Math.floor(rng() * Math.max(1, n - 3));
+    segWidth[segIdx] = Math.round((0.72 + rng() * 0.5) * 100) / 100;
+  }
+
+  const boostPadSegs = [];
+  const boostCount = 3 + Math.floor(rng() * 3);
+  const boostStep = Math.max(2, Math.floor(n / boostCount));
+  for (let i = 1; i < n && boostPadSegs.length < boostCount; i += boostStep) {
+    const idx = (i + Math.floor(rng() * 2)) % n;
+    if (!boostPadSegs.includes(idx)) boostPadSegs.push(idx);
+  }
+
+  const itemBoxSegs = [];
+  const itemCount = 4 + Math.floor(rng() * 3);
+  const itemStep = Math.max(2, Math.floor(n / itemCount));
+  for (let i = 0; i < n && itemBoxSegs.length < itemCount; i += itemStep) {
+    const idx = (i + 1) % n;
+    if (!itemBoxSegs.includes(idx)) itemBoxSegs.push(idx);
+  }
+
+  return {
+    name: `Procedural Circuit #${s % 10000}`,
+    id: `${PROCEDURAL_MAP_ID}:${s}`,
+    procedural: true,
+    proceduralSeed: s,
+    musicTrack: s % 5,
+    worldW,
+    worldH,
+    waypoints,
+    roadHalfBase,
+    segWidth,
+    boostPadSegs,
+    itemBoxSegs,
+    desc: `Procedurally generated closed racing circuit (seed ${s}).`,
+  };
+}
+
+function getActiveMapConfig(gameState) {
+  if (gameState?.customMapConfig) return gameState.customMapConfig;
+  return MAPS[gameState?.selectedMapIdx || 0] || MAPS[0];
+}
 
 function generateDragonTrail() {
   const wp = [];
@@ -63,8 +227,8 @@ const MAPS = [
       { x:  720, y:  820 },
       { x:  470, y: 1080 },
       { x:  370, y: 1380 },
-      { x:  390, y: 1700 },
-      { x:  500, y: 1880 },
+      { x:  400, y: 1660 },
+      { x:  500, y: 1845 },
     ],
     roadHalfBase: 95,
     segWidth: {
@@ -83,27 +247,34 @@ const MAPS = [
     worldW: 2400,
     worldH: 2400,
     waypoints: [
-      { x:  500, y: 1900 },
-      { x: 1900, y: 1900 },
-      { x: 1900, y: 1200 },
-      { x: 1300, y: 1200 },
-      { x: 1300, y:  800 },
-      { x: 1900, y:  500 },
-      { x: 1200, y:  400 },
-      { x:  500, y:  400 },
-      { x:  500, y:  900 },
-      { x: 1000, y: 1200 },
-      { x:  500, y: 1500 },
+      { x:  720, y: 1960 },
+      { x: 1640, y: 1960 },
+      { x: 1940, y: 1740 },
+      { x: 1940, y: 1380 },
+      { x: 1720, y: 1180 },
+      { x: 1360, y: 1160 },
+      { x: 1260, y:  920 },
+      { x: 1500, y:  720 },
+      { x: 1880, y:  560 },
+      { x: 1640, y:  360 },
+      { x:  820, y:  360 },
+      { x:  500, y:  560 },
+      { x:  500, y:  920 },
+      { x:  940, y: 1200 },
+      { x:  520, y: 1500 },
+      { x:  470, y: 1840 },
     ],
-    roadHalfBase: 85,
+    roadHalfBase: 86,
     segWidth: {
-      2: 0.82,
-      3: 0.82,
-      9: 0.62,
+      4: 0.84,
+      5: 0.78,
+      6: 0.78,
+      12: 0.76,
+      13: 0.72,
     },
-    boostPadSegs: [0, 5, 8],
-    itemBoxSegs: [1, 4, 7, 10],
-    desc: "Highly technical micro-circuit with acute 90° corners, double-back chicanes, and narrow tunnels."
+    boostPadSegs: [0, 9, 12],
+    itemBoxSegs: [1, 5, 10, 14],
+    desc: "Technical micro-circuit with beveled double-apex corners, double-back chicanes, and narrow inner doglegs."
   },
   {
     name: "Audit Super Ring",
@@ -112,19 +283,31 @@ const MAPS = [
     worldW: 3600,
     worldH: 2000,
     waypoints: [
-      { x:  600, y: 1500 },
-      { x: 1800, y: 1600 },
-      { x: 3000, y: 1500 },
-      { x: 3200, y: 1000 },
-      { x: 2600, y:  500 },
-      { x: 1000, y:  500 },
-      { x:  400, y: 1000 },
+      { x:  860, y: 1580 },
+      { x: 1800, y: 1620 },
+      { x: 2740, y: 1580 },
+      { x: 3120, y: 1380 },
+      { x: 3260, y: 1020 },
+      { x: 3100, y:  660 },
+      { x: 2700, y:  460 },
+      { x: 2140, y:  430 },
+      { x: 1760, y:  560 },
+      { x: 1380, y:  430 },
+      { x:  840, y:  460 },
+      { x:  480, y:  680 },
+      { x:  340, y: 1020 },
+      { x:  460, y: 1360 },
+      { x:  640, y: 1540 },
     ],
-    roadHalfBase: 110,
-    segWidth: {},
-    boostPadSegs: [1, 4, 5],
-    itemBoxSegs: [0, 2, 3, 6],
-    desc: "A giant wide-lane speed ring with gentle sweeps designed for massive drifts and continuous boost chaining."
+    roadHalfBase: 112,
+    segWidth: {
+      7: 1.08,
+      8: 0.92,
+      9: 1.08,
+    },
+    boostPadSegs: [1, 4, 9, 12],
+    itemBoxSegs: [0, 3, 7, 11, 13],
+    desc: "A wide-lane speedway ring with sweeping banked curves and a high-speed backstretch chicane built for continuous boost chaining."
   },
   {
     name: "Black Ice Data Vault",
@@ -404,4 +587,16 @@ function regenerateDragonTrail(seed) {
   if (dragonMap) dragonMap.waypoints = generateDragonTrail();
 }
 
-export { MAPS, GRAND_PRIX_ID, clampLaps, clampGrandPrixRaces, clampAiCount, regenerateDragonTrail };
+export {
+  MAPS,
+  GRAND_PRIX_ID,
+  PROCEDURAL_MAP_ID,
+  isProceduralMapId,
+  parseProceduralMapSeed,
+  generateProceduralRaceMap,
+  getActiveMapConfig,
+  clampLaps,
+  clampGrandPrixRaces,
+  clampAiCount,
+  regenerateDragonTrail,
+};

@@ -1937,9 +1937,7 @@ def sample_character(args: argparse.Namespace) -> str:
 
 
 def sample_map(args: argparse.Namespace) -> str:
-    if not args.random_map:
-        return args.map
-    return random.choice(parse_csv(args.maps))
+    return common.sample_map(args)
 
 
 @torch.no_grad()
@@ -2249,12 +2247,16 @@ def train(args: argparse.Namespace) -> None:
     torch.manual_seed(args.seed)
 
     is_battle = args.mode == "battle"
+    if args.procedural_maps and args.procedural_map_prob <= 0.0:
+        args.procedural_map_prob = 0.5
     if is_battle:
         # Arena is a single-map free-for-all: opponents + items ON, hazards OFF, no lap navigation.
         args.map = args.arena_map
         args.maps = args.arena_map
         args.eval_maps = args.arena_map
         args.random_map = False
+        args.procedural_maps = False
+        args.procedural_map_prob = 0.0
         args.solo = False
         args.no_items = False
         args.no_hazards = True
@@ -3221,6 +3223,17 @@ def parse_args() -> argparse.Namespace:
         default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,protocol_amendment_labyrinth",
     )
     parser.add_argument("--random-map", action="store_true")
+    parser.add_argument(
+        "--procedural-maps",
+        action="store_true",
+        help="Mix procedurally generated unseen circuits into race training (sets --procedural-map-prob 0.5 unless specified).",
+    )
+    parser.add_argument(
+        "--procedural-map-prob",
+        type=float,
+        default=0.0,
+        help="Probability [0..1] that each race training episode uses a freshly seeded procedural circuit (for generalization).",
+    )
     parser.add_argument(
         "--eval-maps",
         default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,protocol_amendment_labyrinth",

@@ -1621,6 +1621,10 @@ def sample_character(args: Any) -> str:
 
 
 def sample_map(args: Any) -> str:
+    proc_prob = float(getattr(args, "procedural_map_prob", 0.0) or 0.0)
+    if proc_prob > 0.0 and getattr(args, "mode", "race") != "battle":
+        if random.random() < proc_prob:
+            return "procedural"
     if not args.random_map:
         return args.map
     return random.choice(parse_csv(args.maps))

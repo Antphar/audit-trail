@@ -1,6 +1,6 @@
 import { TAU, lerp, clamp } from "../core/math.js";
 import { game, isDayMode, isBattleMode } from "../core/state.js";
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { WORLD_W, WORLD_H } from "../entities/track.js";
 import {
   THREE_STATE,
@@ -406,6 +406,157 @@ export function build3DCornerChevrons(group, track, edges) {
 }
 
 
+const _gantryBannerTexCache = new Map();
+
+function getMapTrackStyle3D(mapId, day) {
+  switch (mapId) {
+    case "compliance_chicane":
+      return {
+        roadAccent: "#b36bff",
+        curbA: [0.96, 0.24, 0.36],
+        curbB: [0.95, 0.96, 1.0],
+        wallLeft: [0.62, 0.3, 1.0],
+        wallRight: [1.0, 0.32, 0.48],
+        wallDark: day ? [0.2, 0.18, 0.32] : [0.12, 0.1, 0.22],
+        railLeftHex: 0xb36bff,
+        railRightHex: 0xff4d6d,
+        gantryAccent: "#b36bff",
+        gantryAccentHex: 0xb36bff,
+        propStyle: "server",
+      };
+    case "audit_super_ring":
+      return {
+        roadAccent: "#56f2a0",
+        curbA: [0.34, 0.95, 0.62],
+        curbB: [1.0, 0.84, 0.34],
+        wallLeft: [0.28, 0.9, 0.58],
+        wallRight: [0.34, 0.88, 1.0],
+        wallDark: day ? [0.15, 0.24, 0.24] : [0.09, 0.16, 0.16],
+        railLeftHex: 0x56f2a0,
+        railRightHex: 0x57f2ff,
+        gantryAccent: "#a4ff80",
+        gantryAccentHex: 0xa4ff80,
+        propStyle: "stadium",
+      };
+    case "black_ice_data_vault":
+      return {
+        roadAccent: "#57f2ff",
+        curbA: [0.34, 0.94, 1.0],
+        curbB: [0.9, 0.96, 1.0],
+        wallLeft: [0.32, 0.88, 1.0],
+        wallRight: [0.48, 0.68, 1.0],
+        wallDark: day ? [0.16, 0.24, 0.32] : [0.08, 0.14, 0.22],
+        railLeftHex: 0x57f2ff,
+        railRightHex: 0xa6e8ff,
+        gantryAccent: "#57f2ff",
+        gantryAccentHex: 0x57f2ff,
+        propStyle: "ice",
+      };
+    case "protocol_amendment_labyrinth":
+      return {
+        roadAccent: "#fd9927",
+        curbA: [0.99, 0.6, 0.16],
+        curbB: [0.96, 0.26, 0.36],
+        wallLeft: [0.99, 0.64, 0.18],
+        wallRight: [0.95, 0.32, 0.42],
+        wallDark: day ? [0.26, 0.21, 0.18] : [0.16, 0.12, 0.11],
+        railLeftHex: 0xfd9927,
+        railRightHex: 0xff5a6e,
+        gantryAccent: "#fd9927",
+        gantryAccentHex: 0xfd9927,
+        propStyle: "labyrinth",
+      };
+    case "regulatory_dragon_run":
+      return {
+        roadAccent: "#ff5c6c",
+        curbA: [0.98, 0.28, 0.34],
+        curbB: [1.0, 0.82, 0.32],
+        wallLeft: [0.98, 0.3, 0.34],
+        wallRight: [1.0, 0.72, 0.22],
+        wallDark: day ? [0.28, 0.16, 0.18] : [0.18, 0.09, 0.12],
+        railLeftHex: 0xff4d6d,
+        railRightHex: 0xffd86b,
+        gantryAccent: "#ffd86b",
+        gantryAccentHex: 0xffd86b,
+        propStyle: "dragon",
+      };
+    case "dragon_escape":
+      return {
+        roadAccent: "#66d88a",
+        curbA: [0.38, 0.86, 0.56],
+        curbB: [0.95, 0.28, 0.32],
+        wallLeft: [0.35, 0.78, 0.5],
+        wallRight: [0.92, 0.28, 0.3],
+        wallDark: day ? [0.16, 0.24, 0.18] : [0.09, 0.14, 0.1],
+        railLeftHex: 0x66d88a,
+        railRightHex: 0xff4d6d,
+        gantryAccent: "#66d88a",
+        gantryAccentHex: 0x66d88a,
+        propStyle: "dragon",
+      };
+    default:
+      return {
+        roadAccent: "#7b75ff",
+        curbA: [0.48, 0.46, 1.0],
+        curbB: [0.64, 1.0, 0.5],
+        wallLeft: [0.48, 0.46, 1.0],
+        wallRight: [0.99, 0.6, 0.15],
+        wallDark: day ? [0.18, 0.16, 0.34] : [0.11, 0.09, 0.22],
+        railLeftHex: 0x7b75ff,
+        railRightHex: 0xfd9927,
+        gantryAccent: "#ffd86b",
+        gantryAccentHex: 0xffd86b,
+        propStyle: "server",
+      };
+  }
+}
+
+function getGantryBannerTexture3D(T, trackName, accentHex) {
+  const key = `${trackName}:${accentHex}`;
+  if (_gantryBannerTexCache.has(key)) return _gantryBannerTexCache.get(key);
+  const w = 1024, h = 80;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cx = c.getContext("2d");
+
+  cx.fillStyle = "#12101f";
+  cx.fillRect(0, 0, w, h);
+
+  // Checkered left & right racing wings
+  const sq = 16;
+  for (let row = 0; row < h / sq; row++) {
+    for (let col = 0; col < 5; col++) {
+      cx.fillStyle = (row + col) % 2 === 0 ? "#f4f6ff" : "#1c192e";
+      cx.fillRect(col * sq, row * sq, sq, sq);
+      cx.fillRect(w - (col + 1) * sq, row * sq, sq, sq);
+    }
+  }
+
+  // Top & bottom neon accent bars
+  cx.fillStyle = accentHex;
+  cx.fillRect(80, 3, w - 160, 5);
+  cx.fillRect(80, h - 8, w - 160, 5);
+
+  // Track name + subtitle
+  cx.fillStyle = "#ffffff";
+  cx.font = "900 32px 'Segoe UI', system-ui, sans-serif";
+  cx.textAlign = "center";
+  cx.textBaseline = "middle";
+  cx.fillText((trackName || "AUDIT TRAIL CIRCUIT").toUpperCase(), w / 2, h * 0.42, w - 190);
+
+  cx.fillStyle = accentHex;
+  cx.font = "700 15px 'SFMono-Regular', Consolas, monospace";
+  cx.fillText("START   ///   FINISH", w / 2, h * 0.77);
+
+  const tex = new T.CanvasTexture(c);
+  if (T.SRGBColorSpace) tex.colorSpace = T.SRGBColorSpace;
+  tex.userData = { shared: true };
+  tex.needsUpdate = true;
+  _gantryBannerTexCache.set(key, tex);
+  return tex;
+}
+
 export function rebuild3DTrack() {
   if (!window.THREE || !THREE_STATE.scene || !game.track) return;
   const T = window.THREE;
@@ -458,6 +609,7 @@ export function rebuild3DTrack() {
   THREE_STATE.spectatorMeshes.forEach(s => { sc.remove(s.group); dispose3DObject(s.group); });
   THREE_STATE.spectatorMeshes = [];
   if (THREE_STATE.startLineMesh) { sc.remove(THREE_STATE.startLineMesh); dispose3DObject(THREE_STATE.startLineMesh); THREE_STATE.startLineMesh = null; }
+  THREE_STATE.startLightMats = [];
   if (THREE_STATE.particles3dSystem) { sc.remove(THREE_STATE.particles3dSystem); dispose3DObject(THREE_STATE.particles3dSystem); THREE_STATE.particles3dSystem = null; }
   reset3DParticlePool();
   THREE_STATE.pillarRings = [];
@@ -530,16 +682,19 @@ export function rebuild3DTrack() {
   geo.setAttribute("uv", new T.Float32BufferAttribute(roadUvs, 2));
   geo.computeVertexNormals();
 
+  const activeMap = getActiveMapConfig(game);
+  const currentMapId = activeMap.id;
   const roadDay = isDayMode();
-  const roadTexture = getCompassSurfaceTexture3D(T, "road", roadDay);
+  const trackStyle = getMapTrackStyle3D(currentMapId, roadDay);
+  const roadTexture = getCompassSurfaceTexture3D(T, "road", roadDay, trackStyle.roadAccent);
   roadTexture.repeat.set(1, 1);
   const roadMat = new T.MeshStandardMaterial({
     color: 0xffffff,
     map: roadTexture,
     emissive: roadDay ? 0x000000 : 0x131019,
-    emissiveIntensity: roadDay ? 0 : 0.12,
-    roughness: 0.78,
-    metalness: 0.12,
+    emissiveIntensity: roadDay ? 0 : 0.14,
+    roughness: 0.74,
+    metalness: 0.14,
     vertexColors: false,
     side: T.DoubleSide,
   });
@@ -548,17 +703,21 @@ export function rebuild3DTrack() {
   THREE_STATE.trackMesh.receiveShadow = true;
   group.add(THREE_STATE.trackMesh);
 
-  // Rumble strip (slightly wider road with alternating colors)
+  // Raised 3D racing curbs (subdivided into crisp alternating blocks with beveled profile)
   const rumbleVerts = [];
   const rumbleColors = [];
-  const rumbleExtra = 8;
+  const rumbleExtra = 10;
+  const curbCrestY = 1.45;
+  const curbInnerY = 0.52;
+  const curbOuterY = 0.25;
+  let curbBlockCounter = 0;
   for (let i = 0; i < segmentCount; i++) {
     const e0 = edges[i];
     const e1 = edges[(i + 1) % edges.length];
     if (!e0 || !e1) continue;
     const c0 = e0.center, c1 = e1.center;
-    const isEven = i % 2 === 0;
-    const r = isEven ? [0.48, 0.46, 1.0] : [0.64, 1.0, 0.5];
+    const segLen = Math.hypot(c1.x - c0.x, c1.y - c0.y);
+    const subDivs = Math.max(1, Math.min(10, Math.round(segLen / 95)));
     for (let side of [-1, 1]) {
       const s0 = side === 1 ? e0.left : e0.right;
       const s1 = side === 1 ? e1.left : e1.right;
@@ -566,17 +725,40 @@ export function rebuild3DTrack() {
       const dl0 = Math.hypot(dx0, dy0) || 1;
       const dx1 = s1.x - c1.x, dy1 = s1.y - c1.y;
       const dl1 = Math.hypot(dx1, dy1) || 1;
-      const o0x = s0.x + (dx0 / dl0) * rumbleExtra, o0z = s0.y + (dy0 / dl0) * rumbleExtra;
-      const o1x = s1.x + (dx1 / dl1) * rumbleExtra, o1z = s1.y + (dy1 / dl1) * rumbleExtra;
-      if (side === 1) {
-        rumbleVerts.push(s0.x, 0, s0.y, o0x, 0, o0z, s1.x, 0, s1.y);
-        rumbleVerts.push(o0x, 0, o0z, o1x, 0, o1z, s1.x, 0, s1.y);
-      } else {
-        rumbleVerts.push(s0.x, 0, s0.y, s1.x, 0, s1.y, o0x, 0, o0z);
-        rumbleVerts.push(o0x, 0, o0z, s1.x, 0, s1.y, o1x, 0, o1z);
+      const nx0 = dx0 / dl0, nz0 = dy0 / dl0;
+      const nx1 = dx1 / dl1, nz1 = dy1 / dl1;
+
+      for (let sub = 0; sub < subDivs; sub++) {
+        const t0 = sub / subDivs;
+        const t1 = (sub + 1) / subDivs;
+        const ix0 = lerp(s0.x, s1.x, t0), iz0 = lerp(s0.y, s1.y, t0);
+        const ix1 = lerp(s0.x, s1.x, t1), iz1 = lerp(s0.y, s1.y, t1);
+        const mx0 = ix0 + lerp(nx0, nx1, t0) * (rumbleExtra * 0.45);
+        const mz0 = iz0 + lerp(nz0, nz1, t0) * (rumbleExtra * 0.45);
+        const mx1 = ix1 + lerp(nx0, nx1, t1) * (rumbleExtra * 0.45);
+        const mz1 = iz1 + lerp(nz0, nz1, t1) * (rumbleExtra * 0.45);
+        const ox0 = ix0 + lerp(nx0, nx1, t0) * rumbleExtra;
+        const oz0 = iz0 + lerp(nz0, nz1, t0) * rumbleExtra;
+        const ox1 = ix1 + lerp(nx0, nx1, t1) * rumbleExtra;
+        const oz1 = iz1 + lerp(nz0, nz1, t1) * rumbleExtra;
+
+        const r = ((curbBlockCounter + sub) % 2 === 0) ? trackStyle.curbA : trackStyle.curbB;
+        // Inner bevel up to crest + outer bevel down to ground
+        if (side === 1) {
+          rumbleVerts.push(ix0, curbInnerY, iz0, mx0, curbCrestY, mz0, ix1, curbInnerY, iz1);
+          rumbleVerts.push(mx0, curbCrestY, mz0, mx1, curbCrestY, mz1, ix1, curbInnerY, iz1);
+          rumbleVerts.push(mx0, curbCrestY, mz0, ox0, curbOuterY, oz0, mx1, curbCrestY, mz1);
+          rumbleVerts.push(ox0, curbOuterY, oz0, ox1, curbOuterY, oz1, mx1, curbCrestY, mz1);
+        } else {
+          rumbleVerts.push(ix0, curbInnerY, iz0, ix1, curbInnerY, iz1, mx0, curbCrestY, mz0);
+          rumbleVerts.push(mx0, curbCrestY, mz0, ix1, curbInnerY, iz1, mx1, curbCrestY, mz1);
+          rumbleVerts.push(mx0, curbCrestY, mz0, mx1, curbCrestY, mz1, ox0, curbOuterY, oz0);
+          rumbleVerts.push(ox0, curbOuterY, oz0, mx1, curbCrestY, mz1, ox1, curbOuterY, oz1);
+        }
+        for (let v = 0; v < 12; v++) rumbleColors.push(r[0], r[1], r[2]);
       }
-      for (let v = 0; v < 6; v++) rumbleColors.push(r[0], r[1], r[2]);
     }
+    curbBlockCounter += subDivs;
   }
   if (rumbleVerts.length > 0) {
     const rGeo = new T.BufferGeometry();
@@ -585,23 +767,25 @@ export function rebuild3DTrack() {
     rGeo.computeVertexNormals();
     const rMat = new T.MeshStandardMaterial({
       vertexColors: true,
-      roughness: 0.7,
-      metalness: 0.2,
+      roughness: 0.62,
+      metalness: 0.18,
       emissive: 0x111111,
-      emissiveIntensity: roadDay ? 0.08 : 0.3,
+      emissiveIntensity: roadDay ? 0.08 : 0.28,
       side: T.DoubleSide,
     });
     const rumble = new T.Mesh(rGeo, rMat);
-    rumble.position.y = 0.3;
     group.add(rumble);
   }
 
-  // 3D barrier walls along track edges
+  // 3D barrier walls + solid glowing top-rail ribbons + instanced metallic stanchion posts
   const barrierH = 14;
-  const barrierOffset = 6;
+  const barrierOffset = 9;
+  const stanchionTransforms = [];
   for (let side = -1; side <= 1; side += 2) {
     const wallVerts = [];
     const wallColors = [];
+    const railVerts = [];
+    let wallPanelIdx = 0;
     for (let i = 0; i < segmentCount; i++) {
       const e0 = edges[i];
       const e1 = edges[(i + 1) % edges.length];
@@ -613,17 +797,42 @@ export function rebuild3DTrack() {
       const dl0 = Math.hypot(dx0, dy0) || 1;
       const dx1 = s1.x - c1.x, dy1 = s1.y - c1.y;
       const dl1 = Math.hypot(dx1, dy1) || 1;
-      const b0x = s0.x + (dx0 / dl0) * barrierOffset;
-      const b0z = s0.y + (dy0 / dl0) * barrierOffset;
-      const b1x = s1.x + (dx1 / dl1) * barrierOffset;
-      const b1z = s1.y + (dy1 / dl1) * barrierOffset;
-      // Front face of barrier (two triangles)
-      wallVerts.push(b0x, 0, b0z, b1x, 0, b1z, b0x, barrierH, b0z);
-      wallVerts.push(b1x, 0, b1z, b1x, barrierH, b1z, b0x, barrierH, b0z);
-      // Alternating neon color stripes
-      const isEven = i % 4 < 2;
-      const cr = side === 1 ? (isEven ? [0.48, 0.46, 1.0] : [0.15, 0.12, 0.35]) : (isEven ? [0.99, 0.6, 0.15] : [0.15, 0.12, 0.35]);
-      for (let v = 0; v < 6; v++) wallColors.push(cr[0], cr[1], cr[2]);
+      const nx0 = dx0 / dl0, nz0 = dy0 / dl0;
+      const nx1 = dx1 / dl1, nz1 = dy1 / dl1;
+      const b0x = s0.x + nx0 * barrierOffset;
+      const b0z = s0.y + nz0 * barrierOffset;
+      const b1x = s1.x + nx1 * barrierOffset;
+      const b1z = s1.y + nz1 * barrierOffset;
+      const bLen = Math.hypot(b1x - b0x, b1z - b0z);
+      const subPanels = Math.max(1, Math.min(8, Math.round(bLen / 170)));
+
+      for (let sp = 0; sp < subPanels; sp++) {
+        const t0 = sp / subPanels;
+        const t1 = (sp + 1) / subPanels;
+        const px0 = lerp(b0x, b1x, t0), pz0 = lerp(b0z, b1z, t0);
+        const px1 = lerp(b0x, b1x, t1), pz1 = lerp(b0z, b1z, t1);
+        wallVerts.push(px0, 0, pz0, px1, 0, pz1, px0, barrierH, pz0);
+        wallVerts.push(px1, 0, pz1, px1, barrierH, pz1, px0, barrierH, pz0);
+        const isAccent = ((wallPanelIdx + sp) % 3 === 0);
+        const cr = isAccent
+          ? (side === 1 ? trackStyle.wallLeft : trackStyle.wallRight)
+          : trackStyle.wallDark;
+        for (let v = 0; v < 6; v++) wallColors.push(cr[0], cr[1], cr[2]);
+
+        // Collect stanchion post position at panel joints
+        stanchionTransforms.push({ x: px0, z: pz0 });
+      }
+      wallPanelIdx += subPanels;
+
+      // 3D top-rail cap ribbon (2.8 units wide so it reads clearly instead of a 1px WebGL line)
+      const railHalf = 1.6;
+      const ry = barrierH + 0.7;
+      const rIn0x = b0x - nx0 * railHalf, rIn0z = b0z - nz0 * railHalf;
+      const rOut0x = b0x + nx0 * railHalf, rOut0z = b0z + nz0 * railHalf;
+      const rIn1x = b1x - nx1 * railHalf, rIn1z = b1z - nz1 * railHalf;
+      const rOut1x = b1x + nx1 * railHalf, rOut1z = b1z + nz1 * railHalf;
+      railVerts.push(rIn0x, ry, rIn0z, rOut0x, ry, rOut0z, rIn1x, ry, rIn1z);
+      railVerts.push(rOut0x, ry, rOut0z, rOut1x, ry, rOut1z, rIn1x, ry, rIn1z);
     }
     if (wallVerts.length > 0) {
       const wGeo = new T.BufferGeometry();
@@ -632,50 +841,69 @@ export function rebuild3DTrack() {
       wGeo.computeVertexNormals();
       const wMat = new T.MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.5,
-        metalness: 0.6,
-        emissive: side === 1 ? 0x1a1840 : 0x2a1808,
-        emissiveIntensity: roadDay ? 0.12 : 0.4,
+        roughness: 0.45,
+        metalness: 0.55,
+        emissive: side === 1 ? trackStyle.railLeftHex : trackStyle.railRightHex,
+        emissiveIntensity: roadDay ? 0.08 : 0.24,
         transparent: true,
-        opacity: roadDay ? 0.88 : 0.82,
+        opacity: roadDay ? 0.92 : 0.86,
         side: T.DoubleSide,
       });
       const wall = new T.Mesh(wGeo, wMat);
       wall.position.y = 0.5;
       group.add(wall);
     }
-
-    // Glowing top edge line on barrier
-    const topVerts = [];
-    for (let i = 0; i < edges.length; i++) {
-      const e = edges[i];
-      if (!e) continue;
-      const p = side === 1 ? e.left : e.right;
-      const c = e.center;
-      const dx = p.x - c.x, dy = p.y - c.y;
-      const dl = Math.hypot(dx, dy) || 1;
-      topVerts.push(p.x + (dx / dl) * barrierOffset, barrierH + 0.5, p.y + (dy / dl) * barrierOffset);
-    }
-    if (topVerts.length > 3) {
-      const tGeo = new T.BufferGeometry();
-      tGeo.setAttribute("position", new T.Float32BufferAttribute(topVerts, 3));
-      const tMat = new T.LineBasicMaterial({ color: side === 1 ? 0x7b75ff : 0xfd9927, linewidth: 2 });
-      group.add(game.track.isOpen ? new T.Line(tGeo, tMat) : new T.LineLoop(tGeo, tMat));
+    if (railVerts.length > 0) {
+      const rGeo = new T.BufferGeometry();
+      rGeo.setAttribute("position", new T.Float32BufferAttribute(railVerts, 3));
+      rGeo.computeVertexNormals();
+      const railHex = side === 1 ? trackStyle.railLeftHex : trackStyle.railRightHex;
+      const railMat = new T.MeshStandardMaterial({
+        color: railHex,
+        emissive: railHex,
+        emissiveIntensity: roadDay ? 0.55 : 1.15,
+        roughness: 0.25,
+        metalness: 0.5,
+        side: T.DoubleSide,
+      });
+      group.add(new T.Mesh(rGeo, railMat));
     }
   }
+  if (stanchionTransforms.length > 0 && !game.track.arenaFloor) {
+    const postGeo = new T.BoxGeometry(2.6, barrierH + 2.2, 2.6);
+    const postMat = new T.MeshStandardMaterial({
+      color: roadDay ? 0x2c2b3d : 0x1c1a2c,
+      roughness: 0.4,
+      metalness: 0.72,
+    });
+    const inst = new T.InstancedMesh(postGeo, postMat, stanchionTransforms.length);
+    const m4 = new T.Matrix4();
+    const pos = new T.Vector3();
+    const q = new T.Quaternion();
+    const scl = new T.Vector3(1, 1, 1);
+    for (let i = 0; i < stanchionTransforms.length; i++) {
+      pos.set(stanchionTransforms[i].x, (barrierH + 2.2) * 0.5, stanchionTransforms[i].z);
+      m4.compose(pos, q, scl);
+      inst.setMatrixAt(i, m4);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    group.add(inst);
+  }
 
-  // Center dashed line
+  // Center dashed line (kept subtle since road texture already carries crisp markings)
   const centerVerts = [];
   for (let i = 0; i < wp.length; i++) {
-    centerVerts.push(wp[i].x, 1, wp[i].y);
+    centerVerts.push(wp[i].x, 0.85, wp[i].y);
   }
   if (centerVerts.length > 3) {
     const centerGeo = new T.BufferGeometry();
     centerGeo.setAttribute("position", new T.Float32BufferAttribute(centerVerts, 3));
     const centerMat = new T.LineDashedMaterial({
-      color: roadDay ? 0x5a54c8 : 0x7b75ff,
+      color: trackStyle.railLeftHex,
       dashSize: 24,
-      gapSize: 32,
+      gapSize: 36,
+      transparent: true,
+      opacity: 0.45,
       linewidth: 1,
     });
     const centerLine = game.track.isOpen ? new T.Line(centerGeo, centerMat) : new T.LineLoop(centerGeo, centerMat);
@@ -688,38 +916,102 @@ export function rebuild3DTrack() {
   if (!game.track.isOpen && !isBattleMode()) {
     const gate = game.track.startLineGate();
     if (gate) {
-      const lx = gate.x + gate.nx * (gate.halfW + 4);
-      const ly = gate.y + gate.ny * (gate.halfW + 4);
-      const rx = gate.x - gate.nx * (gate.halfW + 4);
-      const ry = gate.y - gate.ny * (gate.halfW + 4);
-      const archW = (gate.halfW + 4) * 2;
-      const archH = 45;
+      const lx = gate.x + gate.nx * (gate.halfW + 8);
+      const ly = gate.y + gate.ny * (gate.halfW + 8);
+      const rx = gate.x - gate.nx * (gate.halfW + 8);
+      const ry = gate.y - gate.ny * (gate.halfW + 8);
+      const archW = (gate.halfW + 8) * 2;
+      const archH = 48;
       const archYaw = -Math.atan2(gate.ny, gate.nx);
       const archGroup = new T.Group();
-      const archMat = new T.MeshStandardMaterial({ color: 0xffd86b, emissive: 0xffd86b, emissiveIntensity: 0.6, metalness: 0.8, roughness: 0.2 });
-      const pillarGeo = new T.CylinderGeometry(2.5, 3, archH, 10);
-      const lp = new T.Mesh(pillarGeo, archMat);
-      lp.position.set(lx, archH / 2, ly);
-      lp.castShadow = true;
-      archGroup.add(lp);
-      const rp = new T.Mesh(pillarGeo, archMat);
-      rp.position.set(rx, archH / 2, ry);
-      rp.castShadow = true;
-      archGroup.add(rp);
-      const beamGeo = new T.BoxGeometry(archW, 5, 7);
-      const beam = new T.Mesh(beamGeo, archMat);
-      beam.position.set(gate.x, archH, gate.y);
-      beam.rotation.y = archYaw;
-      beam.castShadow = true;
-      archGroup.add(beam);
-      const bannerGeo = new T.PlaneGeometry(archW * 0.9, 10);
-      const bannerMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffd86b, emissiveIntensity: 0.4, side: T.DoubleSide, transparent: true, opacity: 0.9 });
-      const banner = new T.Mesh(bannerGeo, bannerMat);
-      banner.position.set(gate.x, archH - 7, gate.y);
-      banner.rotation.y = archYaw;
-      archGroup.add(banner);
+      const darkSteelMat = new T.MeshStandardMaterial({
+        color: 0x1d1c2e,
+        metalness: 0.78,
+        roughness: 0.28,
+      });
+      const accentArchMat = new T.MeshStandardMaterial({
+        color: trackStyle.gantryAccentHex,
+        emissive: trackStyle.gantryAccentHex,
+        emissiveIntensity: roadDay ? 0.45 : 0.9,
+        metalness: 0.7,
+        roughness: 0.25,
+      });
+
+      // Twin architectural support towers with wide bases and glowing accent strips
+      const towerGeo = new T.BoxGeometry(6.5, archH, 8.5);
+      const baseGeo = new T.BoxGeometry(10, 5, 12);
+      const stripGeo = new T.BoxGeometry(1.6, archH - 8, 9.2);
+      for (const [px, pz] of [[lx, ly], [rx, ry]]) {
+        const tGroup = new T.Group();
+        tGroup.position.set(px, 0, pz);
+        tGroup.rotation.y = archYaw;
+        const base = new T.Mesh(baseGeo, darkSteelMat);
+        base.position.y = 2.5;
+        tGroup.add(base);
+        const tower = new T.Mesh(towerGeo, darkSteelMat);
+        tower.position.y = archH * 0.5;
+        tower.castShadow = ENABLE_3D_SHADOWS;
+        tGroup.add(tower);
+        const strip = new T.Mesh(stripGeo, accentArchMat);
+        strip.position.y = archH * 0.5;
+        tGroup.add(strip);
+        archGroup.add(tGroup);
+      }
+
+      // Overhead gantry bridge & custom track-name banner
+      const bridgeGroup = new T.Group();
+      bridgeGroup.position.set(gate.x, archH, gate.y);
+      bridgeGroup.rotation.y = archYaw;
+
+      const topBeam = new T.Mesh(new T.BoxGeometry(archW + 10, 4.5, 9), darkSteelMat);
+      topBeam.castShadow = ENABLE_3D_SHADOWS;
+      bridgeGroup.add(topBeam);
+
+      const trimTop = new T.Mesh(new T.BoxGeometry(archW + 11, 1.4, 9.6), accentArchMat);
+      trimTop.position.y = 2.7;
+      bridgeGroup.add(trimTop);
+
+      const bannerTex = getGantryBannerTexture3D(T, activeMap.name, trackStyle.gantryAccent);
+      const bannerGeo = new T.BoxGeometry(archW * 0.88, 15, 2.2);
+      const bannerFaceMat = new T.MeshStandardMaterial({
+        map: bannerTex,
+        emissive: 0xffffff,
+        emissiveMap: bannerTex,
+        emissiveIntensity: roadDay ? 0.35 : 0.72,
+        roughness: 0.35,
+        metalness: 0.2,
+      });
+      const banner = new T.Mesh(bannerGeo, [
+        darkSteelMat, darkSteelMat, darkSteelMat, darkSteelMat, bannerFaceMat, bannerFaceMat,
+      ]);
+      banner.position.y = -8.5;
+      bridgeGroup.add(banner);
+
+      // 5 hanging F1-style start light pods underneath the banner
+      const podHousingGeo = new T.BoxGeometry(7.2, 5.2, 4.2);
+      const lensGeo = new T.CylinderGeometry(1.7, 1.7, 4.6, 12);
+      lensGeo.rotateX(Math.PI / 2);
+      const podSpacing = Math.min(18, (archW * 0.52) / 4);
+      for (let li = 0; li < 5; li++) {
+        const px = (li - 2) * podSpacing;
+        const housing = new T.Mesh(podHousingGeo, darkSteelMat);
+        housing.position.set(px, -18.5, 0);
+        bridgeGroup.add(housing);
+        const lensMat = new T.MeshStandardMaterial({
+          color: 0x22cc66,
+          emissive: 0x22ff77,
+          emissiveIntensity: 1.1,
+          roughness: 0.2,
+        });
+        const lens = new T.Mesh(lensGeo, lensMat);
+        lens.position.set(px, -18.5, 0);
+        bridgeGroup.add(lens);
+        THREE_STATE.startLightMats.push(lensMat);
+      }
+
+      archGroup.add(bridgeGroup);
       if (ENABLE_DECORATIVE_3D_LIGHTS) {
-        const archLight = new T.PointLight(0xffd86b, 0.6, 150);
+        const archLight = new T.PointLight(trackStyle.gantryAccentHex, 0.7, 160);
         archLight.position.set(gate.x, archH + 5, gate.y);
         archGroup.add(archLight);
       }
@@ -987,7 +1279,6 @@ export function rebuild3DTrack() {
   }
 
   // Only create the dragon model relevant to the current map
-  const currentMapId = MAPS[game.selectedMapIdx || 0].id;
   if (game.track.regulatoryDragon && currentMapId !== "dragon_escape") {
     THREE_STATE.dragonModel = buildDragonModel3D(false);
     sc.add(THREE_STATE.dragonModel);
@@ -997,48 +1288,166 @@ export function rebuild3DTrack() {
     sc.add(THREE_STATE.dragonEscapeModel);
   }
 
+  // Theme-specific trackside architecture (shared geometries & materials per map for high FPS)
   if (game.track.decorations && !game.track.isOpen && !game.track.arenaFloor) {
-    const pillarColors = [0x7b75ff, 0xfd9927, 0xff4d6d, 0xa4ff80, 0x57f2ff];
+    const propStyle = trackStyle.propStyle;
+    const darkMetalMat = new T.MeshStandardMaterial({
+      color: roadDay ? 0x262538 : 0x161426,
+      roughness: 0.35,
+      metalness: 0.78,
+    });
+    const accentColors = propStyle === "ice"
+      ? [0x57f2ff, 0x9be8ff, 0x5cb8ff]
+      : propStyle === "stadium"
+        ? [0xa4ff80, 0x57f2ff, 0xffd86b]
+        : propStyle === "labyrinth"
+          ? [0xfd9927, 0xffd86b, 0xff4d6d]
+          : propStyle === "dragon"
+            ? [0xff4d6d, 0xffd86b, 0xff8844]
+            : [0x7b75ff, 0x57f2ff, 0xfd9927, 0xa4ff80];
+    const accentMats = accentColors.map((col) => new T.MeshStandardMaterial({
+      color: col,
+      emissive: col,
+      emissiveIntensity: roadDay ? 0.55 : 1.05,
+      roughness: 0.25,
+      metalness: 0.45,
+    }));
+
+    // Shared unit geometries scaled per prop
+    const unitBox = new T.BoxGeometry(1, 1, 1);
+    const unitCone5 = new T.ConeGeometry(1, 1, 5);
+    const unitCyl6 = new T.CylinderGeometry(0.45, 0.72, 1, 6);
+    const unitRing = new T.TorusGeometry(1, 0.14, 6, 12);
+
+    const iceCrystalMat = propStyle === "ice" ? new T.MeshStandardMaterial({
+      color: roadDay ? 0xbef5ff : 0x45c8e8,
+      emissive: 0x2299cc,
+      emissiveIntensity: roadDay ? 0.22 : 0.55,
+      transparent: true,
+      opacity: 0.82,
+      roughness: 0.12,
+      metalness: 0.25,
+    }) : null;
+    const sandstoneMat = propStyle === "labyrinth" ? new T.MeshStandardMaterial({
+      color: roadDay ? 0x4a3d33 : 0x241d19,
+      roughness: 0.65,
+      metalness: 0.22,
+    }) : null;
+    const crimsonMat = propStyle === "dragon" ? new T.MeshStandardMaterial({
+      color: roadDay ? 0x982430 : 0x62151e,
+      roughness: 0.45,
+      metalness: 0.35,
+    }) : null;
+
     game.track.decorations.forEach((d, idx) => {
       if (d.isJapanese) return;
-      const h = d.h || 50;
-      const r = (d.r || 12) * 0.6;
-      const col = pillarColors[idx % pillarColors.length];
-      const pillarGeo = new T.CylinderGeometry(r * 0.5, r, h, 8);
-      const pillarMat = new T.MeshStandardMaterial({
-        color: col,
-        emissive: col,
-        emissiveIntensity: 0.4,
-        transparent: true,
-        opacity: 0.5,
-        roughness: 0.15,
-        metalness: 0.85,
-      });
-      const pillar = new T.Mesh(pillarGeo, pillarMat);
-      pillar.position.set(d.x, h / 2, d.y);
-      pillar.castShadow = ENABLE_3D_SHADOWS;
-      group.add(pillar);
-      for (let ri = 0; ri < 3; ri++) {
-        const ringY = h * 0.25 + ri * (h * 0.25);
-        const ringR = r * (0.9 - ri * 0.1);
-        const ringGeo = new T.TorusGeometry(ringR, 0.4, 6, 12);
-        const ringMat = new T.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.9, transparent: true, opacity: 0.6 });
-        const ring = new T.Mesh(ringGeo, ringMat);
-        ring.position.set(d.x, ringY, d.y);
+      const h = d.h || 54;
+      const r = (d.r || 12) * 0.72;
+      const aMat = accentMats[idx % accentMats.length];
+      const prop = new T.Group();
+      prop.position.set(d.x, 0, d.y);
+      const yaw = (idx * 1.6180339) % TAU;
+      prop.rotation.y = yaw;
+
+      if (propStyle === "ice") {
+        // Faceted glacier crystal cluster
+        const mainSpire = new T.Mesh(unitCone5, iceCrystalMat);
+        mainSpire.scale.set(r * 1.15, h * 1.15, r * 1.15);
+        mainSpire.position.y = h * 0.56;
+        mainSpire.rotation.z = ((idx % 2 === 0 ? 1 : -1) * 0.1);
+        prop.add(mainSpire);
+        const sideSpire = new T.Mesh(unitCone5, aMat);
+        sideSpire.scale.set(r * 0.72, h * 0.68, r * 0.72);
+        sideSpire.position.set(r * 0.85, h * 0.32, r * 0.3);
+        sideSpire.rotation.z = -0.26;
+        prop.add(sideSpire);
+        const sideSpire2 = new T.Mesh(unitCone5, iceCrystalMat);
+        sideSpire2.scale.set(r * 0.58, h * 0.48, r * 0.58);
+        sideSpire2.position.set(-r * 0.75, h * 0.23, -r * 0.35);
+        sideSpire2.rotation.z = 0.24;
+        prop.add(sideSpire2);
+      } else if (propStyle === "stadium") {
+        // Speedway floodlight tower facing closest track point
+        const nearest = game.track.closestSegment(d.x, d.y);
+        if (nearest?.proj) {
+          prop.rotation.y = Math.atan2(nearest.proj.x - d.x, nearest.proj.y - d.y);
+        }
+        const poleH = h * 1.35;
+        const pole = new T.Mesh(unitCyl6, darkMetalMat);
+        pole.scale.set(r * 0.42, poleH, r * 0.42);
+        pole.position.y = poleH * 0.5;
+        prop.add(pole);
+        const head = new T.Mesh(unitBox, darkMetalMat);
+        head.scale.set(r * 2.4, r * 0.85, r * 0.6);
+        head.position.set(0, poleH, r * 0.35);
+        head.rotation.x = 0.35;
+        prop.add(head);
+        const lamp = new T.Mesh(unitBox, aMat);
+        lamp.scale.set(r * 2.1, r * 0.58, r * 0.22);
+        lamp.position.set(0, poleH - 0.6, r * 0.68);
+        lamp.rotation.x = 0.35;
+        prop.add(lamp);
+      } else if (propStyle === "labyrinth") {
+        // Stepped regulatory archive obelisk with glowing compliance seal collar
+        const plinth = new T.Mesh(unitBox, sandstoneMat);
+        plinth.scale.set(r * 2.1, 8, r * 2.1);
+        plinth.position.y = 4;
+        prop.add(plinth);
+        const shaft = new T.Mesh(unitBox, sandstoneMat);
+        shaft.scale.set(r * 1.35, h, r * 1.35);
+        shaft.position.y = 8 + h * 0.5;
+        prop.add(shaft);
+        const band = new T.Mesh(unitBox, aMat);
+        band.scale.set(r * 1.5, 4.2, r * 1.5);
+        band.position.y = 8 + h * 0.72;
+        prop.add(band);
+        const apex = new T.Mesh(unitCone5, aMat);
+        apex.scale.set(r * 1.05, r * 1.3, r * 1.05);
+        apex.position.y = 8 + h + r * 0.65;
+        prop.add(apex);
+      } else if (propStyle === "dragon") {
+        // Imperial cyber-lantern pillar with pagoda eaves
+        const post = new T.Mesh(unitCyl6, crimsonMat);
+        post.scale.set(r * 0.65, h, r * 0.65);
+        post.position.y = h * 0.5;
+        prop.add(post);
+        const eave1 = new T.Mesh(unitBox, crimsonMat);
+        eave1.scale.set(r * 2.5, 3, r * 2.5);
+        eave1.position.y = h * 0.85;
+        prop.add(eave1);
+        const lantern = new T.Mesh(unitBox, aMat);
+        lantern.scale.set(r * 1.2, r * 1.4, r * 1.2);
+        lantern.position.y = h * 0.98;
+        prop.add(lantern);
+        const roof = new T.Mesh(unitCone5, crimsonMat);
+        roof.scale.set(r * 1.9, r * 1.1, r * 1.9);
+        roof.position.y = h * 0.98 + r * 1.2;
+        prop.add(roof);
+      } else {
+        // Mainframe server monolith with glowing vertical LED data strips & orbiting telemetry ring
+        const chassis = new T.Mesh(unitBox, darkMetalMat);
+        chassis.scale.set(r * 1.5, h, r * 1.5);
+        chassis.position.y = h * 0.5;
+        chassis.castShadow = ENABLE_3D_SHADOWS;
+        prop.add(chassis);
+        for (const s of [-1, 1]) {
+          const led = new T.Mesh(unitBox, aMat);
+          led.scale.set(r * 0.22, h * 0.82, r * 1.58);
+          led.position.set(s * r * 0.42, h * 0.5, 0);
+          prop.add(led);
+        }
+        const cap = new T.Mesh(unitBox, aMat);
+        cap.scale.set(r * 1.2, 3.2, r * 1.2);
+        cap.position.y = h + 1.8;
+        prop.add(cap);
+        const ring = new T.Mesh(unitRing, aMat);
+        ring.scale.setScalar(r * 1.18);
+        ring.position.set(d.x, h * 0.78, d.y);
         ring.rotation.x = Math.PI / 2;
         group.add(ring);
         THREE_STATE.pillarRings.push(ring);
       }
-      const capGeo = new T.SphereGeometry(r * 0.7, 10, 8);
-      const capMat = new T.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 1.0 });
-      const cap = new T.Mesh(capGeo, capMat);
-      cap.position.set(d.x, h + 2, d.y);
-      group.add(cap);
-      if (ENABLE_DECORATIVE_3D_LIGHTS) {
-        const pillarLight = new T.PointLight(col, 0.25, 80);
-        pillarLight.position.set(d.x, h + 5, d.y);
-        group.add(pillarLight);
-      }
+      group.add(prop);
     });
   }
 

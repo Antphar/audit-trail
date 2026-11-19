@@ -1,6 +1,13 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
-import { MAPS, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
+import {
+  MAPS,
+  isProceduralMapId,
+  parseProceduralMapSeed,
+  generateProceduralRaceMap,
+  clampAiCount,
+  regenerateDragonTrail,
+} from "../config/maps.js";
 import { clamp, dist, rand } from "../core/math.js";
 import { seedSimRng, resetSimRngToNondeterministic, simRandom } from "../core/rng.js";
 import { simNow, setSimClock, useVirtualClock } from "../core/clock.js";
@@ -154,8 +161,16 @@ export const HEADLESS_EXTERNAL_STATE = {
 
 export const DqnAIKart = TrainedAIKart;
 
-export function selectHeadlessMap(mapOverride = null) {
+export function selectHeadlessMap(mapOverride = null, seedOverride = undefined) {
   const requestedMap = mapOverride || URL_PARAMS.get("map") || URL_PARAMS.get("headlessMap") || "protocol_amendment_labyrinth";
+  if (isProceduralMapId(requestedMap)) {
+    const seed = parseProceduralMapSeed(requestedMap, seedOverride);
+    const procMap = generateProceduralRaceMap(seed);
+    game.customMapConfig = procMap;
+    game.selectedMapIdx = 0;
+    return procMap;
+  }
+  game.customMapConfig = null;
   const idx = MAPS.findIndex(m => m.id === requestedMap || m.name === requestedMap);
   game.selectedMapIdx = idx >= 0 ? idx : 0;
   return MAPS[game.selectedMapIdx];
@@ -631,7 +646,7 @@ export function runHeadlessEpisode(config, episodeIdx = 0) {
   game.rlLosses = 0;
   game.rlHits = 0;
   selectHeadlessCharacter(config.character);
-  const map = selectHeadlessMap(config.map);
+  const map = selectHeadlessMap(config.map, config.seed);
   applyHeadlessEpisodeSeed(config);
   rlRuntime.hideAll();
   rlRuntime.buildRace();

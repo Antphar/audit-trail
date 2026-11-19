@@ -13,6 +13,7 @@ export const game = {
   state: STATE.TITLE,
   selectedCharIdx: 0,
   selectedMapIdx: 0,
+  customMapConfig: null,
   track: null,
   player: null,
   player2: null,

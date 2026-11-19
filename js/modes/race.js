@@ -1,6 +1,6 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS, DEFAULT_KART_COLLISION_RADIUS, getVehicleProfile } from "../config/characters.js";
-import { MAPS, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
+import { MAPS, getActiveMapConfig, clampAiCount, regenerateDragonTrail } from "../config/maps.js";
 import { clamp, dist, len2d, rand, pointSegProjection, pick, lerp, angleDiff } from "../core/math.js";
 import { simRandom } from "../core/rng.js";
 import { simNow } from "../core/clock.js";
@@ -64,7 +64,7 @@ export function shouldSkipGroundHazardForKart(kart, h) {
   if (h instanceof DossierProjectile || h instanceof RegulatoryProjectile || h instanceof DragonFire) return false;
   return isGroundHazardImmuneWhenAirborne(h);
 }
-export function isDragonEscape() { return MAPS[game.selectedMapIdx || 0].id === "dragon_escape"; }
+export function isDragonEscape() { return getActiveMapConfig(game).id === "dragon_escape"; }
 export function gridSlot(i) {
   return { f: -5 - 40 * i, l: (i % 2 === 0 ? -28 : 28) };
 }
@@ -96,7 +96,7 @@ export function buildRaceSim() {
   game.p2pLastHazardSyncAt = 0;
   resetHazardIdCounter();
 
-  const mapConfig = MAPS[game.selectedMapIdx || 0];
+  const mapConfig = getActiveMapConfig(game);
   const mapId = mapConfig.id;
 
   // Line up karts on starting grid (across from start line)
@@ -228,7 +228,7 @@ export function startRaceSim() {
   }
   game.newRecord = null;
   game.mapRecordCache = (!game.multiplayer && !isDragonEscape() && !isBattleMode())
-    ? getMapRecord(MAPS[game.selectedMapIdx || 0].id)
+    ? getMapRecord(getActiveMapConfig(game).id)
     : null;
 }
 

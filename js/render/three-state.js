@@ -29,6 +29,7 @@ export const THREE_STATE = {
   skidMarks3d: [],
   spectatorMeshes: [],
   startLineMesh: null,
+  startLightMats: [],
   edgeGlowLines: [],
   pillarRings: [],
   chevronMeshes: [],
@@ -123,8 +124,8 @@ export function dispose3DObject(obj) {
 // Small, cached procedural textures add surface detail without extra geometry or per-frame work.
 // Material disposal intentionally leaves these shared CanvasTextures alive for later map rebuilds.
 const _compassSurfaceTexture3DCache = new Map();
-export function getCompassSurfaceTexture3D(T, surface, day) {
-  const key = `${day ? "day" : "night"}:${surface}`;
+export function getCompassSurfaceTexture3D(T, surface, day, accentHex = null) {
+  const key = `${day ? "day" : "night"}:${surface}:${accentHex || "default"}`;
   if (_compassSurfaceTexture3DCache.has(key)) return _compassSurfaceTexture3DCache.get(key);
 
   const size = 256;
@@ -152,21 +153,88 @@ export function getCompassSurfaceTexture3D(T, surface, day) {
     c.fillStyle = day ? "rgba(164,255,128,0.6)" : "rgba(164,255,128,0.26)";
     c.beginPath(); c.arc(size / 2, size / 2, 4, 0, TAU); c.fill();
   } else {
-    c.fillStyle = day ? "#211c30" : "#15121f";
+    const accent = accentHex || (day ? "#7b75ff" : "#8b85ff");
+    // Base tarmac gradient (slightly lighter crown in center, darker shoulders)
+    const roadGrad = c.createLinearGradient(0, 0, 0, size);
+    if (day) {
+      roadGrad.addColorStop(0, "#1d1a2a");
+      roadGrad.addColorStop(0.18, "#2a263a");
+      roadGrad.addColorStop(0.5, "#312d42");
+      roadGrad.addColorStop(0.82, "#2a263a");
+      roadGrad.addColorStop(1, "#1d1a2a");
+    } else {
+      roadGrad.addColorStop(0, "#100e18");
+      roadGrad.addColorStop(0.18, "#181524");
+      roadGrad.addColorStop(0.5, "#1f1b2e");
+      roadGrad.addColorStop(0.82, "#181524");
+      roadGrad.addColorStop(1, "#100e18");
+    }
+    c.fillStyle = roadGrad;
     c.fillRect(0, 0, size, size);
-    c.strokeStyle = day ? "rgba(235,228,255,0.1)" : "rgba(139,133,255,0.08)";
+
+    // Dual subtle tire-wear grooves running along U (x-axis)
+    c.fillStyle = day ? "rgba(12,10,20,0.22)" : "rgba(4,3,10,0.34)";
+    c.fillRect(0, 62, size, 30);
+    c.fillRect(0, 164, size, 30);
+
+    // Deterministic fine asphalt aggregate grain
+    let h = 0x517cc1b7;
+    for (let i = 0; i < 620; i++) {
+      h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+      const gx = h & 255;
+      const gy = (h >>> 8) & 255;
+      const bright = (h >>> 16) & 1;
+      c.fillStyle = bright
+        ? (day ? "rgba(255,255,255,0.045)" : "rgba(210,205,255,0.035)")
+        : "rgba(0,0,0,0.09)";
+      c.fillRect(gx, gy, 2, 2);
+    }
+
+    // Crisp outer shoulder lines (racing boundary markings)
+    c.fillStyle = day ? "rgba(244,246,255,0.72)" : "rgba(235,232,255,0.5)";
+    c.fillRect(0, 7, size, 5);
+    c.fillRect(0, size - 12, size, 5);
+
+    // Thin inner accent trim inside shoulders
+    c.globalAlpha = day ? 0.45 : 0.42;
+    c.fillStyle = accent;
+    c.fillRect(0, 15, size, 2);
+    c.fillRect(0, size - 17, size, 2);
+    c.globalAlpha = 1;
+
+    // Subtle expansion joints across the tarmac
+    c.strokeStyle = day ? "rgba(255,255,255,0.04)" : "rgba(180,175,255,0.04)";
     c.lineWidth = 1;
     c.beginPath();
-    for (let p = 32; p < size; p += 64) {
-      c.moveTo(0, p + 0.5); c.lineTo(size, p + 0.5);
-    }
+    c.moveTo(0.5, 16); c.lineTo(0.5, size - 16);
+    c.moveTo(128.5, 16); c.lineTo(128.5, size - 16);
     c.stroke();
-    c.strokeStyle = day ? "rgba(123,117,255,0.28)" : "rgba(79,72,112,0.32)";
-    c.setLineDash([20, 28]);
-    c.beginPath(); c.moveTo(0, size / 2 + 0.5); c.lineTo(size, size / 2 + 0.5); c.stroke();
-    c.setLineDash([]);
-    c.fillStyle = day ? "rgba(253,153,39,0.28)" : "rgba(253,153,39,0.16)";
-    for (let i = 0; i < 8; i++) c.fillRect(18 + i * 29, 18 + ((i * 37) % 210), 3, 3);
+
+    // Dashed racing centerline
+    c.save();
+    c.strokeStyle = accent;
+    c.globalAlpha = day ? 0.48 : 0.42;
+    c.lineWidth = 3;
+    c.setLineDash([24, 24]);
+    c.beginPath();
+    c.moveTo(0, size / 2);
+    c.lineTo(size, size / 2);
+    c.stroke();
+    c.restore();
+
+    // Faint forward flow chevron on centerline for high-speed motion read
+    c.save();
+    c.strokeStyle = day ? "rgba(255,255,255,0.09)" : "rgba(255,255,255,0.07)";
+    c.lineWidth = 2.5;
+    c.beginPath();
+    c.moveTo(56, size / 2 - 20);
+    c.lineTo(74, size / 2);
+    c.lineTo(56, size / 2 + 20);
+    c.moveTo(184, size / 2 - 20);
+    c.lineTo(202, size / 2);
+    c.lineTo(184, size / 2 + 20);
+    c.stroke();
+    c.restore();
   }
 
   const texture = new T.CanvasTexture(tile);

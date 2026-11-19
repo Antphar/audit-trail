@@ -1,4 +1,4 @@
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { TAU, lerp, clamp, dist, len2d, pointSegProjection, rand, pick, hexToRgba, ellipseNormDist } from "../core/math.js";
 import { COMPASS_VISUAL, getMapDayPalette } from "../config/themes.js";
 import { game, isBattleMode, isDayMode, getActiveKarts, STATE } from "../core/state.js";
@@ -99,7 +99,7 @@ function getCompassFloorPattern(ctx, surfaceKey) {
 
 export class Track {
   constructor() {
-    const mapConfig = MAPS[game.selectedMapIdx || 0];
+    const mapConfig = getActiveMapConfig(game);
     WORLD_W = mapConfig.worldW;
     WORLD_H = mapConfig.worldH;
     this.waypoints = mapConfig.waypoints;
