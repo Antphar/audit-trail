@@ -1,6 +1,6 @@
 import { CHARACTERS } from "../config/characters.js";
 import { clamp } from "../core/math.js";
-import { MAPS, regenerateDragonTrail } from "../config/maps.js";
+import { MAPS, getActiveMapConfig, regenerateDragonTrail } from "../config/maps.js";
 import { STATE, game, isBattleMode, isGrandPrixSelection } from "../core/state.js";
 import { Sound } from "../audio/sound.js";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../net/p2p.js";
 import { uiRuntime } from "./ui-runtime.js";
 import { netRuntime } from "../net/net-runtime.js";
-import { getRaceStartButtonLabel } from "./select.js";
+import { getRaceStartButtonLabel, renderModeToggle } from "./select.js";
 
 const p2pHostStatus = document.getElementById("p2p-host-status");
 const p2pCodeBox = document.getElementById("p2p-code-box");
@@ -111,7 +111,7 @@ export function startP2pRaceFromSelection() {
   uiRuntime.prepareRaceFormatFromSelection();
   // Regenerate dragon trail with current seed so host has fresh deterministic trail
   let dragonSeed = null;
-  if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
+  if (getActiveMapConfig(game).id === "dragon_escape") {
     dragonSeed = Math.floor(Math.random() * 2147483647);
     regenerateDragonTrail(dragonSeed);
   }
@@ -128,6 +128,7 @@ export function startP2pRaceFromSelection() {
     players: game.p2pPlayers,
     mapIdx: game.selectedMapIdx,
     mapSelection: game.mapSelection,
+    proceduralSeed: game.customMapConfig?.proceduralSeed ?? null,
     grandPrixRaces: uiRuntime.getGrandPrixRaces(),
     trackIdx: Sound.trackIdx,
     dragonSeed,
@@ -281,7 +282,7 @@ export function updateP2pBattleLobbyUi() {
   const showBattleRules = isBattleMode() || (game.p2pMode && isArenaMap(game.selectedMapIdx));
   if (battleSection) battleSection.style.display = showBattleRules ? "flex" : "none";
   if (showBattleRules) uiRuntime.renderApprovalsSelect();
-  const isGuest = game.p2pMode && game.p2pRole === "guest";
+  const isGuest = !!(game.p2pMode && game.p2pRole === "guest");
   if (battleSection) {
     battleSection.querySelectorAll("button").forEach((b) => {
       b.disabled = isGuest;
@@ -289,6 +290,8 @@ export function updateP2pBattleLobbyUi() {
     });
   }
   if (game.p2pMode) {
+    const mapTitle = document.getElementById("map-select-title");
+    if (mapTitle) mapTitle.innerText = showBattleRules ? "Select Arena Map" : "Select Circuit or Grand Prix";
     const subtitle = document.getElementById("lobby-subtitle");
     const hint = document.getElementById("lobby-hint");
     if (subtitle) {
@@ -302,6 +305,7 @@ export function updateP2pBattleLobbyUi() {
         : "Host picks mode/map/rules · Pick coder · Space/Enter to ready";
     }
   }
+  renderModeToggle();
 }
 export function enterP2pSelectScreen() {
   syncP2pSelectionFromRoster();

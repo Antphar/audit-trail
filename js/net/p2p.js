@@ -1,6 +1,6 @@
 import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
-import { MAPS, GRAND_PRIX_ID, regenerateDragonTrail } from "../config/maps.js";
+import { MAPS, GRAND_PRIX_ID, getActiveMapConfig, regenerateDragonTrail } from "../config/maps.js";
 import { clamp, dist } from "../core/math.js";
 import { simNow } from "../core/clock.js";
 import { screens } from "../ui/screens.js";
@@ -221,6 +221,7 @@ export function getP2pLobbyMapPayload() {
     battleUntimed: !!game.battleUntimed,
     mapIdx: game.selectedMapIdx,
     mapSelection: game.mapSelection,
+    proceduralSeed: game.customMapConfig?.proceduralSeed ?? null,
     grandPrixRaces: netRuntime.getGrandPrixRaces ? netRuntime.getGrandPrixRaces() : 3,
     trackIdx: Sound.trackIdx,
   };
@@ -735,7 +736,7 @@ function handleP2pSelectUpdate(data, sourceConn = null) {
 
 function handleP2pMapUpdate(data, sourceConn = null) {
   netRuntime.applyLobbyMapSelection(data);
-  const selectedMap = MAPS[game.selectedMapIdx || 0];
+  const selectedMap = getActiveMapConfig(game);
   if (selectedMap) netRuntime.previewSelectedMapMusic(selectedMap);
   netRuntime.renderMapSelect();
   netRuntime.renderApprovalsSelect();
@@ -782,7 +783,7 @@ function handleP2pStartRace(data, sourceConn = null) {
   }
 
   // Sync dragon trail from host seed so all clients have the same map
-  if (data.dragonSeed !== undefined && MAPS[game.selectedMapIdx].id === "dragon_escape") {
+  if (data.dragonSeed !== undefined && getActiveMapConfig(game).id === "dragon_escape") {
     regenerateDragonTrail(data.dragonSeed);
   }
 

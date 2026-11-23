@@ -65,7 +65,7 @@ function getCompassFloorPattern(ctx, surfaceKey) {
     oc.beginPath(); oc.arc(tile / 2, tile / 2, 2, 0, TAU); oc.fill();
   } else if (surface === "grass") {
     const mapPal = day && parts[2] ? getMapDayPalette(parts[2]) : null;
-    oc.strokeStyle = day ? (mapPal?.grassGrid || "rgba(79, 72, 112, 0.09)") : "rgba(123, 117, 255, 0.06)";
+    oc.strokeStyle = day ? (mapPal?.grassGrid || "rgba(79, 72, 112, 0.09)") : "rgba(123, 117, 255, 0.07)";
     oc.lineWidth = 1;
     oc.beginPath();
     oc.moveTo(0, tile - 0.5);
@@ -73,8 +73,17 @@ function getCompassFloorPattern(ctx, surfaceKey) {
     oc.moveTo(tile - 0.5, 0);
     oc.lineTo(tile - 0.5, tile);
     oc.stroke();
-    oc.fillStyle = day ? (mapPal?.grassTint || "rgba(230, 255, 220, 0.24)") : "rgba(235, 228, 255, 0.04)";
+    // Subtle sub-grid and micro crosshair nodes for depth in 2D view
+    oc.strokeStyle = day ? "rgba(79, 72, 112, 0.045)" : "rgba(164, 255, 128, 0.035)";
+    oc.beginPath();
+    oc.moveTo(tile * 0.5, 0); oc.lineTo(tile * 0.5, tile);
+    oc.moveTo(0, tile * 0.5); oc.lineTo(tile, tile * 0.5);
+    oc.stroke();
+    oc.fillStyle = day ? (mapPal?.grassTint || "rgba(230, 255, 220, 0.24)") : "rgba(235, 228, 255, 0.045)";
     oc.fillRect(0, 0, tile, 2);
+    oc.fillStyle = day ? "rgba(123, 117, 255, 0.16)" : "rgba(87, 242, 255, 0.14)";
+    oc.fillRect(tile * 0.5 - 2, tile * 0.5 - 0.5, 5, 1);
+    oc.fillRect(tile * 0.5 - 0.5, tile * 0.5 - 2, 1, 5);
   } else {
     oc.fillStyle = day ? "#211c30" : "#15121f";
     oc.fillRect(0, 0, tile, tile);
@@ -169,17 +178,34 @@ export class Track {
   }
 
   _normalizeRamps(entries) {
-    return entries.map((r) => ({
-      x: r.x,
-      y: r.y,
-      ang: r.ang,
-      w: r.w || 70,
-      h: r.h || 36,
-      kind: r.kind || "ramp",
-      impulse: r.impulse ?? (r.kind === "bump" ? BUMP_IMPULSE : RAMP_IMPULSE),
-      minSpeed: r.minSpeed ?? (r.kind === "bump" ? 2.0 : 3.2),
-      cooldown: new Map(),
-    }));
+    const out = [];
+    for (const r of entries) {
+      let x = r.x;
+      let y = r.y;
+      let ang = r.ang;
+      if (Number.isFinite(r.seg)) {
+        const s = this.segments[r.seg];
+        if (!s) continue;
+        const t = Number.isFinite(r.t) ? r.t : 0.5;
+        const lat = Number.isFinite(r.lateral) ? r.lateral : 0;
+        x = s.a.x + s.dx * t + s.nx * lat;
+        y = s.a.y + s.dy * t + s.ny * lat;
+        ang = Number.isFinite(r.ang) ? r.ang : Math.atan2(s.dy, s.dx);
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      out.push({
+        x,
+        y,
+        ang: Number.isFinite(ang) ? ang : 0,
+        w: r.w || 70,
+        h: r.h || 36,
+        kind: r.kind || "ramp",
+        impulse: r.impulse ?? (r.kind === "bump" ? BUMP_IMPULSE : RAMP_IMPULSE),
+        minSpeed: r.minSpeed ?? (r.kind === "bump" ? 2.0 : 3.2),
+        cooldown: new Map(),
+      });
+    }
+    return out;
   }
 
   _buildCheckpointGroups(groups) {
@@ -293,7 +319,7 @@ export class Track {
   }
 
   _generateDecor() {
-    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const mapId = getActiveMapConfig(game).id;
     const isDragon = mapId === "dragon_escape";
     const decor = [];
     const colors = isDragon
@@ -351,7 +377,7 @@ export class Track {
 
   _generateSpectators() {
     const specs = [];
-    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const mapId = getActiveMapConfig(game).id;
     if (mapId === "dragon_escape") return specs;
     const colors = ["#ff4d6d", "#7b75ff", "#fd9927", "#a4ff80", "#57f2ff", "#b983ff", "#ff6b35", "#ffd86b"];
     // Place small clusters of spectators along track edges
@@ -783,7 +809,7 @@ export class Track {
     // Grass background tile
     this._drawGrass(ctx);
 
-    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const mapId = getActiveMapConfig(game).id;
     const day = isDayMode();
     const dayPal = day ? getMapDayPalette(mapId) : null;
 
@@ -857,6 +883,9 @@ export class Track {
 
     // Start/finish line (checkered) — hidden in Battle (no laps/goal in the arena)
     if (!this.isOpen && !isBattleMode()) this._drawStartLine(ctx);
+
+    // Launch ramps & speed bumps on circuit maps
+    this.drawRamps(ctx, time);
 
     // Trees / decorations (Holographic pillars)
     this._drawDecor(ctx);
@@ -1220,7 +1249,7 @@ export class Track {
   }
 
   _drawGrass(ctx) {
-    const mapId = MAPS[game.selectedMapIdx || 0].id;
+    const mapId = getActiveMapConfig(game).id;
     const isDragon = mapId === "dragon_escape";
     const day = isDayMode();
     const dayPal = day ? getMapDayPalette(mapId) : null;

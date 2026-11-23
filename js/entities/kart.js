@@ -59,8 +59,38 @@ export function integrateKartVertical(kart, dt) {
   z += vz * dt;
   if (z <= 0) {
     const wasAir = (kart.z || 0) > AIRBORNE_THRESHOLD;
+    const landedTrick = wasAir && kart.trickReady && kart.trickDone;
     kart.z = 0;
     kart.vz = 0;
+    kart.trickReady = false;
+    kart.trickDone = false;
+    kart.trickSpin = 0;
+    kart.trickDir = 0;
+    kart.airTime = 0;
+    if (landedTrick) {
+      kart.boostTimer = Math.max(kart.boostTimer || 0, 38);
+      kart.driftBoostCount = (kart.driftBoostCount || 0) + 1;
+      if (game.particles) {
+        game.particles.add({
+          type: "text",
+          x: kart.x,
+          y: kart.y - 24,
+          vx: 0,
+          vy: -0.9,
+          life: 40,
+          maxLife: 40,
+          size: 13,
+          color: "#ffd86b",
+          text: "TRICK BOOST!",
+        });
+        game.particles.burst(kart.x, kart.y, "#ffd86b", 12, { type: "spark", spdMin: 1.8, spdMax: 4.8 });
+      }
+      if (kart.isPlayer) {
+        bus.emit("kart:boost", { kart, trickLanding: true });
+        game.flash = Math.max(game.flash, 6);
+        game.shake = Math.max(game.shake, 3.5);
+      }
+    }
     if (wasAir && kart.isPlayer) {
       bus.emit("kart:land", { kart });
       if (game.particles) spawnRampLandingFx(kart);
@@ -144,6 +174,13 @@ export function checkTrackRamps(kart, track) {
     ramp.cooldown.set(kart, now);
     const impulse = ramp.impulse ?? (ramp.kind === "bump" ? BUMP_IMPULSE : RAMP_IMPULSE);
     kart.vz = Math.max(kart.vz || 0, impulse);
+    if (ramp.kind === "ramp") {
+      kart.trickReady = true;
+      kart.trickDone = false;
+      kart.trickSpin = 0;
+      kart.trickDir = 0;
+      kart.airTime = 0;
+    }
     if (kart.isPlayer) {
       if (ramp.kind === "ramp") bus.emit("kart:jump", { kart, ramp });
       else Sound.tone(420, 0.05, "triangle", 0.1, 200);
@@ -230,6 +267,11 @@ export class Kart {
     this.heading = heading;        // facing direction (radians)
     this.vx = 0; this.vy = 0;       // velocity vector
     this.z = 0; this.vz = 0;        // vertical jump state (same dt units as vx/vy)
+    this.trickReady = false;
+    this.trickDone = false;
+    this.trickSpin = 0;
+    this.trickDir = 0;
+    this.airTime = 0;
     this.charId = char.id;
     this.color = char.color;
     this.name = char.name;
@@ -543,6 +585,9 @@ export class Kart {
     } else {
       vF *= Math.pow(1 - this.friction, dt);
     }
+    if (this.boostTimer > 0 && canThrottle && !input.back) {
+      vF += this.acceleration * 0.6 * dt;
+    }
 
     // Off-road slowdown
     let speedCapMul = 1;
@@ -552,7 +597,9 @@ export class Kart {
     }
 
     // Speed cap (boost increases, drafting increases it slightly too)
-    const powerMult = this.boostTimer > 0 ? 1.55 : (this.draftBoostTimer > 0 ? 1.25 : this.citationBoostTimer > 0 ? 1.12 : 1);
+    const powerMult = this.boostTimer > 0
+      ? (this.ultraBoostActive ? 1.75 : 1.65)
+      : (this.draftBoostTimer > 0 ? 1.25 : this.citationBoostTimer > 0 ? 1.12 : 1);
     const slowMult = this.placeboSlowTimer > 0 ? 0.72 : 1;
     const cap = this.maxSpeed * powerMult * slowMult * speedCapMul;
     if (vF > cap && !input.back) vF = Math.max(cap, vF - 0.14 * dt);
@@ -649,25 +696,33 @@ export class Kart {
       if (this.driftCharge >= TUNING.DRIFT_TIER1) {
         this.driftBoostCount = (this.driftBoostCount || 0) + 1;
         let boostTime = 0;
+        let surge = 0;
+        let surgeCapMult = 1.65;
         let text = "";
         let color = "";
 
         if (this.driftCharge >= TUNING.DRIFT_TIER3) {
           boostTime = TUNING.DRIFT_BOOST_T3;
+          surge = TUNING.DRIFT_SURGE_T3;
+          surgeCapMult = 1.75;
           text = "ULTRA TURBO!";
           color = "#ff4d6d";
           this.ultraBoostActive = true;
         } else if (this.driftCharge >= TUNING.DRIFT_TIER2) {
           boostTime = TUNING.DRIFT_BOOST_T2;
+          surge = TUNING.DRIFT_SURGE_T2;
           text = "SUPER TURBO!";
           color = "#fd9927";
         } else {
           boostTime = TUNING.DRIFT_BOOST_T1;
+          surge = TUNING.DRIFT_SURGE_T1;
           text = "MINI TURBO";
           color = "#00e5ff";
         }
 
         this.boostTimer = Math.max(this.boostTimer, boostTime);
+        vF = Math.min(this.maxSpeed * surgeCapMult, Math.max(vF, this.maxSpeed * 0.9) + surge);
+        vL *= 0.45;
         runtime.triggerQuote(this, "boost");
 
         // Add floaty text particle
@@ -729,6 +784,24 @@ export class Kart {
 
     integrateKartVertical(this, dt);
     checkTrackRamps(this, track);
+
+    // Mid-air ramp trick: press drift or steer while airborne off a ramp to spin & earn a landing mini-turbo
+    if (isKartAirborne(this) && this.trickReady) {
+      this.airTime = (this.airTime || 0) + dt;
+      if (!this.trickDone && (input.drift || (this.airTime >= 3 && Math.abs(steerInput) >= 0.5))) {
+        this.trickDone = true;
+        this.trickDir = steerInput !== 0 ? Math.sign(steerInput) : (this.driftDir || 1);
+        if (this.isPlayer) {
+          Sound.tone(540, 0.09, "triangle", 0.14, 1020);
+          if (game.particles) {
+            game.particles.burst(this.x, this.y, "#57f2ff", 10, { type: "spark", spdMin: 1.5, spdMax: 4.2 });
+          }
+        }
+      }
+      if (this.trickDone) {
+        this.trickSpin = Math.min(TAU, (this.trickSpin || 0) + 0.38 * dt);
+      }
+    }
 
     // Wall (deep off-road) collision: clamp position back toward road / arena boundary
     if (track.arenaFloor) {
@@ -955,7 +1028,8 @@ export class Kart {
 
     ctx.save();
     ctx.translate(this.x, this.y - zOff - (bob + airBob) * 0.5);
-    ctx.rotate(this.heading + lean * 0.025);
+    const trickAngle = this.trickDone ? (this.trickSpin || 0) * (this.trickDir || 1) : 0;
+    ctx.rotate(this.heading + lean * 0.025 + trickAngle);
     if (airScale !== 1) ctx.scale(airScale, airScale);
 
     const frameCol = COMPASS_VISUAL.baseDark;
@@ -1007,6 +1081,19 @@ export class Kart {
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(0, 0, hitR + 2, 0, TAU);
+      ctx.stroke();
+    }
+    if ((this.slipstreamTimer || 0) > 8 || (this.draftBoostTimer || 0) > 0) {
+      const draftProg = this.draftBoostTimer > 0 ? 1 : clamp((this.slipstreamTimer - 8) / 37, 0.15, 1);
+      ctx.strokeStyle = `rgba(87, 242, 255, ${0.35 + draftProg * 0.5})`;
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(4, 0, hitR + 8, -0.75, 0.75);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(164, 255, 128, ${0.22 + draftProg * 0.35})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(8, 0, hitR + 12, -0.55, 0.55);
       ctx.stroke();
     }
 
@@ -1363,13 +1450,21 @@ export class Kart {
 
   _drawFlame(ctx, time) {
     const fx = Math.cos(this.heading), fy = Math.sin(this.heading);
-    const baseX = this.x - fx * 16, baseY = this.y - fy * 16;
+    const zOff = kartVisualZOffset(this);
+    const baseX = this.x - fx * 16, baseY = this.y - fy * 16 - zOff;
+    const isUltra = !!this.ultraBoostActive;
+    const isDraft = !isUltra && (this.draftBoostTimer || 0) > 0;
+    const colors = isUltra
+      ? ["rgba(255,50,150,0.92)", "rgba(180,90,255,0.88)", "rgba(255,235,255,0.85)"]
+      : isDraft
+        ? ["rgba(0,180,255,0.9)", "rgba(87,242,255,0.85)", "rgba(220,255,255,0.85)"]
+        : ["rgba(255,80,40,0.9)", "rgba(255,180,40,0.85)", "rgba(255,250,180,0.8)"];
     for (let i = 0; i < 3; i++) {
-      const len = 22 + Math.sin(time * 0.05 + i) * 6 + i * 4;
-      const w = 8 - i * 2;
+      const len = (isUltra ? 28 : 22) + Math.sin(time * 0.05 + i) * 6 + i * 4;
+      const w = (isUltra ? 9.5 : 8) - i * 2;
       const tipX = baseX - fx * len + (-fy * (i - 1) * 2);
       const tipY = baseY - fy * len + (fx * (i - 1) * 2);
-      ctx.fillStyle = i === 0 ? "rgba(255,80,40,0.9)" : i === 1 ? "rgba(255,180,40,0.85)" : "rgba(255,250,180,0.8)";
+      ctx.fillStyle = colors[i];
       ctx.beginPath();
       ctx.moveTo(baseX + fy * w, baseY - fx * w);
       ctx.lineTo(baseX - fy * w, baseY + fx * w);

@@ -48,6 +48,9 @@ import {
 import {
   MAPS,
   GRAND_PRIX_ID,
+  RANDOM_CIRCUIT_ID,
+  getActiveMapConfig,
+  createRandomCircuitConfig,
   clampLaps,
   clampGrandPrixRaces,
   clampAiCount,
@@ -242,7 +245,6 @@ const finishResults = document.getElementById("finish-results");
 const finishTitle = document.getElementById("finish-title");
 const start1pBtn = document.getElementById("start-1p-btn");
 const start2pBtn = document.getElementById("start-2p-btn");
-const startBattleBtn = document.getElementById("start-battle-btn");
 const driveBtn = document.getElementById("drive-btn");
 const selectBackBtn = document.getElementById("select-back-btn");
 const pauseResumeBtn = document.getElementById("pause-resume-btn");
@@ -787,7 +789,7 @@ function buildRace() {
   }
   game.finishScheduled = false;
   ensureSelectedMapMatchesMode();
-  const mapConfig = MAPS[game.selectedMapIdx || 0];
+  const mapConfig = getActiveMapConfig(game);
   const mapId = mapConfig.id;
   const assignedTrack = Number.isInteger(mapConfig.musicTrack) ? mapConfig.musicTrack : (Sound.trackIdx || 0);
   Sound.trackIdx = Math.floor(clamp(assignedTrack, 0, Sound.tracks.length - 1));
@@ -1208,8 +1210,10 @@ function update(dt, time) {
   const simResult = simulationStep(dt, time);
   if (simResult?.earlyReturn) return;
 
+  const stillRacingSim = game.state === STATE.RACING ||
+    (game.p2pMode && game.state === STATE.PAUSED && game._pauseFromState === STATE.RACING);
 
-  if (racingSim && game.player && game.track) {
+  if (racingSim && stillRacingSim && game.player && game.track) {
     const p1OnRumble = game.track.isOnRumble(game.player.x, game.player.y);
     const p1Speed = game.player.speed();
     if (p1OnRumble && p1Speed > 1.5) {
@@ -1450,21 +1454,6 @@ start2pBtn.addEventListener("click", () => {
   game.multiplayer = true;
   showSelectScreen();
 });
-if (startBattleBtn) {
-  startBattleBtn.addEventListener("click", () => {
-    Sound.ensure(); Sound.resume();
-    Sound.playVocoderTitle();
-    game.tournament = null;
-    game.mode = "battle";
-    game.multiplayer = false;
-    ensureSelectedMapMatchesMode();
-    // Default to the classic waypoint AI; the select screen lists battle-trained models to pick from.
-    selectedAiModelId = "classic";
-    selectedAiModelWeights = null;
-    selectedAiOpponentModels = {};
-    showSelectScreen();
-  });
-}
 driveBtn.addEventListener("click", async () => {
   Sound.ensure(); Sound.resume();
   if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) {
@@ -1538,7 +1527,13 @@ if (nextTrackBtn) {
   nextTrackBtn.addEventListener("click", () => {
     Sound.ensure(); Sound.resume();
     if (game.p2pMode) { showSelectScreen(); return; }
-    game.selectedMapIdx = ((game.selectedMapIdx || 0) + 1) % MAPS.length;
+    if (game.mapSelection === RANDOM_CIRCUIT_ID) {
+      game.customMapConfig = createRandomCircuitConfig();
+    } else {
+      game.customMapConfig = null;
+      game.selectedMapIdx = ((game.selectedMapIdx || 0) + 1) % MAPS.length;
+      game.mapSelection = MAPS[game.selectedMapIdx].id;
+    }
     startSelectedRace().catch(() => showSelectScreen());
   });
 }
@@ -1679,7 +1674,7 @@ function getSortedModeModels(selectedMap) {
 }
 
 function populateAiModelSelect(selectEl, selectedId = "classic", { shortLabels = false } = {}) {
-  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
+  const selectedMap = getActiveMapConfig(game)?.id;
   const { models, getTrackMetrics } = getSortedModeModels(selectedMap);
   selectEl.textContent = "";
 
@@ -1714,11 +1709,22 @@ function populateAiModelSelect(selectEl, selectedId = "classic", { shortLabels =
 
 function renderAiModelSelector() {
   if (!aiModelSelect) return;
-  const selectedMap = MAPS[game.selectedMapIdx || 0]?.id;
+  const selectedMap = getActiveMapConfig(game)?.id;
   const { models } = getSortedModeModels(selectedMap);
+  const compatibleIds = new Set(
+    models
+      .filter((m) => !(Number.isFinite(m.actionCount) && m.actionCount > HEADLESS_DQN_ACTIONS.length))
+      .map((m) => m.id || m.path)
+  );
   const current = selectedAiModelId;
-  const currentExists = current === "classic" || models.some(m => (m.id || m.path) === current);
-  const nextId = currentExists ? current : "classic";
+  const currentExists = current === "classic" || compatibleIds.has(current);
+  const fallbackModel = models.find((m) => compatibleIds.has(m.id || m.path));
+  const nextId = currentExists ? current : (fallbackModel ? (fallbackModel.id || fallbackModel.path) : "classic");
+  for (const [charId, modelId] of Object.entries(selectedAiOpponentModels)) {
+    if (modelId !== "classic" && !compatibleIds.has(modelId)) {
+      delete selectedAiOpponentModels[charId];
+    }
+  }
   populateAiModelSelect(aiModelSelect, nextId, { shortLabels: false });
   aiModelSelect.value = nextId;
   selectedAiModelId = aiModelSelect.value;

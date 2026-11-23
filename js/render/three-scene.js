@@ -29,6 +29,17 @@ export function apply3DMapTheme() {
   THREE_STATE.scene.fog = new T.FogExp2(theme.fog[0], theme.fog[1]);
 
   if (THREE_STATE.starField) THREE_STATE.starField.visible = !day;
+  if (THREE_STATE.skyCloudsGroup) THREE_STATE.skyCloudsGroup.visible = day;
+  if (THREE_STATE.skyAuroraGroup) {
+    THREE_STATE.skyAuroraGroup.visible = !day;
+    const auroraAccent = new T.Color(theme.gridColor || 0x57f2ff);
+    THREE_STATE.skyAuroraGroup.children.forEach((ribbon, idx) => {
+      if (ribbon.material?.color) {
+        const alt = idx === 1 ? 0x57f2ff : idx === 2 ? 0xa4ff80 : auroraAccent.getHex();
+        ribbon.material.color.setHex(alt).lerp(auroraAccent, 0.45);
+      }
+    });
+  }
 
   // Daylight lighting tweaks
   if (THREE_STATE.dirLight) {
@@ -428,6 +439,91 @@ export function init3DScene() {
   THREE_STATE.scene.add(starField);
   THREE_STATE.starField = starField;
 
+  // Animated daytime volumetric cloud ring (follows camera firmament)
+  const cloudsGroup = new T.Group();
+  const cloudMat = new T.MeshBasicMaterial({
+    color: 0xf4f8ff,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+  });
+  const puffGeo = new T.SphereGeometry(1, 7, 5);
+  for (let i = 0; i < 14; i++) {
+    const cluster = new T.Group();
+    const ang = (i / 14) * TAU + (i % 3) * 0.17;
+    const radius = 1750 + (i % 4) * 480;
+    const alt = 620 + (i % 5) * 95;
+    cluster.userData = { baseAng: ang, radius, alt, speed: 0.000018 + (i % 4) * 0.000007 };
+    const puffCount = 3 + (i % 3);
+    for (let p = 0; p < puffCount; p++) {
+      const puff = new T.Mesh(puffGeo, cloudMat);
+      const sx = 110 + ((i + p * 3) % 4) * 48;
+      const sy = 34 + (p % 2) * 18;
+      const sz = 75 + ((i * 2 + p) % 3) * 32;
+      puff.scale.set(sx, sy, sz);
+      puff.position.set((p - (puffCount - 1) * 0.5) * 95, (p % 2) * 18, ((p % 3) - 1) * 35);
+      cluster.add(puff);
+    }
+    cluster.position.set(Math.cos(ang) * radius, alt, Math.sin(ang) * radius);
+    cluster.rotation.y = -ang + Math.PI / 2;
+    cloudsGroup.add(cluster);
+  }
+  cloudsGroup.visible = isDayMode();
+  THREE_STATE.scene.add(cloudsGroup);
+  THREE_STATE.skyCloudsGroup = cloudsGroup;
+
+  // Animated nighttime aurora ribbons across the upper sky dome
+  const auroraGroup = new T.Group();
+  const auroraSpecs = [
+    { radius: 3400, alt: 980, height: 340, color: 0x7b75ff, speed: 0.00045, phase: 0.0, arc: Math.PI * 0.85 },
+    { radius: 3150, alt: 1180, height: 280, color: 0x57f2ff, speed: 0.00062, phase: 2.1, arc: Math.PI * 0.72 },
+    { radius: 3650, alt: 860, height: 260, color: 0xa4ff80, speed: 0.00038, phase: 4.3, arc: Math.PI * 0.65 },
+  ];
+  for (const spec of auroraSpecs) {
+    const segs = 28;
+    const pos = [];
+    const cols = [];
+    const indices = [];
+    for (let i = 0; i <= segs; i++) {
+      const u = i / segs;
+      const a = spec.phase + (u - 0.5) * spec.arc;
+      const waveR = spec.radius + Math.sin(u * Math.PI * 3) * 260;
+      const x = Math.cos(a) * waveR;
+      const z = Math.sin(a) * waveR;
+      const edgeFade = Math.sin(u * Math.PI);
+      const yBot = spec.alt + Math.sin(u * Math.PI * 2 + spec.phase) * 90;
+      const yTop = yBot + spec.height * (0.65 + 0.35 * edgeFade);
+      pos.push(x, yBot, z, x * 1.03, yTop, z * 1.03);
+      // Soft gradient: vivid at base fading to transparent at top & ends
+      cols.push(edgeFade * 0.95, edgeFade * 0.95, edgeFade * 0.95);
+      cols.push(edgeFade * 0.08, edgeFade * 0.08, edgeFade * 0.08);
+      if (i < segs) {
+        const b = i * 2;
+        indices.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+      }
+    }
+    const geo = new T.BufferGeometry();
+    geo.setAttribute("position", new T.Float32BufferAttribute(pos, 3));
+    geo.setAttribute("color", new T.Float32BufferAttribute(cols, 3));
+    geo.setIndex(indices);
+    const mat = new T.MeshBasicMaterial({
+      color: spec.color,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+      blending: T.AdditiveBlending,
+      side: T.DoubleSide,
+      fog: false,
+    });
+    const ribbon = new T.Mesh(geo, mat);
+    ribbon.userData = { speed: spec.speed, phase: spec.phase };
+    auroraGroup.add(ribbon);
+  }
+  auroraGroup.visible = !isDayMode();
+  THREE_STATE.scene.add(auroraGroup);
+  THREE_STATE.skyAuroraGroup = auroraGroup;
+
   // HUD overlay canvas
   if (hudCanvas) {
     hudCanvas.width = Math.floor(renderRuntime.getViewW() * renderRuntime.getDpr());
@@ -452,4 +548,29 @@ export function init3DScene() {
       }
     }
   });
+}
+
+export function update3DSkyAnimation(time) {
+  if (THREE_STATE.skyCloudsGroup?.visible) {
+    for (const cluster of THREE_STATE.skyCloudsGroup.children) {
+      const ud = cluster.userData;
+      if (!ud) continue;
+      const ang = ud.baseAng + time * ud.speed;
+      cluster.position.x = Math.cos(ang) * ud.radius;
+      cluster.position.z = Math.sin(ang) * ud.radius;
+      cluster.position.y = ud.alt + Math.sin(time * 0.00025 + ud.baseAng) * 18;
+      cluster.rotation.y = -ang + Math.PI / 2;
+    }
+  }
+  if (THREE_STATE.skyAuroraGroup?.visible) {
+    THREE_STATE.skyAuroraGroup.children.forEach((ribbon, idx) => {
+      const ud = ribbon.userData;
+      if (!ud) return;
+      ribbon.rotation.y = Math.sin(time * ud.speed + ud.phase) * 0.14 + time * 0.000012 * (idx % 2 === 0 ? 1 : -1);
+      ribbon.position.y = Math.sin(time * 0.0006 + ud.phase) * 36;
+      if (ribbon.material) {
+        ribbon.material.opacity = 0.17 + 0.09 * Math.sin(time * 0.0011 + ud.phase * 1.7);
+      }
+    });
+  }
 }

@@ -386,13 +386,42 @@ const MAP_THEMES = Object.freeze({
 });
 
 const _MAP_THEME_DEFAULT = MAP_THEMES.core_mainframe;
+const _PROCEDURAL_THEME_POOL = Object.freeze([
+  "core_mainframe",
+  "compliance_chicane",
+  "audit_super_ring",
+  "black_ice_data_vault",
+  "protocol_amendment_labyrinth",
+]);
+
+function resolveThemeMapId(mapId) {
+  if (typeof mapId === "string" && (mapId === "procedural" || mapId.startsWith("procedural:"))) {
+    const raw = mapId.slice("procedural:".length);
+    const parsed = Number(raw);
+    let idx = 0;
+    if (Number.isFinite(parsed)) {
+      idx = Math.abs(parsed >>> 0) % _PROCEDURAL_THEME_POOL.length;
+    } else {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < raw.length; i++) {
+        h ^= raw.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      idx = h % _PROCEDURAL_THEME_POOL.length;
+    }
+    return _PROCEDURAL_THEME_POOL[idx];
+  }
+  return mapId;
+}
 
 function getMapDayPalette(mapId) {
-  return MAP_THEMES[mapId]?.day?.d2 || _MAP_THEME_DEFAULT.day.d2;
+  const resolved = resolveThemeMapId(mapId);
+  return MAP_THEMES[resolved]?.day?.d2 || _MAP_THEME_DEFAULT.day.d2;
 }
 
 function getMap3DTheme(mapId, isDay) {
-  const entry = MAP_THEMES[mapId] || _MAP_THEME_DEFAULT;
+  const resolved = resolveThemeMapId(mapId);
+  const entry = MAP_THEMES[resolved] || _MAP_THEME_DEFAULT;
   const mode = isDay ? entry.day : entry.night;
   return { ...mode.d3, isDay: !!isDay };
 }
@@ -406,4 +435,4 @@ const MAP_DAY_PALETTES = Object.freeze(
   )
 );
 
-export { COMPASS_VISUAL, MAP_THEMES, MAP_DAY_PALETTES, getMapDayPalette, getMap3DTheme };
+export { COMPASS_VISUAL, MAP_THEMES, MAP_DAY_PALETTES, resolveThemeMapId, getMapDayPalette, getMap3DTheme };

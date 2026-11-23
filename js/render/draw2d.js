@@ -8,7 +8,7 @@ import {
   getActiveKarts,
   getKartById,
 } from "../core/state.js";
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { kartVisualZOffset } from "../entities/particles.js";
 import { renderRuntime } from "./render-runtime.js";
 import { THREE_STATE } from "./three-state.js";
@@ -294,7 +294,7 @@ export function drawWorld(pKart, left, top, width, height, time, isP2) {
 
   drawMergeRequestTethers(time);
   // Dragon head visual for Dragon's Escape map
-  if (MAPS[game.selectedMapIdx || 0].id === "dragon_escape") {
+  if (getActiveMapConfig(game).id === "dragon_escape") {
     drawDragonHead(pKart, time);
   }
 

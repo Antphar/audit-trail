@@ -23,12 +23,15 @@ const TUNING = {
   DRIFT_TIER2: 60,
   DRIFT_TIER3: 100,
 
-  // Drift mini-turbo boost durations (frames)
-  DRIFT_BOOST_T1: 24,
-  DRIFT_BOOST_T2: 48,
-  DRIFT_BOOST_T3: 72,
+  // Drift mini-turbo boost durations (frames) & release surge
+  DRIFT_BOOST_T1: 34,
+  DRIFT_BOOST_T2: 62,
+  DRIFT_BOOST_T3: 95,
+  DRIFT_SURGE_T1: 2.0,
+  DRIFT_SURGE_T2: 3.2,
+  DRIFT_SURGE_T3: 4.5,
   DRIFT_SPEED_RETENTION: 0.986,
-  DRIFT_TURN_MULT: 1.65,
+  DRIFT_TURN_MULT: 1.32,
   DRIFT_CHARGE_RATE: 1.18,
   DRIFT_SPARK_CHANCE: 0.52,
 
@@ -37,9 +40,9 @@ const TUNING = {
   FRICTION: 0.020,
   REVERSE_MAX: 2.4,
   GRIP_NORMAL: 0.18,
-  GRIP_DRIFT: 0.045,
+  GRIP_DRIFT: 0.068,
   GRIP_NORMAL_ANTON: 0.14,
-  GRIP_DRIFT_ANTON: 0.035,
+  GRIP_DRIFT_ANTON: 0.055,
   OFF_ROAD_SPEED_MULT: 0.65,
 
   // Spatial audio

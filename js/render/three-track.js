@@ -1,6 +1,7 @@
 import { TAU, lerp, clamp } from "../core/math.js";
 import { game, isDayMode, isBattleMode } from "../core/state.js";
 import { MAPS, getActiveMapConfig } from "../config/maps.js";
+import { resolveThemeMapId } from "../config/themes.js";
 import { WORLD_W, WORLD_H } from "../entities/track.js";
 import {
   THREE_STATE,
@@ -47,9 +48,177 @@ export function get3DRoadEdges(track) {
       left: { x: p.x + nx * w, y: p.y + ny * w },
       right: { x: p.x - nx * w, y: p.y - ny * w },
       center: p,
+      halfW: baseW,
     });
   }
   return edges;
+}
+
+
+function hashString3D(str) {
+  let h = 2166136261 >>> 0;
+  const s = String(str || "circuit");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h;
+}
+
+export function computeTrackElevation3D(track, mapId) {
+  if (!track || track.arenaFloor || track.isOpen || !track.segments || track.segments.length < 4 || track.segments.length !== track.waypoints?.length) {
+    if (track) track._elev3d = { enabled: false };
+    return;
+  }
+  const n = track.segments.length;
+  const cumS = new Float32Array(n + 1);
+  for (let i = 0; i < n; i++) {
+    cumS[i + 1] = cumS[i] + (track.segments[i].len || 1);
+  }
+  const totalLen = Math.max(1, cumS[n]);
+
+  const seed = hashString3D(mapId);
+  const p1 = ((seed & 0xff) / 255) * TAU;
+  const p2 = (((seed >>> 8) & 0xff) / 255) * TAU;
+  const p3 = (((seed >>> 16) & 0xff) / 255) * TAU;
+
+  const baseId = resolveThemeMapId(mapId);
+  const ampByMap = {
+    audit_super_ring: 56,
+    black_ice_data_vault: 50,
+    compliance_chicane: 44,
+    regulatory_dragon_run: 46,
+    protocol_amendment_labyrinth: 30,
+  };
+  const maxAmp = String(mapId || "").startsWith("procedural:")
+    ? 44 + ((seed >>> 24) % 16)
+    : (ampByMap[baseId] ?? 46);
+
+  const rawY = new Float32Array(n);
+  const env = new Float32Array(n);
+  const turns = new Float32Array(n);
+
+  for (let i = 0; i < n; i++) {
+    const u = cumS[i] / totalLen;
+    // Start/finish straight stays completely flat with zero slope at u=0 and u=1
+    const sEnv = Math.sin(Math.PI * u);
+    const e = sEnv * sEnv;
+    env[i] = e;
+    const wave = 0.56
+      + 0.30 * Math.sin(u * TAU * 2 + p1)
+      + 0.22 * Math.cos(u * TAU * 3 + p2)
+      + 0.14 * Math.sin(u * TAU * 5 + p3);
+    rawY[i] = Math.max(0, e * Math.max(0, wave) * maxAmp);
+
+    const prev = track.segments[(i - 1 + n) % n];
+    const curr = track.segments[i];
+    const u1x = prev.dx / Math.max(1, prev.len), u1y = prev.dy / Math.max(1, prev.len);
+    const u2x = curr.dx / Math.max(1, curr.len), u2y = curr.dy / Math.max(1, curr.len);
+    const cross = u1x * u2y - u1y * u2x;
+    const dot = clamp(u1x * u2x + u1y * u2y, -1, 1);
+    turns[i] = Math.atan2(cross, dot);
+  }
+
+  // Smooth heights and corner curvature around the closed loop
+  let yArr = rawY;
+  for (let pass = 0; pass < 2; pass++) {
+    const next = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      next[i] = (yArr[(i - 1 + n) % n] * 0.25 + yArr[i] * 0.5 + yArr[(i + 1) % n] * 0.25);
+    }
+    next[0] = 0;
+    yArr = next;
+  }
+
+  let tArr = turns;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      next[i] = (tArr[(i - 1 + n) % n] * 0.25 + tArr[i] * 0.5 + tArr[(i + 1) % n] * 0.25);
+    }
+    tArr = next;
+  }
+
+  const bank = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    // Bank inward: outside edge rises, inside edge lowers, flat at start/finish
+    bank[i] = clamp(-tArr[i] * 0.17, -0.105, 0.105) * env[i];
+    const hw = track.segments[i].halfW || track.halfWidth || 100;
+    const minCenterY = Math.abs(bank[i]) * hw * 1.1;
+    if (yArr[i] < minCenterY) yArr[i] = minCenterY;
+  }
+  yArr[0] = 0;
+  bank[0] = 0;
+
+  // Catmull-Rom / cubic Hermite tangents for C1-smooth hill curves
+  const dy = new Float32Array(n);
+  const db = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const iPrev = (i - 1 + n) % n;
+    const iNext = (i + 1) % n;
+    dy[i] = (yArr[iNext] - yArr[iPrev]) * 0.5;
+    db[i] = (bank[iNext] - bank[iPrev]) * 0.5;
+  }
+  dy[0] = 0;
+  db[0] = 0;
+
+  track._elev3d = { enabled: true, y: yArr, dy, bank, db, n };
+}
+
+function sampleSegmentElevation3D(track, segIdx, t) {
+  const elev = track?._elev3d;
+  if (!elev?.enabled) return { cy: 0, dcyDt: 0, bank: 0 };
+  const n = elev.n;
+  const i0 = ((segIdx % n) + n) % n;
+  const i1 = (i0 + 1) % n;
+  const tc = clamp(t, 0, 1);
+  const t2 = tc * tc;
+  const t3 = t2 * tc;
+
+  const h00 = 2 * t3 - 3 * t2 + 1;
+  const h10 = t3 - 2 * t2 + tc;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+
+  const cy = Math.max(0, h00 * elev.y[i0] + h10 * elev.dy[i0] + h01 * elev.y[i1] + h11 * elev.dy[i1]);
+  const dcyDt = (6 * t2 - 6 * tc) * elev.y[i0]
+    + (3 * t2 - 4 * tc + 1) * elev.dy[i0]
+    + (-6 * t2 + 6 * tc) * elev.y[i1]
+    + (3 * t2 - 2 * tc) * elev.dy[i1];
+  const bank = h00 * elev.bank[i0] + h10 * elev.db[i0] + h01 * elev.bank[i1] + h11 * elev.db[i1];
+  return { cy, dcyDt, bank };
+}
+
+export function getTrackElevationAt(x, y, track = game.track) {
+  if (!track?._elev3d?.enabled) {
+    return { y: 0, bank: 0, slope: 0, ux: 1, uy: 0 };
+  }
+  const c = track.closestSegment(x, y);
+  const seg = track.segments[c.idx];
+  if (!seg) return { y: 0, bank: 0, slope: 0, ux: 1, uy: 0 };
+  const s = sampleSegmentElevation3D(track, c.idx, c.t);
+  const lat = (x - c.proj.x) * seg.nx + (y - c.proj.y) * seg.ny;
+  const hw = seg.halfW || track.halfWidth || 100;
+  const effLat = clamp(lat, -hw, hw);
+  let fade = 1;
+  const fadeStart = hw + 78;
+  if (c.dist > fadeStart) {
+    fade = clamp(1 - (c.dist - fadeStart) / 140, 0, 1);
+    fade = fade * fade * (3 - 2 * fade);
+  }
+  const roadY = Math.max(0, s.cy + effLat * s.bank) * fade;
+  const len = Math.max(1, seg.len);
+  return {
+    y: roadY,
+    bank: s.bank * fade,
+    slope: (s.dcyDt / len) * fade,
+    ux: seg.dx / len,
+    uy: seg.dy / len,
+  };
+}
+
+export function getTrackElevationY(x, y, track = game.track) {
+  return getTrackElevationAt(x, y, track).y;
 }
 
 
@@ -249,6 +418,9 @@ export function build3DRamps(group, track) {
   const T = window.THREE;
   const day = isDayMode();
   for (const ramp of track.ramps) {
+    const elev = getTrackElevationAt(ramp.x, ramp.y, track);
+    const cosA = Math.cos(ramp.ang), sinA = Math.sin(ramp.ang);
+    const alignDot = cosA * elev.ux + sinA * elev.uy;
     let mesh;
     if (ramp.kind === "bump") {
       const bumpHeight = clamp(ramp.h * 0.2, 3.5, 5);
@@ -261,8 +433,11 @@ export function build3DRamps(group, track) {
         metalness: 0.12,
       });
       mesh = new T.Mesh(geo, mat);
-      mesh.position.set(ramp.x, 0.55, ramp.y);
+      mesh.rotation.order = "YXZ";
+      mesh.position.set(ramp.x, elev.y + 0.55, ramp.y);
       mesh.rotation.y = -ramp.ang;
+      mesh.rotation.z = Math.atan(elev.slope * alignDot);
+      mesh.rotation.x = Math.atan(elev.bank) * alignDot;
       mesh.userData.rampHeight = bumpHeight;
     } else {
       const rampHeight = clamp(ramp.w * 0.09, 10, 18);
@@ -275,8 +450,11 @@ export function build3DRamps(group, track) {
         metalness: 0.22,
       });
       mesh = new T.Mesh(geo, mat);
-      mesh.position.set(ramp.x, 0.55, ramp.y);
+      mesh.rotation.order = "YXZ";
+      mesh.position.set(ramp.x, elev.y + 0.55, ramp.y);
       mesh.rotation.y = -ramp.ang;
+      mesh.rotation.z = Math.atan(elev.slope * alignDot);
+      mesh.rotation.x = Math.atan(elev.bank) * alignDot;
       mesh.userData.rampHeight = rampHeight;
     }
     mesh.userData.rampKind = ramp.kind;
@@ -398,7 +576,8 @@ export function build3DCornerChevrons(group, track, edges) {
 
     const faceDirX = -u1x * 0.72 - ox * 0.28;
     const faceDirZ = -u1y * 0.72 - oz * 0.28;
-    signGroup.position.set(sx, 0, sz);
+    const signY = getTrackElevationY(sx, sz, track);
+    signGroup.position.set(sx, signY, sz);
     signGroup.rotation.y = Math.atan2(faceDirX, faceDirZ);
     group.add(signGroup);
     THREE_STATE.chevronMeshes.push(signGroup);
@@ -407,9 +586,159 @@ export function build3DCornerChevrons(group, track, edges) {
 
 
 const _gantryBannerTexCache = new Map();
+const _sectorBannerTexCache = new Map();
+
+function getSectorBannerTexture3D(T, label, subtitle, accentHex) {
+  const key = `${label}:${subtitle}:${accentHex}`;
+  if (_sectorBannerTexCache.has(key)) return _sectorBannerTexCache.get(key);
+  const w = 512, h = 64;
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cx = c.getContext("2d");
+
+  cx.fillStyle = "#100e1d";
+  cx.fillRect(0, 0, w, h);
+  cx.fillStyle = accentHex;
+  cx.fillRect(0, 0, w, 5);
+  cx.fillRect(0, h - 5, w, 5);
+
+  // Diagonal racing stripes on edges
+  cx.fillStyle = accentHex;
+  cx.globalAlpha = 0.28;
+  for (let i = 0; i < 4; i++) {
+    cx.beginPath();
+    cx.moveTo(14 + i * 16, h - 5);
+    cx.lineTo(26 + i * 16, 5);
+    cx.lineTo(34 + i * 16, 5);
+    cx.lineTo(22 + i * 16, h - 5);
+    cx.closePath();
+    cx.fill();
+    cx.beginPath();
+    cx.moveTo(w - 14 - i * 16, h - 5);
+    cx.lineTo(w - 26 - i * 16, 5);
+    cx.lineTo(w - 34 - i * 16, 5);
+    cx.lineTo(w - 22 - i * 16, h - 5);
+    cx.closePath();
+    cx.fill();
+  }
+  cx.globalAlpha = 1;
+
+  cx.fillStyle = "#ffffff";
+  cx.font = "900 26px 'Segoe UI', system-ui, sans-serif";
+  cx.textAlign = "center";
+  cx.textBaseline = "middle";
+  cx.fillText(label, w / 2, h * 0.41);
+
+  cx.fillStyle = accentHex;
+  cx.font = "700 13px 'SFMono-Regular', Consolas, monospace";
+  cx.fillText(subtitle, w / 2, h * 0.77);
+
+  const tex = new T.CanvasTexture(c);
+  if (T.SRGBColorSpace) tex.colorSpace = T.SRGBColorSpace;
+  tex.userData = { shared: true };
+  tex.needsUpdate = true;
+  _sectorBannerTexCache.set(key, tex);
+  return tex;
+}
+
+function build3DSectorArches(group, track, trackStyle, roadDay) {
+  if (!window.THREE || !track || track.arenaFloor || track.isOpen || isBattleMode()) return;
+  const segs = track.segments;
+  if (!segs || segs.length < 8) return;
+  const T = window.THREE;
+
+  const archSpecs = segs.length >= 16
+    ? [
+        { frac: 0.28, label: "SECTOR 1", sub: "CHECKPOINT // SPEED ZONE" },
+        { frac: 0.55, label: "SECTOR 2", sub: "MID-LAP // APEX SPLIT" },
+        { frac: 0.80, label: "FINAL SECTOR", sub: "PUSH TO FINISH" },
+      ]
+    : [
+        { frac: 0.34, label: "SECTOR 2", sub: "CHECKPOINT // SPLIT" },
+        { frac: 0.68, label: "FINAL SECTOR", sub: "PUSH TO FINISH" },
+      ];
+
+  const steelMat = new T.MeshStandardMaterial({
+    color: 0x1d1c2e,
+    metalness: 0.75,
+    roughness: 0.3,
+  });
+  const ledMat = new T.MeshStandardMaterial({
+    color: trackStyle.gantryAccentHex,
+    emissive: trackStyle.gantryAccentHex,
+    emissiveIntensity: roadDay ? 0.55 : 1.05,
+    roughness: 0.22,
+    metalness: 0.5,
+  });
+  THREE_STATE.sectorArchMats.push(ledMat);
+
+  const archH = 44;
+  const pillarGeo = new T.BoxGeometry(5.2, archH, 6.2);
+  const stripGeo = new T.BoxGeometry(1.4, archH - 6, 6.8);
+
+  for (const spec of archSpecs) {
+    const idx = Math.max(2, Math.min(segs.length - 2, Math.floor(segs.length * spec.frac)));
+    const seg = segs[idx];
+    if (!seg) continue;
+    const gx = seg.a.x + seg.dx * 0.5;
+    const gz = seg.a.y + seg.dy * 0.5;
+    const hw = (seg.halfW || track.halfWidth) + 10;
+    const elev = getTrackElevationAt(gx, gz, track);
+    const lx = gx + seg.nx * hw, lz = gz + seg.ny * hw;
+    const rx = gx - seg.nx * hw, rz = gz - seg.ny * hw;
+    const ly = getTrackElevationY(lx, lz, track);
+    const ry = getTrackElevationY(rx, rz, track);
+    const archY = Math.max(elev.y, ly, ry);
+    const archYaw = -Math.atan2(seg.ny, seg.nx);
+
+    const arch = new T.Group();
+    for (const [px, py, pz] of [[lx, ly, lz], [rx, ry, rz]]) {
+      const pGroup = new T.Group();
+      pGroup.position.set(px, py, pz);
+      pGroup.rotation.y = archYaw;
+      const pH = archH + Math.max(0, archY - py);
+      const pillar = new T.Mesh(pillarGeo, steelMat);
+      pillar.scale.y = pH / archH;
+      pillar.position.y = pH * 0.5;
+      pGroup.add(pillar);
+      const strip = new T.Mesh(stripGeo, ledMat);
+      strip.scale.y = pH / archH;
+      strip.position.y = pH * 0.5;
+      pGroup.add(strip);
+      arch.add(pGroup);
+    }
+
+    const spanW = hw * 2 + 8;
+    const beamGroup = new T.Group();
+    beamGroup.position.set(gx, archY + archH, gz);
+    beamGroup.rotation.y = archYaw;
+    beamGroup.add(new T.Mesh(new T.BoxGeometry(spanW, 3.6, 6.4), steelMat));
+    const glowBar = new T.Mesh(new T.BoxGeometry(spanW + 1, 1.2, 7.0), ledMat);
+    glowBar.position.y = 2.1;
+    beamGroup.add(glowBar);
+
+    const tex = getSectorBannerTexture3D(T, spec.label, spec.sub, trackStyle.gantryAccent);
+    const faceMat = new T.MeshStandardMaterial({
+      map: tex,
+      emissive: 0xffffff,
+      emissiveMap: tex,
+      emissiveIntensity: roadDay ? 0.35 : 0.72,
+      roughness: 0.32,
+    });
+    const sign = new T.Mesh(new T.BoxGeometry(Math.min(spanW * 0.68, 175), 11, 2.0), [
+      steelMat, steelMat, steelMat, steelMat, faceMat, faceMat,
+    ]);
+    sign.position.y = -6.8;
+    beamGroup.add(sign);
+
+    arch.add(beamGroup);
+    group.add(arch);
+  }
+}
 
 function getMapTrackStyle3D(mapId, day) {
-  switch (mapId) {
+  switch (resolveThemeMapId(mapId)) {
     case "compliance_chicane":
       return {
         roadAccent: "#b36bff",
@@ -610,6 +939,7 @@ export function rebuild3DTrack() {
   THREE_STATE.spectatorMeshes = [];
   if (THREE_STATE.startLineMesh) { sc.remove(THREE_STATE.startLineMesh); dispose3DObject(THREE_STATE.startLineMesh); THREE_STATE.startLineMesh = null; }
   THREE_STATE.startLightMats = [];
+  THREE_STATE.sectorArchMats = [];
   if (THREE_STATE.particles3dSystem) { sc.remove(THREE_STATE.particles3dSystem); dispose3DObject(THREE_STATE.particles3dSystem); THREE_STATE.particles3dSystem = null; }
   reset3DParticlePool();
   THREE_STATE.pillarRings = [];
@@ -633,20 +963,34 @@ export function rebuild3DTrack() {
   sc.add(group);
   THREE_STATE.rampMeshes = [];
 
+  const activeMap = getActiveMapConfig(game);
+  const currentMapId = activeMap.id;
+  const roadDay = isDayMode();
+  const trackStyle = getMapTrackStyle3D(currentMapId, roadDay);
+  computeTrackElevation3D(game.track, currentMapId);
+
   if (game.track.arenaFloor) {
     build3DArenaFloor(group, game.track);
-    build3DRamps(group, game.track);
     build3DArenaBoundaryMarkers(group, game.track);
   }
+  build3DRamps(group, game.track);
 
-  // Build track ribbon from waypoints with arc-length UVs
+  // Build track ribbon from waypoints with arc-length UVs, smooth elevation, corner banking & viaduct apron
   const wp = game.track.waypoints;
   const verts = [];
   const colors = [];
   const roadUvs = [];
+  const apronVerts = [];
+  const pylonTransforms = [];
   const edges = get3DRoadEdges(game.track);
   const segmentCount = game.track.isOpen ? edges.length - 1 : edges.length;
   let cumDist = 0;
+  let pylonAccum = 0;
+
+  const edgeElevY = (segIdx, t, side, halfW) => {
+    const s = sampleSegmentElevation3D(game.track, segIdx, t);
+    return Math.max(0, s.cy + side * halfW * s.bank);
+  };
 
   for (let i = 0; i < segmentCount; i++) {
     const e0 = edges[i];
@@ -654,25 +998,66 @@ export function rebuild3DTrack() {
     if (!e0 || !e1) continue;
 
     const segLen = Math.hypot(e1.center.x - e0.center.x, e1.center.y - e0.center.y);
-    const u0 = cumDist / 160;
-    cumDist += segLen;
-    const u1 = cumDist / 160;
+    const subDivs = Math.max(1, Math.min(10, Math.round(segLen / 95)));
+    const hw0 = e0.halfW || game.track.halfWidth || 100;
+    const hw1 = e1.halfW || game.track.halfWidth || 100;
 
-    // Wound CCW when viewed from +Y so vertex normals point upward (+Y) for lighting & front-face rendering
-    verts.push(e0.left.x, 0, e0.left.y, e1.left.x, 0, e1.left.y, e0.right.x, 0, e0.right.y);
-    verts.push(e0.right.x, 0, e0.right.y, e1.left.x, 0, e1.left.y, e1.right.x, 0, e1.right.y);
-    roadUvs.push(
-      u0, 0,
-      u1, 0,
-      u0, 1,
-      u0, 1,
-      u1, 0,
-      u1, 1
-    );
+    for (let sub = 0; sub < subDivs; sub++) {
+      const t0 = sub / subDivs;
+      const t1 = (sub + 1) / subDivs;
+      const subLen = segLen / subDivs;
+      const u0 = cumDist / 160;
+      cumDist += subLen;
+      const u1 = cumDist / 160;
 
-    // Edge glow coloring
-    for (let v = 0; v < 6; v++) {
-      colors.push(0.05, 0.04, 0.13);
+      const l0x = lerp(e0.left.x, e1.left.x, t0), l0z = lerp(e0.left.y, e1.left.y, t0);
+      const l1x = lerp(e0.left.x, e1.left.x, t1), l1z = lerp(e0.left.y, e1.left.y, t1);
+      const r0x = lerp(e0.right.x, e1.right.x, t0), r0z = lerp(e0.right.y, e1.right.y, t0);
+      const r1x = lerp(e0.right.x, e1.right.x, t1), r1z = lerp(e0.right.y, e1.right.y, t1);
+      const hwA = lerp(hw0, hw1, t0);
+      const hwB = lerp(hw0, hw1, t1);
+      const ly0 = edgeElevY(i, t0, 1, hwA);
+      const ly1 = edgeElevY(i, t1, 1, hwB);
+      const ry0 = edgeElevY(i, t0, -1, hwA);
+      const ry1 = edgeElevY(i, t1, -1, hwB);
+
+      // Wound CCW when viewed from +Y so vertex normals point upward (+Y) for lighting & front-face rendering
+      verts.push(l0x, ly0, l0z, l1x, ly1, l1z, r0x, ry0, r0z);
+      verts.push(r0x, ry0, r0z, l1x, ly1, l1z, r1x, ry1, r1z);
+      roadUvs.push(
+        u0, 0,
+        u1, 0,
+        u0, 1,
+        u0, 1,
+        u1, 0,
+        u1, 1
+      );
+      for (let v = 0; v < 6; v++) {
+        colors.push(0.05, 0.04, 0.13);
+      }
+
+      // Elevated road deck underside apron skirt + viaduct support pylons
+      if (ly0 > 2 || ly1 > 2) {
+        const bot0 = Math.max(-1.2, ly0 - 8.5), bot1 = Math.max(-1.2, ly1 - 8.5);
+        apronVerts.push(l0x, ly0 + 0.4, l0z, l0x, bot0, l0z, l1x, ly1 + 0.4, l1z);
+        apronVerts.push(l0x, bot0, l0z, l1x, bot1, l1z, l1x, ly1 + 0.4, l1z);
+      }
+      if (ry0 > 2 || ry1 > 2) {
+        const bot0 = Math.max(-1.2, ry0 - 8.5), bot1 = Math.max(-1.2, ry1 - 8.5);
+        apronVerts.push(r0x, ry0 + 0.4, r0z, r1x, ry1 + 0.4, r1z, r0x, bot0, r0z);
+        apronVerts.push(r0x, bot0, r0z, r1x, ry1 + 0.4, r1z, r1x, bot1, r1z);
+      }
+      pylonAccum += subLen;
+      if (pylonAccum >= 220) {
+        pylonAccum = 0;
+        const tm = (t0 + t1) * 0.5;
+        const sm = sampleSegmentElevation3D(game.track, i, tm);
+        if (sm.cy > 10) {
+          const cxm = lerp(e0.center.x, e1.center.x, tm);
+          const czm = lerp(e0.center.y, e1.center.y, tm);
+          pylonTransforms.push({ x: cxm, z: czm, h: sm.cy - 2 });
+        }
+      }
     }
   }
 
@@ -682,10 +1067,6 @@ export function rebuild3DTrack() {
   geo.setAttribute("uv", new T.Float32BufferAttribute(roadUvs, 2));
   geo.computeVertexNormals();
 
-  const activeMap = getActiveMapConfig(game);
-  const currentMapId = activeMap.id;
-  const roadDay = isDayMode();
-  const trackStyle = getMapTrackStyle3D(currentMapId, roadDay);
   const roadTexture = getCompassSurfaceTexture3D(T, "road", roadDay, trackStyle.roadAccent);
   roadTexture.repeat.set(1, 1);
   const roadMat = new T.MeshStandardMaterial({
@@ -703,6 +1084,42 @@ export function rebuild3DTrack() {
   THREE_STATE.trackMesh.receiveShadow = true;
   group.add(THREE_STATE.trackMesh);
 
+  if (apronVerts.length > 0) {
+    const apGeo = new T.BufferGeometry();
+    apGeo.setAttribute("position", new T.Float32BufferAttribute(apronVerts, 3));
+    apGeo.computeVertexNormals();
+    const apMat = new T.MeshStandardMaterial({
+      color: roadDay ? 0x262436 : 0x12101e,
+      roughness: 0.65,
+      metalness: 0.52,
+      side: T.DoubleSide,
+    });
+    group.add(new T.Mesh(apGeo, apMat));
+  }
+  if (pylonTransforms.length > 0) {
+    const pylonGeo = new T.CylinderGeometry(8, 12, 1, 6);
+    const pylonMat = new T.MeshStandardMaterial({
+      color: roadDay ? 0x35324a : 0x1b182c,
+      roughness: 0.55,
+      metalness: 0.55,
+    });
+    const instPylons = new T.InstancedMesh(pylonGeo, pylonMat, pylonTransforms.length);
+    const m4 = new T.Matrix4();
+    const pos = new T.Vector3();
+    const q = new T.Quaternion();
+    const scl = new T.Vector3();
+    for (let i = 0; i < pylonTransforms.length; i++) {
+      const py = pylonTransforms[i];
+      const h = Math.max(4, py.h + 1);
+      pos.set(py.x, h * 0.5 - 1, py.z);
+      scl.set(1, h, 1);
+      m4.compose(pos, q, scl);
+      instPylons.setMatrixAt(i, m4);
+    }
+    instPylons.instanceMatrix.needsUpdate = true;
+    group.add(instPylons);
+  }
+
   // Raised 3D racing curbs (subdivided into crisp alternating blocks with beveled profile)
   const rumbleVerts = [];
   const rumbleColors = [];
@@ -718,6 +1135,8 @@ export function rebuild3DTrack() {
     const c0 = e0.center, c1 = e1.center;
     const segLen = Math.hypot(c1.x - c0.x, c1.y - c0.y);
     const subDivs = Math.max(1, Math.min(10, Math.round(segLen / 95)));
+    const hw0 = e0.halfW || game.track.halfWidth || 100;
+    const hw1 = e1.halfW || game.track.halfWidth || 100;
     for (let side of [-1, 1]) {
       const s0 = side === 1 ? e0.left : e0.right;
       const s1 = side === 1 ? e1.left : e1.right;
@@ -731,6 +1150,8 @@ export function rebuild3DTrack() {
       for (let sub = 0; sub < subDivs; sub++) {
         const t0 = sub / subDivs;
         const t1 = (sub + 1) / subDivs;
+        const ey0 = edgeElevY(i, t0, side, lerp(hw0, hw1, t0));
+        const ey1 = edgeElevY(i, t1, side, lerp(hw0, hw1, t1));
         const ix0 = lerp(s0.x, s1.x, t0), iz0 = lerp(s0.y, s1.y, t0);
         const ix1 = lerp(s0.x, s1.x, t1), iz1 = lerp(s0.y, s1.y, t1);
         const mx0 = ix0 + lerp(nx0, nx1, t0) * (rumbleExtra * 0.45);
@@ -745,15 +1166,15 @@ export function rebuild3DTrack() {
         const r = ((curbBlockCounter + sub) % 2 === 0) ? trackStyle.curbA : trackStyle.curbB;
         // Inner bevel up to crest + outer bevel down to ground
         if (side === 1) {
-          rumbleVerts.push(ix0, curbInnerY, iz0, mx0, curbCrestY, mz0, ix1, curbInnerY, iz1);
-          rumbleVerts.push(mx0, curbCrestY, mz0, mx1, curbCrestY, mz1, ix1, curbInnerY, iz1);
-          rumbleVerts.push(mx0, curbCrestY, mz0, ox0, curbOuterY, oz0, mx1, curbCrestY, mz1);
-          rumbleVerts.push(ox0, curbOuterY, oz0, ox1, curbOuterY, oz1, mx1, curbCrestY, mz1);
+          rumbleVerts.push(ix0, ey0 + curbInnerY, iz0, mx0, ey0 + curbCrestY, mz0, ix1, ey1 + curbInnerY, iz1);
+          rumbleVerts.push(mx0, ey0 + curbCrestY, mz0, mx1, ey1 + curbCrestY, mz1, ix1, ey1 + curbInnerY, iz1);
+          rumbleVerts.push(mx0, ey0 + curbCrestY, mz0, ox0, ey0 + curbOuterY, oz0, mx1, ey1 + curbCrestY, mz1);
+          rumbleVerts.push(ox0, ey0 + curbOuterY, oz0, ox1, ey1 + curbOuterY, oz1, mx1, ey1 + curbCrestY, mz1);
         } else {
-          rumbleVerts.push(ix0, curbInnerY, iz0, ix1, curbInnerY, iz1, mx0, curbCrestY, mz0);
-          rumbleVerts.push(mx0, curbCrestY, mz0, ix1, curbInnerY, iz1, mx1, curbCrestY, mz1);
-          rumbleVerts.push(mx0, curbCrestY, mz0, mx1, curbCrestY, mz1, ox0, curbOuterY, oz0);
-          rumbleVerts.push(ox0, curbOuterY, oz0, mx1, curbCrestY, mz1, ox1, curbOuterY, oz1);
+          rumbleVerts.push(ix0, ey0 + curbInnerY, iz0, ix1, ey1 + curbInnerY, iz1, mx0, ey0 + curbCrestY, mz0);
+          rumbleVerts.push(mx0, ey0 + curbCrestY, mz0, ix1, ey1 + curbInnerY, iz1, mx1, ey1 + curbCrestY, mz1);
+          rumbleVerts.push(mx0, ey0 + curbCrestY, mz0, mx1, ey1 + curbCrestY, mz1, ox0, ey0 + curbOuterY, oz0);
+          rumbleVerts.push(ox0, ey0 + curbOuterY, oz0, mx1, ey1 + curbCrestY, mz1, ox1, ey1 + curbOuterY, oz1);
         }
         for (let v = 0; v < 12; v++) rumbleColors.push(r[0], r[1], r[2]);
       }
@@ -793,6 +1214,8 @@ export function rebuild3DTrack() {
       const c0 = e0.center, c1 = e1.center;
       const s0 = side === 1 ? e0.left : e0.right;
       const s1 = side === 1 ? e1.left : e1.right;
+      const hw0 = e0.halfW || game.track.halfWidth || 100;
+      const hw1 = e1.halfW || game.track.halfWidth || 100;
       const dx0 = s0.x - c0.x, dy0 = s0.y - c0.y;
       const dl0 = Math.hypot(dx0, dy0) || 1;
       const dx1 = s1.x - c1.x, dy1 = s1.y - c1.y;
@@ -804,15 +1227,17 @@ export function rebuild3DTrack() {
       const b1x = s1.x + nx1 * barrierOffset;
       const b1z = s1.y + nz1 * barrierOffset;
       const bLen = Math.hypot(b1x - b0x, b1z - b0z);
-      const subPanels = Math.max(1, Math.min(8, Math.round(bLen / 170)));
+      const subPanels = Math.max(1, Math.min(8, Math.round(bLen / 140)));
 
       for (let sp = 0; sp < subPanels; sp++) {
         const t0 = sp / subPanels;
         const t1 = (sp + 1) / subPanels;
+        const ey0 = edgeElevY(i, t0, side, lerp(hw0, hw1, t0));
+        const ey1 = edgeElevY(i, t1, side, lerp(hw0, hw1, t1));
         const px0 = lerp(b0x, b1x, t0), pz0 = lerp(b0z, b1z, t0);
         const px1 = lerp(b0x, b1x, t1), pz1 = lerp(b0z, b1z, t1);
-        wallVerts.push(px0, 0, pz0, px1, 0, pz1, px0, barrierH, pz0);
-        wallVerts.push(px1, 0, pz1, px1, barrierH, pz1, px0, barrierH, pz0);
+        wallVerts.push(px0, ey0, pz0, px1, ey1, pz1, px0, ey0 + barrierH, pz0);
+        wallVerts.push(px1, ey1, pz1, px1, ey1 + barrierH, pz1, px0, ey0 + barrierH, pz0);
         const isAccent = ((wallPanelIdx + sp) % 3 === 0);
         const cr = isAccent
           ? (side === 1 ? trackStyle.wallLeft : trackStyle.wallRight)
@@ -820,19 +1245,22 @@ export function rebuild3DTrack() {
         for (let v = 0; v < 6; v++) wallColors.push(cr[0], cr[1], cr[2]);
 
         // Collect stanchion post position at panel joints
-        stanchionTransforms.push({ x: px0, z: pz0 });
+        stanchionTransforms.push({ x: px0, y: ey0, z: pz0 });
+
+        // 3D top-rail cap ribbon matching elevation
+        const railHalf = 1.6;
+        const rnx0 = lerp(nx0, nx1, t0), rnz0 = lerp(nz0, nz1, t0);
+        const rnx1 = lerp(nx0, nx1, t1), rnz1 = lerp(nz0, nz1, t1);
+        const ry0 = ey0 + barrierH + 0.7;
+        const ry1 = ey1 + barrierH + 0.7;
+        const rIn0x = px0 - rnx0 * railHalf, rIn0z = pz0 - rnz0 * railHalf;
+        const rOut0x = px0 + rnx0 * railHalf, rOut0z = pz0 + rnz0 * railHalf;
+        const rIn1x = px1 - rnx1 * railHalf, rIn1z = pz1 - rnz1 * railHalf;
+        const rOut1x = px1 + rnx1 * railHalf, rOut1z = pz1 + rnz1 * railHalf;
+        railVerts.push(rIn0x, ry0, rIn0z, rOut0x, ry0, rOut0z, rIn1x, ry1, rIn1z);
+        railVerts.push(rOut0x, ry0, rOut0z, rOut1x, ry1, rOut1z, rIn1x, ry1, rIn1z);
       }
       wallPanelIdx += subPanels;
-
-      // 3D top-rail cap ribbon (2.8 units wide so it reads clearly instead of a 1px WebGL line)
-      const railHalf = 1.6;
-      const ry = barrierH + 0.7;
-      const rIn0x = b0x - nx0 * railHalf, rIn0z = b0z - nz0 * railHalf;
-      const rOut0x = b0x + nx0 * railHalf, rOut0z = b0z + nz0 * railHalf;
-      const rIn1x = b1x - nx1 * railHalf, rIn1z = b1z - nz1 * railHalf;
-      const rOut1x = b1x + nx1 * railHalf, rOut1z = b1z + nz1 * railHalf;
-      railVerts.push(rIn0x, ry, rIn0z, rOut0x, ry, rOut0z, rIn1x, ry, rIn1z);
-      railVerts.push(rOut0x, ry, rOut0z, rOut1x, ry, rOut1z, rIn1x, ry, rIn1z);
     }
     if (wallVerts.length > 0) {
       const wGeo = new T.BufferGeometry();
@@ -882,7 +1310,7 @@ export function rebuild3DTrack() {
     const q = new T.Quaternion();
     const scl = new T.Vector3(1, 1, 1);
     for (let i = 0; i < stanchionTransforms.length; i++) {
-      pos.set(stanchionTransforms[i].x, (barrierH + 2.2) * 0.5, stanchionTransforms[i].z);
+      pos.set(stanchionTransforms[i].x, (stanchionTransforms[i].y || 0) + (barrierH + 2.2) * 0.5, stanchionTransforms[i].z);
       m4.compose(pos, q, scl);
       inst.setMatrixAt(i, m4);
     }
@@ -890,10 +1318,23 @@ export function rebuild3DTrack() {
     group.add(inst);
   }
 
-  // Center dashed line (kept subtle since road texture already carries crisp markings)
+  // Center dashed line (subdivided to follow road elevation cleanly)
   const centerVerts = [];
-  for (let i = 0; i < wp.length; i++) {
-    centerVerts.push(wp[i].x, 0.85, wp[i].y);
+  for (let i = 0; i < segmentCount; i++) {
+    const p0 = wp[i];
+    const p1 = wp[(i + 1) % wp.length];
+    if (!p0 || !p1) continue;
+    const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+    const steps = Math.max(1, Math.min(8, Math.round(segLen / 110)));
+    for (let st = 0; st < steps; st++) {
+      const t = st / steps;
+      const s = sampleSegmentElevation3D(game.track, i, t);
+      centerVerts.push(lerp(p0.x, p1.x, t), s.cy + 0.88, lerp(p0.y, p1.y, t));
+    }
+  }
+  if (game.track.isOpen && wp.length > 0) {
+    const last = wp[wp.length - 1];
+    centerVerts.push(last.x, 0.88, last.y);
   }
   if (centerVerts.length > 3) {
     const centerGeo = new T.BufferGeometry();
@@ -912,6 +1353,7 @@ export function rebuild3DTrack() {
   }
 
   build3DCornerChevrons(group, game.track, edges);
+  build3DSectorArches(group, game.track, trackStyle, roadDay);
 
   if (!game.track.isOpen && !isBattleMode()) {
     const gate = game.track.startLineGate();
@@ -1067,7 +1509,9 @@ export function rebuild3DTrack() {
         const boxLight = new T.PointLight(0xffd86b, 0.9, 140);
         boxGroup.add(boxLight);
       }
-      boxGroup.position.set(ib.x, 22, ib.y);
+      const ibY = getTrackElevationY(ib.x, ib.y, game.track) + 22;
+      boxGroup.position.set(ib.x, ibY, ib.y);
+      boxGroup._baseY = ibY;
       boxGroup._itemRef = ib;
       boxGroup._innerMat = innerMat;
       boxGroup._outerMat = outerMat;
@@ -1089,8 +1533,11 @@ export function rebuild3DTrack() {
         transparent: true, opacity: 0.55, metalness: 0.3, roughness: 0.4,
       });
       padGroup.add(new T.Mesh(padGeo, padMat));
-      const arrowMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xa4ff80, emissiveIntensity: 1.5, transparent: true, opacity: 0.85, side: T.DoubleSide });
+      const arrowMats = [];
+      const arrows = [];
       for (let a = 0; a < 3; a++) {
+        const arrowMat = new T.MeshStandardMaterial({ color: 0xffffff, emissive: 0xa4ff80, emissiveIntensity: 1.5, transparent: true, opacity: 0.85, side: T.DoubleSide });
+        arrowMats.push(arrowMat);
         const hw = pw * 0.35;
         const arrowGeo = new T.BufferGeometry();
         arrowGeo.setAttribute("position", new T.Float32BufferAttribute([
@@ -1102,6 +1549,7 @@ export function rebuild3DTrack() {
         arrow.position.z = -ph * 0.3 + a * (ph * 0.3);
         arrow.position.y = 1.2;
         padGroup.add(arrow);
+        arrows.push(arrow);
       }
       const barMat = new T.MeshStandardMaterial({ color: 0xa4ff80, emissive: 0xa4ff80, emissiveIntensity: 1.1 });
       for (const s of [-1, 1]) {
@@ -1115,8 +1563,19 @@ export function rebuild3DTrack() {
         padLight.position.y = 5;
         padGroup.add(padLight);
       }
-      padGroup.position.set(bp.x, 1.5, bp.y);
+      const bpElev = getTrackElevationAt(bp.x, bp.y, game.track);
+      const bpCos = Math.cos(bp.ang || 0), bpSin = Math.sin(bp.ang || 0);
+      const bpAlign = bpCos * bpElev.ux + bpSin * bpElev.uy;
+      const bpBaseY = bpElev.y + 1.3;
+      padGroup.rotation.order = "YXZ";
+      padGroup.position.set(bp.x, bpBaseY, bp.y);
       padGroup.rotation.y = -bp.ang + Math.PI / 2;
+      padGroup.rotation.x = -Math.atan(bpElev.slope * bpAlign);
+      padGroup.rotation.z = -Math.atan(bpElev.bank) * bpAlign;
+      padGroup._baseY = bpBaseY;
+      padGroup._padLen = ph;
+      padGroup._arrows = arrows;
+      padGroup._arrowMats = arrowMats;
       padGroup._boostPadRef = bp;
       padGroup._padMat = padMat;
       group.add(padGroup);
@@ -1218,7 +1677,9 @@ export function rebuild3DTrack() {
         const coinLight = new T.PointLight(0xffd86b, 0.2, 30);
         coinGroup.add(coinLight);
       }
-      coinGroup.position.set(c.x, 9, c.y);
+      const coinBaseY = getTrackElevationY(c.x, c.y, game.track) + 9;
+      coinGroup.position.set(c.x, coinBaseY, c.y);
+      coinGroup._baseY = coinBaseY;
       coinGroup._coinRef = c;
       coinGroup._discMat = citationMat;
       group.add(coinGroup);
@@ -1270,7 +1731,8 @@ export function rebuild3DTrack() {
         wLight2.position.y = -20;
         gateGroup.add(wLight2);
       }
-      gateGroup.position.set(obj.x, 26, obj.y);
+      const objY = getTrackElevationY(obj.x, obj.y, game.track) + 26;
+      gateGroup.position.set(obj.x, objY, obj.y);
       gateGroup.rotation.y = -(obj.ang || 0) + Math.PI / 2;
       gateGroup._movingObjectRef = obj;
       group.add(gateGroup);
@@ -1519,9 +1981,10 @@ export function sync3DSkidMarks() {
           const sz = kart.y - fxSin * 10 + lz * side * 7;
           const mesh = getSkidMark3D(isRissal);
           if (!mesh) continue;
+          const skidY = getTrackElevationY(sx, sz, game.track) + 0.65;
           mesh.rotation.x = -Math.PI / 2;
           mesh.rotation.z = -kart.heading;
-          mesh.position.set(sx, 0.6, sz);
+          mesh.position.set(sx, skidY, sz);
           THREE_STATE.scene.add(mesh);
           THREE_STATE.skidMarks3d.push({ mesh, life: 250, maxLife: 250 });
         }

@@ -826,6 +826,29 @@
     gap: 8px;
     z-index: 10;
   }
+  .mode-toggle-group {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(8, 6, 26, 0.65);
+    border: 1px solid rgba(123, 117, 255, 0.25);
+  }
+  .mode-toggle-group .toggle-btn {
+    padding: 7px 18px;
+    font-size: 12px;
+    letter-spacing: 1.4px;
+    border-radius: 999px;
+    min-width: 132px;
+  }
+  .mode-toggle-group .toggle-btn.disabled,
+  .mode-toggle-group .toggle-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
   .map-select-title {
     font-size: 13px;
     color: #ebe4ff;
@@ -923,6 +946,43 @@
       radial-gradient(circle at 75% 65%, rgba(123, 117, 255, 0.12), transparent 50%),
       rgba(8, 6, 26, 0.2);
     border-color: rgba(255, 216, 107, 0.28);
+  }
+  .map-card.procedural-card {
+    border-color: rgba(87, 242, 255, 0.34);
+    background: linear-gradient(145deg, rgba(16, 32, 46, 0.92), rgba(27, 23, 38, 0.92));
+  }
+  .map-card.daily-circuit-card {
+    border-color: rgba(164, 255, 128, 0.38);
+    background: linear-gradient(145deg, rgba(18, 42, 34, 0.92), rgba(27, 23, 38, 0.92));
+  }
+  .map-card.procedural-card.selected {
+    border-color: #57f2ff;
+    box-shadow: 0 0 22px rgba(87, 242, 255, 0.32), inset 0 0 8px rgba(87, 242, 255, 0.12);
+  }
+  .map-card.daily-circuit-card.selected {
+    border-color: #a4ff80;
+    box-shadow: 0 0 22px rgba(164, 255, 128, 0.32), inset 0 0 8px rgba(164, 255, 128, 0.12);
+  }
+  .map-reroll-btn {
+    margin-left: auto;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(87, 242, 255, 0.45);
+    background: rgba(87, 242, 255, 0.14);
+    color: #c8f9ff;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .map-reroll-btn:hover:not(:disabled) {
+    background: rgba(87, 242, 255, 0.28);
+    transform: translateY(-1px);
+  }
+  .map-reroll-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .map-name {
     font-size: 14px;

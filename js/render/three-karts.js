@@ -205,7 +205,7 @@ export function disposeTethers3D() {
 }
 
 
-export function syncMergeTethers3D() {
+export function syncMergeTethers3D(getElevY = null) {
   if (!window.THREE || !THREE_STATE.scene) return;
   const T = window.THREE;
   if (!THREE_STATE._tethers || !(THREE_STATE._tethers instanceof Map)) {
@@ -239,8 +239,10 @@ export function syncMergeTethers3D() {
       entry = { line, pos, geo };
       THREE_STATE._tethers.set(kart, entry);
     }
-    entry.pos[0] = kart.x; entry.pos[1] = 12 + (kart.z || 0); entry.pos[2] = kart.y;
-    entry.pos[3] = target.x; entry.pos[4] = 12 + (target.z || 0); entry.pos[5] = target.y;
+    const ky = getElevY ? getElevY(kart.x, kart.y) : 0;
+    const ty = getElevY ? getElevY(target.x, target.y) : 0;
+    entry.pos[0] = kart.x; entry.pos[1] = ky + 12 + (kart.z || 0); entry.pos[2] = kart.y;
+    entry.pos[3] = target.x; entry.pos[4] = ty + 12 + (target.z || 0); entry.pos[5] = target.y;
     entry.geo.attributes.position.needsUpdate = true;
     entry.line.visible = true;
   }
@@ -990,6 +992,56 @@ export function buildKartModel3D(charId, color) {
   headlightPool.renderOrder = 2;
   headlightPool.visible = !isDayMode();
   group._headlightPool = headlightPool;
+
+  // Dynamic reactive ground underglow (lights up with drift tier, boost, or slipstream)
+  const underGlowMat = new T.MeshBasicMaterial({
+    map: getParticleGlowTexture3D(T),
+    color: 0x57f2ff,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
+  });
+  const underGlow = addMesh3D(
+    T,
+    group,
+    new T.PlaneGeometry(shadowW * 1.15, shadowL * 1.15),
+    underGlowMat,
+    0,
+    0.76,
+    -2,
+    -Math.PI / 2,
+    0,
+    0
+  );
+  underGlow.renderOrder = 3;
+  underGlow.visible = false;
+  group._underGlow = underGlow;
+  group._underGlowMat = underGlowMat;
+
+  // 3D slipstream / high-speed wind ribbons flanking the kart
+  const slipGroup = new T.Group();
+  const slipMat = new T.MeshBasicMaterial({
+    color: 0x57f2ff,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: T.AdditiveBlending,
+    side: T.DoubleSide,
+  });
+  const ribbonGeo = new T.PlaneGeometry(1.6, 36);
+  ribbonGeo.rotateX(Math.PI / 2);
+  for (const s of [-1, 1]) {
+    const outerRibbon = addMesh3D(T, slipGroup, ribbonGeo, slipMat, s * 13.5, 6.2, -4, 0, 0, s * 0.25);
+    outerRibbon.userData = { side: s, baseZ: -4, lane: 0 };
+    const upperRibbon = addMesh3D(T, slipGroup, ribbonGeo, slipMat, s * 9.5, 10.2, -10, 0, 0, s * 0.4);
+    upperRibbon.scale.set(0.75, 1, 0.78);
+    upperRibbon.userData = { side: s, baseZ: -10, lane: 1 };
+  }
+  slipGroup.visible = false;
+  group.add(slipGroup);
+  group._slipRibbons = slipGroup;
+  group._slipMat = slipMat;
 
   group.rotation.order = "YXZ";
   group.userData._baseScale = 1;

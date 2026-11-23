@@ -315,13 +315,16 @@ export function computeHeadlessBattleReward(kart) {
   let reward = 3.0 * steals - 1.5 * losses + 1.5 * hits;
   reward -= battleTimePressurePerFrame();
   const uses = kart.itemUseCount || 0;
-  if (uses > (kart._rlPrevItemUses || 0)) reward += 0.3 * (uses - (kart._rlPrevItemUses || 0));
+  if (uses > (kart._rlPrevItemUses || 0)) reward += 0.65 * (uses - (kart._rlPrevItemUses || 0));
   kart._rlPrevItemUses = uses;
+  const ultUses = kart.ultUseCount || 0;
+  if (ultUses > (kart._rlPrevUltUses || 0)) reward += 2.0 * (ultUses - (kart._rlPrevUltUses || 0));
+  kart._rlPrevUltUses = ultUses;
   const hasItem = kart.itemState === "active";
-  if (hasItem && !kart._rlHadItem) reward += 0.3; // picked up a fresh item
+  if (hasItem && !kart._rlHadItem) reward += 0.45; // picked up a fresh item
   kart._rlHadItem = hasItem;
   const coins = kart.coinsCollected || 0;
-  if (coins > (kart._rlPrevCoins || 0)) reward += 0.03 * (coins - (kart._rlPrevCoins || 0));
+  if (coins > (kart._rlPrevCoins || 0)) reward += 0.10 * (coins - (kart._rlPrevCoins || 0));
   kart._rlPrevCoins = coins;
   if (kart.eliminated && !kart._rlEliminationCounted) {
     kart._rlEliminationCounted = true;

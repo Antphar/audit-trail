@@ -6,6 +6,45 @@ import { simRandom, seedSimRng } from "../core/rng.js";
 import { dsin, dcos } from "../core/det-math.js";
 
 const PROCEDURAL_MAP_ID = "procedural";
+const DAILY_CIRCUIT_ID = "daily_circuit";
+const RANDOM_CIRCUIT_ID = "random_circuit";
+
+function getDailyDateKey(date = new Date()) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getDailyCircuitSeed(date = new Date()) {
+  const key = `daily-circuit:${getDailyDateKey(date)}`;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return (h >>> 0) || 20260101;
+}
+
+function getDailyCircuitConfig(date = new Date()) {
+  const dateKey = getDailyDateKey(date);
+  const seed = getDailyCircuitSeed(date);
+  const cfg = generateProceduralRaceMap(seed);
+  return {
+    ...cfg,
+    name: `Daily Circuit · ${dateKey}`,
+    isDaily: true,
+    dailyDateKey: dateKey,
+    desc: `Today's shared seeded circuit (${dateKey}). Same twists, ramps, and gates for everyone today!`,
+  };
+}
+
+function createRandomCircuitConfig(seed) {
+  const s = Number.isFinite(Number(seed))
+    ? ((Number(seed) >>> 0) || 1337)
+    : ((Math.floor(Math.random() * 0x7fffffff) >>> 0) || 1337);
+  return generateProceduralRaceMap(s);
+}
 
 function isProceduralMapId(mapId) {
   if (typeof mapId !== "string") return false;
@@ -147,6 +186,58 @@ function generateProceduralRaceMap(seed = 1337) {
     if (!itemBoxSegs.includes(idx)) itemBoxSegs.push(idx);
   }
 
+  // Place 2-3 jump ramps on the longest clean segments (avoiding seg 0 start grid)
+  const segLengths = [];
+  for (let i = 1; i < n; i++) {
+    const a = waypoints[i];
+    const b = waypoints[(i + 1) % n];
+    segLengths.push({ seg: i, len: Math.hypot(b.x - a.x, b.y - a.y) });
+  }
+  segLengths.sort((u, v) => v.len - u.len);
+  const ramps = [];
+  const rampTarget = 2 + (rng() < 0.55 ? 1 : 0);
+  for (const cand of segLengths) {
+    if (ramps.length >= rampTarget) break;
+    if (cand.len < 340) continue;
+    if (ramps.some((r) => Math.abs(r.seg - cand.seg) <= 1)) continue;
+    ramps.push({
+      seg: cand.seg,
+      t: 0.42 + rng() * 0.2,
+      w: 88,
+      h: 44,
+      kind: "ramp",
+      impulse: 6.1,
+      minSpeed: 3.0,
+    });
+  }
+
+  // Place 1-2 dodgeable moving firewall gates on wide/medium non-ramp segments
+  const movingObjects = [];
+  const gateColors = ["#57f2ff", "#ff4d6d", "#fd9927", "#a4ff80", "#bd57ff"];
+  const gateKinds = [
+    { kind: "clause", label: "CLAUSE", hitLabel: "CLAUSE TRAP!" },
+    { kind: "amend", label: "AMEND", hitLabel: "AMENDMENT!" },
+    { kind: "signoff", label: "SIGNOFF", hitLabel: "SIGNOFF BLOCK!" },
+  ];
+  const gateTarget = 1 + (rng() < 0.6 ? 1 : 0);
+  for (let i = 2; i < n - 1 && movingObjects.length < gateTarget; i += Math.max(3, Math.floor(n / 3))) {
+    if (ramps.some((r) => r.seg === i)) continue;
+    const wScale = segWidth[i] || 1;
+    const halfW = roadHalfBase * wScale;
+    const gMeta = gateKinds[Math.floor(rng() * gateKinds.length)];
+    movingObjects.push({
+      seg: i,
+      t: 0.5,
+      amp: Math.round(halfW * 0.68),
+      speed: Math.round((1.0 + rng() * 0.4) * 100) / 100,
+      phase: Math.round(rng() * TAU * 100) / 100,
+      color: gateColors[Math.floor(rng() * gateColors.length)],
+      kind: gMeta.kind,
+      label: gMeta.label,
+      hitLabel: gMeta.hitLabel,
+    });
+  }
+
   return {
     name: `Procedural Circuit #${s % 10000}`,
     id: `${PROCEDURAL_MAP_ID}:${s}`,
@@ -160,6 +251,8 @@ function generateProceduralRaceMap(seed = 1337) {
     segWidth,
     boostPadSegs,
     itemBoxSegs,
+    ramps,
+    movingObjects,
     desc: `Procedurally generated closed racing circuit (seed ${s}).`,
   };
 }
@@ -238,7 +331,12 @@ const MAPS = [
     },
     boostPadSegs: [0, 4, 13],
     itemBoxSegs: [2, 6, 10, 14],
-    desc: "The classic Regulaido test speedway. High-speed straightaways and a tight, twisting chicane."
+    ramps: [
+      { seg: 1, t: 0.58, w: 92, h: 46, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+      { seg: 14, t: 0.48, w: 90, h: 44, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+      { seg: 7, t: 0.52, w: 56, h: 24, kind: "bump", impulse: 2.9, minSpeed: 2.2 },
+    ],
+    desc: "The classic Regulaido test speedway. High-speed straightaways, trick launch ramps, and a tight chicane."
   },
   {
     name: "Compliance Chicane",
@@ -274,7 +372,15 @@ const MAPS = [
     },
     boostPadSegs: [0, 9, 12],
     itemBoxSegs: [1, 5, 10, 14],
-    desc: "Technical micro-circuit with beveled double-apex corners, double-back chicanes, and narrow inner doglegs."
+    ramps: [
+      { seg: 1, t: 0.52, w: 86, h: 42, kind: "ramp", impulse: 5.9, minSpeed: 3.0 },
+      { seg: 10, t: 0.50, w: 88, h: 42, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+    ],
+    movingObjects: [
+      { seg: 3, t: 0.52, amp: 58, speed: 1.15, phase: 0.4, color: "#9d4dff", kind: "clause", label: "AUDIT", hitLabel: "AUDIT GATE!" },
+      { seg: 11, t: 0.48, amp: 54, speed: 1.28, phase: 2.6, color: "#57f2ff", kind: "signoff", label: "CHECK", hitLabel: "BLOCKED!" },
+    ],
+    desc: "Technical micro-circuit with beveled double-apex corners, launch ramps, compliance gates, and narrow inner doglegs."
   },
   {
     name: "Audit Super Ring",
@@ -307,7 +413,12 @@ const MAPS = [
     },
     boostPadSegs: [1, 4, 9, 12],
     itemBoxSegs: [0, 3, 7, 11, 13],
-    desc: "A wide-lane speedway ring with sweeping banked curves and a high-speed backstretch chicane built for continuous boost chaining."
+    ramps: [
+      { seg: 1, t: 0.55, w: 104, h: 52, kind: "ramp", impulse: 6.3, minSpeed: 3.0 },
+      { seg: 6, t: 0.52, w: 100, h: 50, kind: "ramp", impulse: 6.2, minSpeed: 3.0 },
+      { seg: 11, t: 0.48, w: 100, h: 50, kind: "ramp", impulse: 6.2, minSpeed: 3.0 },
+    ],
+    desc: "A wide-lane speedway ring with sweeping banked curves, mega stunt ramps, and a high-speed backstretch chicane."
   },
   {
     name: "Black Ice Data Vault",
@@ -351,6 +462,10 @@ const MAPS = [
     },
     boostPadSegs: [1, 7, 11, 16, 19],
     itemBoxSegs: [2, 5, 8, 12, 15, 20],
+    ramps: [
+      { seg: 1, t: 0.55, w: 88, h: 42, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+      { seg: 11, t: 0.52, w: 92, h: 44, kind: "ramp", impulse: 6.1, minSpeed: 3.0 },
+    ],
     movingObjects: [
       { seg: 3, t: 0.48, amp: 85, speed: 1.15, phase: 0.0, color: "#ff4d6d" },
       { seg: 6, t: 0.56, amp: 72, speed: 1.35, phase: 1.7, color: "#57f2ff" },
@@ -401,6 +516,15 @@ const MAPS = [
     },
     boostPadSegs: [2, 6, 9, 12],
     itemBoxSegs: [0, 3, 5, 8, 11, 13],
+    ramps: [
+      { seg: 2, t: 0.46, w: 106, h: 52, kind: "ramp", impulse: 6.3, minSpeed: 3.0 },
+      { seg: 5, t: 0.52, w: 106, h: 52, kind: "ramp", impulse: 6.3, minSpeed: 3.0 },
+      { seg: 10, t: 0.50, w: 106, h: 52, kind: "ramp", impulse: 6.3, minSpeed: 3.0 },
+    ],
+    movingObjects: [
+      { seg: 4, t: 0.50, amp: 86, speed: 1.25, phase: 0.5, color: "#ff4d6d", kind: "redline", label: "FIREWALL", hitLabel: "FIREWALL!" },
+      { seg: 11, t: 0.50, amp: 84, speed: 1.35, phase: 2.8, color: "#fd9927", kind: "signoff", label: "AUDIT", hitLabel: "AUDIT BLOCK!" },
+    ],
     regulatoryDragon: {
       startX: -180,
       startY: 1320,
@@ -471,6 +595,10 @@ const MAPS = [
     },
     boostPadSegs: [1, 4, 8, 12, 16],
     itemBoxSegs: [2, 5, 7, 10, 14],
+    ramps: [
+      { seg: 4, t: 0.48, w: 92, h: 46, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+      { seg: 12, t: 0.52, w: 92, h: 46, kind: "ramp", impulse: 6.0, minSpeed: 3.0 },
+    ],
     movingObjects: [
       { seg: 2, t: 0.50, amp: 95, speed: 1.22, phase: 0.8, color: "#a4ff80", kind: "amend", label: "AMEND", hitLabel: "AMENDMENT!" },
       { seg: 7, t: 0.52, amp: 82, speed: 1.38, phase: 2.4, color: "#57f2ff", kind: "clause", label: "CLAUSE", hitLabel: "CLAUSE TRAP!" },
@@ -591,8 +719,14 @@ export {
   MAPS,
   GRAND_PRIX_ID,
   PROCEDURAL_MAP_ID,
+  DAILY_CIRCUIT_ID,
+  RANDOM_CIRCUIT_ID,
   isProceduralMapId,
   parseProceduralMapSeed,
+  getDailyDateKey,
+  getDailyCircuitSeed,
+  getDailyCircuitConfig,
+  createRandomCircuitConfig,
   generateProceduralRaceMap,
   getActiveMapConfig,
   clampLaps,

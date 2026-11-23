@@ -3,7 +3,9 @@ import { CHARACTERS } from "../config/characters.js";
 import { clamp, TAU } from "../core/math.js";
 import { resetAllInputs } from "../core/input.js";
 import {
-  MAPS, GRAND_PRIX_ID, clampGrandPrixRaces, regenerateDragonTrail,
+  MAPS, GRAND_PRIX_ID, DAILY_CIRCUIT_ID, RANDOM_CIRCUIT_ID,
+  getDailyCircuitConfig, createRandomCircuitConfig, getActiveMapConfig,
+  clampGrandPrixRaces, regenerateDragonTrail,
 } from "../config/maps.js";
 import {
   STATE, game, isBattleMode, isGrandPrixSelection, isGrandPrixActive, shouldShowGrandPrixCard,
@@ -115,6 +117,15 @@ export function initRaceSetupListeners(deps = {}) {
       if (game.p2pMode && game.p2pRole === "host" && game.state === STATE.SELECT) resetP2pReadyForLobbyChange();
     });
   }
+  const modeToggleGroup = document.getElementById("mode-toggle-group");
+  if (modeToggleGroup) {
+    modeToggleGroup.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-mode]");
+      if (!btn) return;
+      Sound.ensure(); Sound.resume();
+      setLobbyMode(btn.dataset.mode);
+    });
+  }
   const battleTimingGroup = document.getElementById("battle-timing-group");
   if (battleTimingGroup) {
     battleTimingGroup.addEventListener("click", (e) => {
@@ -142,16 +153,56 @@ export function getMapFeatureChips(map) {
   }
   const chips = [`${(map.waypoints || []).length} SEGMENTS`];
   const boosts = (map.boostPadSegs || []).length;
+  const ramps = (map.ramps || []).filter((r) => r.kind !== "bump").length;
+  const gates = (map.movingObjects || []).length;
   if (boosts > 0) chips.push(`${boosts} BOOSTS`);
+  if (ramps > 0) chips.push(`${ramps} RAMPS`);
+  if (gates > 0) chips.push(`${gates} GATES`);
   if (map.id === "dragon_escape") chips.push("ENDLESS");
   return chips;
 }
+
+let _cachedRandomCircuit = null;
+function getOrCreateRandomCircuit(reroll = false, seed = null) {
+  if (seed !== null && seed !== undefined && Number.isFinite(Number(seed))) {
+    _cachedRandomCircuit = createRandomCircuitConfig(Number(seed));
+    return _cachedRandomCircuit;
+  }
+  if (reroll || !_cachedRandomCircuit) {
+    _cachedRandomCircuit = createRandomCircuitConfig();
+  }
+  return _cachedRandomCircuit;
+}
+
+export function isDailyCircuitSelection() {
+  return game.mapSelection === DAILY_CIRCUIT_ID;
+}
+
+export function isRandomCircuitSelection() {
+  return game.mapSelection === RANDOM_CIRCUIT_ID;
+}
+
 export function ensureSelectedMapMatchesMode() {
   const wantsArena = isBattleMode();
+  if (!wantsArena && (game.mapSelection === DAILY_CIRCUIT_ID || game.mapSelection === RANDOM_CIRCUIT_ID)) {
+    if (game.mapSelection === DAILY_CIRCUIT_ID) {
+      if (!game.customMapConfig?.isDaily) game.customMapConfig = getDailyCircuitConfig();
+    } else if (!game.customMapConfig || game.customMapConfig.isDaily) {
+      game.customMapConfig = getOrCreateRandomCircuit(false);
+    }
+    return game.selectedMapIdx;
+  }
+  if (wantsArena) game.customMapConfig = null;
   const current = MAPS[game.selectedMapIdx];
   if (current && !!current.arena === wantsArena) {
-    if (!wantsArena && game.mapSelection === GRAND_PRIX_ID) return game.selectedMapIdx;
-    if (game.mapSelection !== GRAND_PRIX_ID) game.mapSelection = current.id;
+    if (!wantsArena && game.mapSelection === GRAND_PRIX_ID) {
+      game.customMapConfig = null;
+      return game.selectedMapIdx;
+    }
+    if (game.mapSelection !== GRAND_PRIX_ID) {
+      game.mapSelection = current.id;
+      game.customMapConfig = null;
+    }
     return game.selectedMapIdx;
   }
 
@@ -160,6 +211,7 @@ export function ensureSelectedMapMatchesMode() {
     : MAPS.findIndex((map) => !map.arena);
   game.selectedMapIdx = fallbackIdx >= 0 ? fallbackIdx : 0;
   game.mapSelection = MAPS[game.selectedMapIdx].id;
+  game.customMapConfig = null;
   return game.selectedMapIdx;
 }
 
@@ -195,21 +247,46 @@ export function createGrandPrixTournament(totalRaces = getGrandPrixRaces()) {
 
 export function selectGrandPrixMap() {
   game.mapSelection = GRAND_PRIX_ID;
+  game.customMapConfig = null;
   game.tournament = null;
   game.selectedMapIdx = getDefaultCircuitMapIdx();
+}
+
+export function selectDailyCircuit() {
+  const cfg = getDailyCircuitConfig();
+  game.mode = "race";
+  game.mapSelection = DAILY_CIRCUIT_ID;
+  game.customMapConfig = cfg;
+  game.selectedMapIdx = getDefaultCircuitMapIdx();
+  game.tournament = null;
+  return cfg;
+}
+
+export function selectRandomCircuit({ reroll = false, seed = null } = {}) {
+  const cfg = getOrCreateRandomCircuit(reroll, seed);
+  game.mode = "race";
+  game.mapSelection = RANDOM_CIRCUIT_ID;
+  game.customMapConfig = cfg;
+  game.selectedMapIdx = getDefaultCircuitMapIdx();
+  game.tournament = null;
+  return cfg;
 }
 
 export function selectCircuitMap(idx) {
   const map = MAPS[idx];
   if (!map) return;
   game.mapSelection = map.id;
+  game.customMapConfig = null;
   game.selectedMapIdx = idx;
   game.tournament = null;
 }
 
 export function syncMapSelectionFromIdx(mapIdx) {
   const map = MAPS[mapIdx];
-  if (map) game.mapSelection = map.id;
+  if (map) {
+    game.mapSelection = map.id;
+    game.customMapConfig = null;
+  }
 }
 
 export function sanitizeP2pLobbyMode(mode) {
@@ -222,8 +299,86 @@ export function selectArenaMap(idx) {
   if (!map || !map.arena) return;
   game.mode = "battle";
   game.mapSelection = map.id;
+  game.customMapConfig = null;
   game.selectedMapIdx = idx;
   game.tournament = null;
+}
+
+export function renderModeToggle() {
+  const modeGroup = document.getElementById("mode-toggle-group");
+  if (!modeGroup) return;
+  const currentMode = isBattleMode() ? "battle" : "race";
+  const isGuest = !!(game.p2pMode && game.p2pRole === "guest");
+  modeGroup.querySelectorAll("[data-mode]").forEach((btn) => {
+    const active = btn.dataset.mode === currentMode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", String(active));
+    btn.disabled = isGuest;
+    btn.classList.toggle("disabled", isGuest);
+  });
+}
+
+export function updateSinglePlayerLobbyUi() {
+  const battleSection = document.getElementById("battle-select-section");
+  const mapTitle = document.getElementById("map-select-title");
+  const subtitle = document.getElementById("lobby-subtitle");
+  const hint = document.getElementById("lobby-hint");
+  const inBattle = isBattleMode();
+  if (battleSection) {
+    battleSection.style.display = inBattle ? "flex" : "none";
+    battleSection.querySelectorAll("button").forEach((b) => {
+      b.disabled = false;
+      b.classList.remove("disabled");
+    });
+  }
+  if (inBattle) renderApprovalsSelect();
+  if (mapTitle) {
+    mapTitle.innerText = inBattle
+      ? "Select Arena Map"
+      : (shouldShowGrandPrixCard() ? "Select Circuit or Grand Prix" : "Select Circuit Track");
+  }
+  if (subtitle) {
+    subtitle.innerText = inBattle ? "Battle Arena: Choose Your Coder" : "Lobby: Choose Your Coder";
+  }
+  if (hint) {
+    hint.innerText = inBattle ? "Press Space or Enter to Battle!" : "Press Space or Enter to Drive!";
+  }
+  if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none";
+  renderModeToggle();
+  updateDriveButtonLabel();
+}
+
+export function setLobbyMode(mode) {
+  if (game.state !== STATE.SELECT) return;
+  if (game.p2pMode && game.p2pRole === "guest") return;
+  if (game.p2pMode && game.p1Locked) return;
+  if (game.multiplayer && !game.p2pMode && game.p1Locked && game.p2Locked) return;
+
+  const nextMode = sanitizeP2pLobbyMode(mode);
+  if ((isBattleMode() ? "battle" : "race") === nextMode) return;
+
+  game.mode = nextMode;
+  game.tournament = null;
+  ensureSelectedMapMatchesMode();
+
+  const selectedMap = getActiveMapConfig(game);
+  if (selectedMap) uiRuntime.previewSelectedMapMusic(selectedMap);
+
+  if (game.p2pMode) {
+    resetP2pReadyForLobbyChange();
+    renderMapSelect();
+    uiRuntime.updateP2pBattleLobbyUi();
+    updateDriveButtonLabel();
+  } else if (game.multiplayer) {
+    renderMapSelect();
+    updateLocalMultiplayerLobbyUi();
+    updateDriveButtonLabel();
+  } else {
+    updateSinglePlayerLobbyUi();
+    renderMapSelect();
+    uiRuntime.renderAiModelSelector();
+  }
+  Sound.tone(nextMode === "battle" ? 700 : 520, 0.08, "sine", 0.15);
 }
 
 export function updateLocalMultiplayerLobbyUi() {
@@ -238,7 +393,7 @@ export function updateLocalMultiplayerLobbyUi() {
   }
   if (showBattleRules) renderApprovalsSelect();
   const mapTitle = document.getElementById("map-select-title");
-  if (mapTitle) mapTitle.innerText = "Select Mode & Map";
+  if (mapTitle) mapTitle.innerText = showBattleRules ? "Select Arena Map" : "Select Circuit Track";
   const subtitle = document.getElementById("lobby-subtitle");
   if (subtitle) {
     subtitle.innerText = showBattleRules
@@ -249,20 +404,25 @@ export function updateLocalMultiplayerLobbyUi() {
   if (hint) {
     hint.innerText = "Space to lock P1 · Right Shift to lock P2 · Esc for menu";
   }
+  renderModeToggle();
 }
 
-export function selectLocalMultiplayerMap({ mapIdx, mode } = {}) {
+export function selectLocalMultiplayerMap({ mapIdx, mapSelection, reroll = false, mode } = {}) {
   if (game.p1Locked && game.p2Locked) return;
   const nextMode = sanitizeP2pLobbyMode(mode);
   game.mode = nextMode;
   if (nextMode === "battle") {
     game.tournament = null;
     if (mapIdx !== undefined) selectArenaMap(mapIdx);
+  } else if (mapSelection === DAILY_CIRCUIT_ID) {
+    selectDailyCircuit();
+  } else if (mapSelection === RANDOM_CIRCUIT_ID) {
+    selectRandomCircuit({ reroll });
   } else if (mapIdx !== undefined) {
     selectCircuitMap(mapIdx);
   }
   ensureSelectedMapMatchesMode();
-  const selectedMap = MAPS[game.selectedMapIdx || 0];
+  const selectedMap = getActiveMapConfig(game);
   if (selectedMap) uiRuntime.previewSelectedMapMusic(selectedMap);
   renderMapSelect();
   updateLocalMultiplayerLobbyUi();
@@ -270,7 +430,7 @@ export function selectLocalMultiplayerMap({ mapIdx, mode } = {}) {
   Sound.tone(nextMode === "battle" ? 700 : 520, 0.08, "sine", 0.15);
 }
 
-export function selectP2pMap({ mapIdx, mapSelection, mode } = {}) {
+export function selectP2pMap({ mapIdx, mapSelection, reroll = false, mode } = {}) {
   if (game.p1Locked && game.p2pRole === "host") return;
   const nextMode = sanitizeP2pLobbyMode(mode);
   game.mode = nextMode;
@@ -279,12 +439,16 @@ export function selectP2pMap({ mapIdx, mapSelection, mode } = {}) {
     if (mapIdx !== undefined) selectArenaMap(mapIdx);
   } else if (mapSelection === GRAND_PRIX_ID) {
     selectGrandPrixMap();
+  } else if (mapSelection === DAILY_CIRCUIT_ID) {
+    selectDailyCircuit();
+  } else if (mapSelection === RANDOM_CIRCUIT_ID) {
+    selectRandomCircuit({ reroll });
   } else if (mapIdx !== undefined) {
     selectCircuitMap(mapIdx);
   }
   ensureSelectedMapMatchesMode();
   resetP2pReadyForLobbyChange();
-  const selectedMap = MAPS[game.selectedMapIdx || 0];
+  const selectedMap = getActiveMapConfig(game);
   if (selectedMap) uiRuntime.previewSelectedMapMusic(selectedMap);
   renderMapSelect();
   uiRuntime.renderAiModelSelector();
@@ -302,6 +466,13 @@ export function applyLobbyMapSelection(data = {}) {
     game.mapSelection = data.mapSelection;
   } else if (data.mapIdx !== undefined) {
     syncMapSelectionFromIdx(data.mapIdx);
+  }
+  if (!isBattleMode() && game.mapSelection === DAILY_CIRCUIT_ID) {
+    game.customMapConfig = getDailyCircuitConfig();
+  } else if (!isBattleMode() && game.mapSelection === RANDOM_CIRCUIT_ID) {
+    game.customMapConfig = getOrCreateRandomCircuit(false, data.proceduralSeed);
+  } else {
+    game.customMapConfig = null;
   }
   if (data.grandPrixRaces !== undefined && uiRuntime.setGrandPrixRaces) uiRuntime.setGrandPrixRaces(clampGrandPrixRaces(data.grandPrixRaces));
   ensureSelectedMapMatchesMode();
@@ -628,38 +799,18 @@ export function showSelectScreen() {
     updateDriveButtonLabel();
   }
 
-  const battleSection = document.getElementById("battle-select-section");
   const mapSection = document.getElementById("map-select-section");
+  if (mapSection) mapSection.style.display = "";
   if (game.p2pMode) {
-    if (mapSection) {
-      mapSection.style.display = "";
-      const mapTitle = document.getElementById("map-select-title");
-      if (mapTitle) mapTitle.innerText = "Select Mode & Map";
-    }
+    const mapTitle = document.getElementById("map-select-title");
+    if (mapTitle) mapTitle.innerText = isBattleMode() ? "Select Arena Map" : "Select Circuit or Grand Prix";
     uiRuntime.updateP2pBattleLobbyUi();
   } else if (game.multiplayer) {
-    if (mapSection) mapSection.style.display = "";
     updateLocalMultiplayerLobbyUi();
-  } else if (isBattleMode()) {
-    if (mapSection) {
-      mapSection.style.display = "";
-      const mapTitle = document.getElementById("map-select-title");
-      if (mapTitle) mapTitle.innerText = "Select Arena Map";
-    }
-    if (aiSelectSection) aiSelectSection.style.display = TRAINED_AI_ENABLED ? "flex" : "none";
-    if (battleSection) battleSection.style.display = "flex";
-    document.getElementById("lobby-subtitle").innerText = "Battle Arena: Choose Your Coder";
-    document.getElementById("lobby-hint").innerText = "Press Space or Enter to Battle!";
-    driveBtn.textContent = "Battle!";
-    renderApprovalsSelect();
   } else {
-    if (mapSection) {
-      mapSection.style.display = "";
-      const mapTitle = document.getElementById("map-select-title");
-      if (mapTitle) mapTitle.innerText = shouldShowGrandPrixCard() ? "Select Circuit or Grand Prix" : "Select Circuit Track";
-    }
-    if (battleSection) battleSection.style.display = "none";
+    updateSinglePlayerLobbyUi();
   }
+  renderModeToggle();
 
   renderSelectScreen();
   uiRuntime.updateSelectionHighlight();
@@ -811,11 +962,74 @@ export function buildGrandPrixMapCard({ disabled = false, onSelect } = {}) {
   });
 }
 
+export function buildDailyCircuitCard({ disabled = false, onSelect } = {}) {
+  const cfg = getDailyCircuitConfig();
+  const isSelected = !isBattleMode() && isDailyCircuitSelection();
+  let hostLabelHTML = "";
+  if (game.p2pMode && isSelected) {
+    hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
+  }
+  const chipsHtml = [
+    `<span class="feature-chip accent">DAILY SEED</span>`,
+    `<span class="feature-chip success">${cfg.dailyDateKey}</span>`,
+    ...getMapFeatureChips(cfg).slice(0, 2).map((c) => `<span class="feature-chip">${c}</span>`),
+  ].join("");
+  return buildMapCard({
+    classes: "map-card procedural-card daily-circuit-card",
+    preview: getMapPreviewSvg(cfg),
+    title: "Daily Circuit",
+    chipsHtml,
+    desc: cfg.desc,
+    stat: `SEED #${cfg.proceduralSeed % 100000} · ${cfg.waypoints.length} SEGMENTS · SHARED DAILY`,
+    badge: hostLabelHTML,
+    selected: isSelected,
+    disabled,
+    onSelect,
+  });
+}
+
+export function buildRandomCircuitCard({ disabled = false, onSelect, onReroll } = {}) {
+  const cfg = (isRandomCircuitSelection() && game.customMapConfig && !game.customMapConfig.isDaily)
+    ? game.customMapConfig
+    : getOrCreateRandomCircuit(false);
+  const isSelected = !isBattleMode() && isRandomCircuitSelection();
+  let hostLabelHTML = "";
+  if (game.p2pMode && isSelected) {
+    hostLabelHTML = `<span class="host-badge">${game.p2pRole === "host" ? "Host Pick" : "Host Choice"}</span>`;
+  }
+  const chipsHtml = [
+    `<span class="feature-chip accent">PROCEDURAL</span>`,
+    ...getMapFeatureChips(cfg).slice(0, 3).map((c) => `<span class="feature-chip">${c}</span>`),
+  ].join("");
+  const card = buildMapCard({
+    classes: "map-card procedural-card random-circuit-card",
+    preview: getMapPreviewSvg(cfg),
+    title: `Random Circuit <button type="button" class="map-reroll-btn" title="Generate a new random layout"${disabled ? " disabled" : ""}>↻ New Seed</button>`,
+    chipsHtml,
+    desc: "Fresh procedural layout every click — guaranteed smooth corners, launch ramps, and moving gates.",
+    stat: `SEED #${cfg.proceduralSeed % 100000} · ${cfg.waypoints.length} SEGMENTS · PROCEDURAL`,
+    badge: hostLabelHTML,
+    selected: isSelected,
+    disabled,
+    onSelect,
+  });
+  const rerollBtn = card.querySelector(".map-reroll-btn");
+  if (rerollBtn && !disabled && onReroll) {
+    rerollBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (game.p1Locked && (!game.multiplayer || game.p2pMode || game.p2Locked)) return;
+      onReroll();
+    });
+  }
+  return card;
+}
+
 export function buildCircuitMapCard(map, idx, { disabled = false, onSelect, targetMode = null } = {}) {
   const selectionMode = targetMode || (map.arena ? "battle" : "race");
   const isSelected = selectionMode === "battle"
     ? (isBattleMode() && idx === (game.selectedMapIdx || 0))
-    : (!isGrandPrixSelection() && !isBattleMode() && idx === (game.selectedMapIdx || 0));
+    : (!isGrandPrixSelection() && !isDailyCircuitSelection() && !isRandomCircuitSelection() && !isBattleMode() && idx === (game.selectedMapIdx || 0));
 
   let hostLabelHTML = "";
   if (game.p2pMode && isSelected) {
@@ -848,77 +1062,57 @@ export function buildCircuitMapCard(map, idx, { disabled = false, onSelect, targ
 
 export function renderP2pDualMapSelect(container) {
   const isP2pGuest = game.p2pRole === "guest";
+  const inBattle = isBattleMode();
 
-  const raceSection = document.createElement("div");
-  raceSection.className = "p2p-map-category";
-  raceSection.innerHTML = `<div class="map-select-title">Race &amp; Grand Prix</div>`;
-  const raceGrid = document.createElement("div");
-  raceGrid.className = "map-select-container";
-  raceGrid.appendChild(buildGrandPrixMapCard({
-    disabled: isP2pGuest,
-    onSelect: () => selectP2pMap({ mapSelection: GRAND_PRIX_ID, mode: "race" }),
-  }));
-  MAPS.forEach((map, idx) => {
-    if (map.arena) return;
-    raceGrid.appendChild(buildCircuitMapCard(map, idx, {
+  if (!inBattle) {
+    container.appendChild(buildGrandPrixMapCard({
       disabled: isP2pGuest,
-      targetMode: "race",
-      onSelect: (_, mapIdx) => selectP2pMap({ mapIdx, mode: "race" }),
+      onSelect: () => selectP2pMap({ mapSelection: GRAND_PRIX_ID, mode: "race" }),
+    }));
+    container.appendChild(buildDailyCircuitCard({
+      disabled: isP2pGuest,
+      onSelect: () => selectP2pMap({ mapSelection: DAILY_CIRCUIT_ID, mode: "race" }),
+    }));
+    container.appendChild(buildRandomCircuitCard({
+      disabled: isP2pGuest,
+      onSelect: () => selectP2pMap({ mapSelection: RANDOM_CIRCUIT_ID, mode: "race" }),
+      onReroll: () => selectP2pMap({ mapSelection: RANDOM_CIRCUIT_ID, reroll: true, mode: "race" }),
+    }));
+  }
+
+  MAPS.forEach((map, idx) => {
+    if (!!map.arena !== inBattle) return;
+    container.appendChild(buildCircuitMapCard(map, idx, {
+      disabled: isP2pGuest,
+      targetMode: inBattle ? "battle" : "race",
+      onSelect: (_, mapIdx) => selectP2pMap({ mapIdx, mode: inBattle ? "battle" : "race" }),
     }));
   });
-  raceSection.appendChild(raceGrid);
 
-  const battleSection = document.createElement("div");
-  battleSection.className = "p2p-map-category";
-  battleSection.innerHTML = `<div class="map-select-title">Battle Arenas</div>`;
-  const battleGrid = document.createElement("div");
-  battleGrid.className = "map-select-container";
-  MAPS.forEach((map, idx) => {
-    if (!map.arena) return;
-    battleGrid.appendChild(buildCircuitMapCard(map, idx, {
-      disabled: isP2pGuest,
-      targetMode: "battle",
-      onSelect: (_, mapIdx) => selectP2pMap({ mapIdx, mode: "battle" }),
-    }));
-  });
-  battleSection.appendChild(battleGrid);
-
-  container.appendChild(raceSection);
-  container.appendChild(battleSection);
   uiRuntime.updateP2pBattleLobbyUi();
 }
 
 export function renderLocalMultiplayerDualMapSelect(container) {
-  const raceSection = document.createElement("div");
-  raceSection.className = "p2p-map-category";
-  raceSection.innerHTML = `<div class="map-select-title">Circuit Races</div>`;
-  const raceGrid = document.createElement("div");
-  raceGrid.className = "map-select-container";
+  const inBattle = isBattleMode();
+
+  if (!inBattle) {
+    container.appendChild(buildDailyCircuitCard({
+      onSelect: () => selectLocalMultiplayerMap({ mapSelection: DAILY_CIRCUIT_ID, mode: "race" }),
+    }));
+    container.appendChild(buildRandomCircuitCard({
+      onSelect: () => selectLocalMultiplayerMap({ mapSelection: RANDOM_CIRCUIT_ID, mode: "race" }),
+      onReroll: () => selectLocalMultiplayerMap({ mapSelection: RANDOM_CIRCUIT_ID, reroll: true, mode: "race" }),
+    }));
+  }
+
   MAPS.forEach((map, idx) => {
-    if (map.arena) return;
-    raceGrid.appendChild(buildCircuitMapCard(map, idx, {
-      targetMode: "race",
-      onSelect: (_, mapIdx) => selectLocalMultiplayerMap({ mapIdx, mode: "race" }),
+    if (!!map.arena !== inBattle) return;
+    container.appendChild(buildCircuitMapCard(map, idx, {
+      targetMode: inBattle ? "battle" : "race",
+      onSelect: (_, mapIdx) => selectLocalMultiplayerMap({ mapIdx, mode: inBattle ? "battle" : "race" }),
     }));
   });
-  raceSection.appendChild(raceGrid);
 
-  const battleSection = document.createElement("div");
-  battleSection.className = "p2p-map-category";
-  battleSection.innerHTML = `<div class="map-select-title">Battle Arenas (Approvals)</div>`;
-  const battleGrid = document.createElement("div");
-  battleGrid.className = "map-select-container";
-  MAPS.forEach((map, idx) => {
-    if (!map.arena) return;
-    battleGrid.appendChild(buildCircuitMapCard(map, idx, {
-      targetMode: "battle",
-      onSelect: (_, mapIdx) => selectLocalMultiplayerMap({ mapIdx, mode: "battle" }),
-    }));
-  });
-  battleSection.appendChild(battleGrid);
-
-  container.appendChild(raceSection);
-  container.appendChild(battleSection);
   updateLocalMultiplayerLobbyUi();
 }
 
@@ -926,6 +1120,7 @@ export function renderMapSelect() {
   const container = document.getElementById("maps-container");
   if (!container) return;
   ensureSelectedMapMatchesMode();
+  renderModeToggle();
   container.innerHTML = "";
 
   if (game.p2pMode) {
@@ -949,6 +1144,37 @@ export function renderMapSelect() {
         uiRuntime.renderAiModelSelector();
         updateDriveButtonLabel();
         Sound.tone(620, 0.1, "sine", 0.18);
+      },
+    }));
+  }
+
+  if (!isBattleMode()) {
+    container.appendChild(buildDailyCircuitCard({
+      onSelect: () => {
+        const cfg = selectDailyCircuit();
+        uiRuntime.previewSelectedMapMusic(cfg);
+        renderMapSelect();
+        uiRuntime.renderAiModelSelector();
+        updateDriveButtonLabel();
+        Sound.tone(600, 0.08, "sine", 0.16);
+      },
+    }));
+    container.appendChild(buildRandomCircuitCard({
+      onSelect: () => {
+        const cfg = selectRandomCircuit({ reroll: false });
+        uiRuntime.previewSelectedMapMusic(cfg);
+        renderMapSelect();
+        uiRuntime.renderAiModelSelector();
+        updateDriveButtonLabel();
+        Sound.tone(560, 0.08, "sine", 0.16);
+      },
+      onReroll: () => {
+        const cfg = selectRandomCircuit({ reroll: true });
+        uiRuntime.previewSelectedMapMusic(cfg);
+        renderMapSelect();
+        uiRuntime.renderAiModelSelector();
+        updateDriveButtonLabel();
+        Sound.tone(720, 0.07, "triangle", 0.15);
       },
     }));
   }

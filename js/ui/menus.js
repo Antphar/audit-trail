@@ -3,7 +3,7 @@ import { TUNING } from "../config/tuning.js";
 import { CHARACTERS } from "../config/characters.js";
 import { clamp } from "../core/math.js";
 import { resetAllInputs } from "../core/input.js";
-import { MAPS, GRAND_PRIX_ID } from "../config/maps.js";
+import { MAPS, GRAND_PRIX_ID, getActiveMapConfig } from "../config/maps.js";
 import { getMapRecord } from "../core/settings.js";
 import {
   STATE, game, normalizeTimeOfDay, isBattleMode, isDayMode, isGrandPrixActive, isGrandPrixSelection,
@@ -449,7 +449,7 @@ export function showFinishScreen() {
 
       // Personal bests for this track
       const bestLapThisRun = (game.player.lapTimes && game.player.lapTimes.length) ? Math.min(...game.player.lapTimes) : 0;
-      const rec = getMapRecord(MAPS[game.selectedMapIdx || 0].id);
+      const rec = getMapRecord(getActiveMapConfig(game).id);
       const nr = game.newRecord || {};
       if (bestLapThisRun > 0) {
         html += `<div class="row"><span class="label">Best Lap${nr.lap ? ` <span style="color:#ffd86b;font-weight:900;">★ NEW!</span>` : ``}</span><span class="value">${formatTime(bestLapThisRun)}</span></div>`;

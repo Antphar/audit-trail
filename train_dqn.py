@@ -2224,7 +2224,7 @@ def run_benchmark(args: argparse.Namespace, index_path: Path) -> None:
         args.map = args.arena_map
         args.solo = False
         args.no_items = False
-        args.no_hazards = True
+        args.no_hazards = False
 
     page = None
     browser_ctx = None
@@ -2306,7 +2306,7 @@ def train(args: argparse.Namespace) -> None:
     if args.procedural_maps and args.procedural_map_prob <= 0.0:
         args.procedural_map_prob = 0.5
     if is_battle:
-        # Arena free-for-all: opponents + items ON, hazards OFF, no lap navigation.
+        # Arena free-for-all: opponents + items + item hazards ON, no lap navigation.
         # Supports multi-arena domain randomization when --random-map or comma-separated --arena-map is used.
         arena_maps = parse_csv(args.arena_map) or ["battle_arena"]
         if args.random_map and len(arena_maps) == 1 and arena_maps[0] == "battle_arena":
@@ -2319,7 +2319,7 @@ def train(args: argparse.Namespace) -> None:
         args.procedural_map_prob = 0.0
         args.solo = False
         args.no_items = False
-        args.no_hazards = True
+        args.no_hazards = False
         # Avoid clobbering the race model when only defaults are used.
         if args.model_id == "dqn-latest":
             args.model_id = "dqn-arena"

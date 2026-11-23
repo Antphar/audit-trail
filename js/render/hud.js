@@ -7,7 +7,7 @@ import {
   isBattleMode,
   getActiveKarts,
 } from "../core/state.js";
-import { MAPS } from "../config/maps.js";
+import { MAPS, getActiveMapConfig } from "../config/maps.js";
 import { Sound } from "../audio/sound.js";
 import { kartVisualZOffset } from "../entities/particles.js";
 import { WORLD_W, WORLD_H } from "../entities/track.js";
@@ -19,7 +19,7 @@ const ctx = () => renderRuntime.getCtx();
 const VIEW_W = () => renderRuntime.getViewW();
 const VIEW_H = () => renderRuntime.getViewH();
 function getTotalLaps() { return renderRuntime.getTotalLaps ? renderRuntime.getTotalLaps() : 3; }
-function isDragonEscape() { return MAPS[game.selectedMapIdx || 0].id === "dragon_escape"; }
+function isDragonEscape() { return getActiveMapConfig(game).id === "dragon_escape"; }
 let _approvalProjVec3 = null;
 
 export function drawApprovalSeals(c, x, y, n, time = 0, r = 8) {

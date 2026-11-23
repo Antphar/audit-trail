@@ -15,7 +15,12 @@ import {
   dispose3DObject,
   getParticleGlowTexture3D,
 } from "./three-state.js";
-import { sync3DSkidMarks } from "./three-track.js";
+import {
+  getTrackElevationAt,
+  getTrackElevationY,
+  sync3DSkidMarks,
+} from "./three-track.js";
+import { update3DSkyAnimation } from "./three-scene.js";
 import {
   syncMergeTethers3D,
   buildDragonModel3D,
@@ -52,10 +57,12 @@ function drawCompassFx3DOverlayParticle(c, p, time, camera, viewport, v) {
       return false;
     }
 
+    const tx = lerp(vx, ax, ease);
+    const tz = lerp(vy, ay, ease);
     v.set(
-      lerp(vx, ax, ease),
-      18 + lerp(victim?.z || 0, attacker?.z || 0, ease) * 0.5,
-      lerp(vy, ay, ease) - 18
+      tx,
+      getTrackElevationY(tx, tz) + 18 + lerp(victim?.z || 0, attacker?.z || 0, ease) * 0.5,
+      tz - 18
     );
     v.project(camera);
     if (v.z > 1) return false;
@@ -65,10 +72,12 @@ function drawCompassFx3DOverlayParticle(c, p, time, camera, viewport, v) {
     for (let i = 1; i <= trailLen; i++) {
       const te = ease - i * 0.07;
       if (te < 0) break;
+      const ttx = lerp(vx, ax, te);
+      const ttz = lerp(vy, ay, te);
       v.set(
-        lerp(vx, ax, te),
-        18 + lerp(victim?.z || 0, attacker?.z || 0, te) * 0.5,
-        lerp(vy, ay, te) - 18
+        ttx,
+        getTrackElevationY(ttx, ttz) + 18 + lerp(victim?.z || 0, attacker?.z || 0, te) * 0.5,
+        ttz - 18
       );
       v.project(camera);
       if (v.z > 1) continue;
@@ -89,7 +98,7 @@ function drawCompassFx3DOverlayParticle(c, p, time, camera, viewport, v) {
     c.arc(sx, sy, 13 + Math.sin(time * 0.018) * 1.2, 0, TAU);
     c.stroke();
     if (p.life < 8 && attacker && !attacker.eliminated) {
-      v.set(attacker.x, 20 + (attacker.z || 0), attacker.y - kartVisualZOffset(attacker) - 16);
+      v.set(attacker.x, getTrackElevationY(attacker.x, attacker.y) + 20 + (attacker.z || 0), attacker.y - kartVisualZOffset(attacker) - 16);
       v.project(camera);
       if (v.z <= 1) {
         const pulse = (8 - p.life) / 8;
@@ -104,7 +113,7 @@ function drawCompassFx3DOverlayParticle(c, p, time, camera, viewport, v) {
     return true;
   }
 
-  v.set(p.x, 14 + (p.zOff || 0), p.y);
+  v.set(p.x, getTrackElevationY(p.x, p.y) + 14 + (p.zOff || 0), p.y);
   v.project(camera);
   if (v.z > 1) return false;
   const sx = compassFxScreenX(v, viewport);
@@ -179,19 +188,20 @@ export function drawCompassFx3DOverlay(c, time, camera = THREE_STATE.camera, vie
 function updateLightsForKart(kart) {
   if (!kart) return;
   const fx = Math.cos(kart.heading), fy = Math.sin(kart.heading);
+  const ky = getTrackElevationY(kart.x, kart.y);
   if (THREE_STATE.playerLight) {
-    THREE_STATE.playerLight.position.set(kart.x, 150, kart.y);
+    THREE_STATE.playerLight.position.set(kart.x, ky + 150, kart.y);
   }
   if (THREE_STATE.dirLight) {
-    THREE_STATE.dirLight.position.set(kart.x + 300, 600, kart.y - 300);
-    THREE_STATE.dirLight.target.position.set(kart.x, 0, kart.y);
+    THREE_STATE.dirLight.position.set(kart.x + 300, ky + 600, kart.y - 300);
+    THREE_STATE.dirLight.target.position.set(kart.x, ky, kart.y);
     THREE_STATE.dirLight.target.updateMatrixWorld();
   }
   if (THREE_STATE.rimLight) {
-    THREE_STATE.rimLight.position.set(kart.x - 150, 120, kart.y + 150);
+    THREE_STATE.rimLight.position.set(kart.x - 150, ky + 120, kart.y + 150);
   }
   if (THREE_STATE.backLight) {
-    THREE_STATE.backLight.position.set(kart.x - fx * 80, 60, kart.y - fy * 80);
+    THREE_STATE.backLight.position.set(kart.x - fx * 80, ky + 60, kart.y - fy * 80);
   }
 }
 
@@ -203,8 +213,9 @@ function sync3DKarts(dt, time) {
   for (const [kart, model] of THREE_STATE.kartModels) {
     const z = kart.z || 0;
     const vz = kart.vz || 0;
+    const surf = getTrackElevationAt(kart.x, kart.y);
     model.rotation.order = "YXZ";
-    model.position.set(kart.x, z, kart.y);
+    model.position.set(kart.x, surf.y + z, kart.y);
 
     const fx = Math.cos(kart.heading);
     const fy = Math.sin(kart.heading);
@@ -212,25 +223,34 @@ function sync3DKarts(dt, time) {
     const ly = fx;
     const fwdSpeed = kart.forwardSpeed ? kart.forwardSpeed() : kart.speed();
     const lateralV = kart.vx * lx + kart.vy * ly;
+    const alignDot = fx * surf.ux + fy * surf.uy;
+    const groundBlend = clamp(1 - z / 28, 0, 1);
 
-    // Drift yaw slip + spinout
+    // Drift yaw slip + spinout + mid-air ramp trick 360 spin
     const drifting = (kart._driftTimer || 0) > 0;
     const targetDriftSlip = drifting
       ? -(kart.driftDir || clamp(lateralV * 0.18, -1, 1)) * 0.22
       : 0;
     model._driftSlip = lerp(model._driftSlip || 0, targetDriftSlip, animLerp);
-    model.rotation.y = -kart.heading + Math.PI / 2 + model._driftSlip + (kart.spinoutTimer > 0 ? (kart.spinAngle || 0) : 0);
+    const trickActive = !!(kart.trickDone && z > 2);
+    const trickYaw = trickActive ? (kart.trickSpin || 0) * (kart.trickDir || 1) : 0;
+    const trickArc = trickActive ? Math.sin((kart.trickSpin || 0) * 0.5) : 0;
+    model.rotation.y = -kart.heading + Math.PI / 2 + model._driftSlip + (kart.spinoutTimer > 0 ? (kart.spinAngle || 0) : 0) + trickYaw;
 
-    // Dynamic kart pitch: nose up on boost / positive vz, dip on braking
+    // Dynamic kart pitch: surface slope + nose up on boost / positive vz, dip on braking + trick nose flair
     const braking = fwdSpeed < -0.2 || kart.spinoutTimer > 0 || (model._prevFwd !== undefined && fwdSpeed < model._prevFwd - 0.08 && fwdSpeed > 0.2);
     model._prevFwd = fwdSpeed;
-    const targetPitch = (kart.boostTimer > 0 ? -0.065 : 0)
+    const surfacePitch = -Math.atan(surf.slope * alignDot) * groundBlend;
+    const targetPitch = surfacePitch
+      + (kart.boostTimer > 0 ? -0.065 : 0)
       + clamp(-vz * 0.02, -0.22, 0.16)
-      + (braking && fwdSpeed > 0.2 ? 0.055 : 0);
+      + (braking && fwdSpeed > 0.2 ? 0.055 : 0)
+      - trickArc * 0.26;
     model.rotation.x = lerp(model.rotation.x || 0, targetPitch, animLerp);
 
-    // Body roll into turns
-    const targetLean = clamp(lateralV * 0.04, -0.18, 0.18);
+    // Body roll into turns + banked corner alignment + mid-air trick roll flair
+    const surfaceRoll = -Math.atan(surf.bank) * alignDot * groundBlend;
+    const targetLean = surfaceRoll + clamp(lateralV * 0.04, -0.18, 0.18) + trickArc * 0.36 * (kart.trickDir || 1);
     model.rotation.z = lerp(model.rotation.z || 0, targetLean, animLerp);
 
     // Squash & stretch
@@ -258,7 +278,7 @@ function sync3DKarts(dt, time) {
       }
     }
 
-    // Ground contact shadow pinned to ground y=0.68, scaled & faded with altitude
+    // Ground contact shadow pinned to surface y=0.68, scaled & faded with altitude
     if (model._contactShadow) {
       const airFrac = clamp(z / 80, 0, 1);
       const sScale = 1 - airFrac * 0.45;
@@ -276,6 +296,9 @@ function sync3DKarts(dt, time) {
     }
     if (model._headlightPool) {
       model._headlightPool.visible = !day && !kart.eliminated;
+      if (model._headlightPool.visible) {
+        model._headlightPool.position.y = (0.72 - z) / Math.max(0.5, model.scale.y);
+      }
     }
 
     // Shield visibility + rotation
@@ -291,34 +314,130 @@ function sync3DKarts(dt, time) {
       }
     }
 
+    // Tier-colored animated exhaust flame cones + reactive ground underglow
     const boostMaterial = model.userData.boostMaterial;
-    if (kart.boostTimer > 0) {
-      if (boostMaterial) {
+    const isUltraBoost = kart.boostTimer > 0 && !!kart.ultraBoostActive;
+    const isBoost = kart.boostTimer > 0;
+    const isDraftBoost = (kart.draftBoostTimer || 0) > 0;
+    const driftTier = drifting ? (kart.driftTier || 0) : 0;
+    const isFastCruise = !kart.eliminated && fwdSpeed > 4.4;
+
+    let flameOuterHex = null;
+    let flameCoreHex = null;
+    let flameIntensity = 0;
+    let flameScaleBase = 0;
+    let glowHex = null;
+    let glowOpacity = 0;
+
+    if (isUltraBoost) {
+      flameOuterHex = 0x57f2ff;
+      flameCoreHex = 0xffffff;
+      flameIntensity = 1.0;
+      flameScaleBase = 1.32;
+      glowHex = 0x57f2ff;
+      glowOpacity = 0.44;
+    } else if (isBoost) {
+      flameOuterHex = 0xff6e20;
+      flameCoreHex = 0xffe480;
+      flameIntensity = 0.9;
+      flameScaleBase = 1.12;
+      glowHex = 0xff9238;
+      glowOpacity = 0.36;
+    } else if (isDraftBoost) {
+      flameOuterHex = 0x4dffaa;
+      flameCoreHex = 0xdcffef;
+      flameIntensity = 0.82;
+      flameScaleBase = 0.94;
+      glowHex = 0x4dffaa;
+      glowOpacity = 0.30;
+    } else if (driftTier >= 3) {
+      flameOuterHex = 0xd94dff;
+      flameCoreHex = 0xffc8ff;
+      flameIntensity = 0.78;
+      flameScaleBase = 0.84;
+      glowHex = 0xd94dff;
+      glowOpacity = 0.36;
+    } else if (driftTier === 2) {
+      flameOuterHex = 0xfd9927;
+      flameCoreHex = 0xffe596;
+      flameIntensity = 0.68;
+      flameScaleBase = 0.7;
+      glowHex = 0xfd9927;
+      glowOpacity = 0.28;
+    } else if (driftTier === 1) {
+      flameOuterHex = 0x00d8ff;
+      flameCoreHex = 0xc8f4ff;
+      flameIntensity = 0.58;
+      flameScaleBase = 0.56;
+      glowHex = 0x00d8ff;
+      glowOpacity = 0.22;
+    } else if (isFastCruise) {
+      flameOuterHex = 0xff7728;
+      flameCoreHex = 0xffdf99;
+      flameIntensity = 0.36;
+      flameScaleBase = 0.38;
+    }
+
+    if (boostMaterial) {
+      if (isBoost || isDraftBoost) {
         boostMaterial.emissive.copy(boostMaterial.color);
-        boostMaterial.emissiveIntensity = 0.4 + 0.3 * Math.sin(time * 0.01);
-      }
-      if (model._flameMat && model._flame) {
-        model._flame.visible = true;
-        model._flameMat.opacity = 0.7 + 0.2 * Math.sin(time * 0.03);
-        const flameScale = 1 + 0.25 * Math.sin(time * 0.05);
-        const speedStretch = 1 + Math.min(1.0, kart.speed() * 0.1);
-        model._flame.scale.set(flameScale, speedStretch, flameScale);
-        if (model._flame._coreMat) {
-          model._flame._coreMat.opacity = 0.5 + 0.3 * Math.sin(time * 0.04);
-        }
-        if (model._flame._flameLight) {
-          model._flame._flameLight.intensity = 0.8 + 0.4 * Math.sin(time * 0.06);
-        }
-      }
-    } else {
-      if (boostMaterial) {
+        boostMaterial.emissiveIntensity = 0.38 + 0.28 * Math.sin(time * 0.012);
+      } else {
         boostMaterial.emissiveIntensity = model.userData.boostBaseEmissiveIntensity || 0;
       }
-      if (model._flameMat && model._flame) {
+    }
+
+    if (model._flameMat && model._flame) {
+      if (flameOuterHex !== null && !kart.eliminated) {
+        model._flame.visible = true;
+        model._flameMat.color.setHex(flameOuterHex);
+        model._flameMat.opacity = flameIntensity * (0.76 + 0.22 * Math.sin(time * 0.036));
+        const flicker = 1 + 0.24 * Math.sin(time * 0.055 + kart.x * 0.02);
+        const speedStretch = flameScaleBase * (0.85 + Math.min(1.05, kart.speed() * 0.11));
+        model._flame.scale.set(flameScaleBase * flicker, speedStretch, flameScaleBase * flicker);
+        if (model._flame._coreMat) {
+          model._flame._coreMat.color.setHex(flameCoreHex);
+          model._flame._coreMat.opacity = flameIntensity * (0.58 + 0.28 * Math.sin(time * 0.048));
+        }
+        if (model._flame._flameLight) {
+          model._flame._flameLight.intensity = flameIntensity * (0.8 + 0.4 * Math.sin(time * 0.06));
+        }
+      } else {
         model._flame.visible = false;
         model._flameMat.opacity = 0;
         if (model._flame._coreMat) model._flame._coreMat.opacity = 0;
         if (model._flame._flameLight) model._flame._flameLight.intensity = 0;
+      }
+    }
+
+    if (model._underGlow && model._underGlowMat) {
+      if (glowHex !== null && !kart.eliminated) {
+        const airFade = clamp(1 - z / 60, 0.15, 1);
+        model._underGlow.visible = true;
+        model._underGlow.position.y = (0.76 - z) / Math.max(0.5, model.scale.y);
+        model._underGlowMat.color.setHex(glowHex);
+        model._underGlowMat.opacity = glowOpacity * airFade * (day ? 0.65 : 1.0) * (0.85 + 0.15 * Math.sin(time * 0.02));
+      } else {
+        model._underGlow.visible = false;
+      }
+    }
+
+    // 3D slipstream / high-speed wind ribbons
+    if (model._slipRibbons && model._slipMat) {
+      const draftCharge = kart.draftTimer || 0;
+      const showRibbons = !kart.eliminated && (draftCharge > 10 || isDraftBoost || (isBoost && fwdSpeed > 5.0));
+      model._slipRibbons.visible = showRibbons;
+      if (showRibbons) {
+        const ribbonHex = isUltraBoost ? 0xffffff : isDraftBoost ? 0xa4ff80 : isBoost ? 0xffd86b : 0x57f2ff;
+        model._slipMat.color.setHex(ribbonHex);
+        const strength = isBoost || isDraftBoost ? 0.42 : clamp((draftCharge - 10) / 45, 0.12, 0.36);
+        model._slipMat.opacity = strength * (0.75 + 0.25 * Math.sin(time * 0.025));
+        for (const rib of model._slipRibbons.children) {
+          const ud = rib.userData;
+          if (!ud) continue;
+          const scroll = ((time * 0.075 + ud.lane * 12) % 24) - 12;
+          rib.position.z = ud.baseZ - scroll;
+        }
       }
     }
   }
@@ -327,6 +446,7 @@ function sync3DKarts(dt, time) {
 export function sync3DScene(time, dt = game.lastDt || 1) {
   if (!THREE_STATE.scene || !game.player) return;
 
+  update3DSkyAnimation(time);
   sync3DKarts(dt, time);
 
   // Camera is handled in setCameraForKart() called from draw3D() for split-screen
@@ -342,7 +462,7 @@ export function sync3DScene(time, dt = game.lastDt || 1) {
     const spin = (m._itemRef?.spin || 0) + time * 0.002;
     m.rotation.y = spin;
     m.rotation.x = Math.sin(time * 0.004 + m.position.x * 0.01) * 0.3;
-    m.position.y = 22 + Math.sin(time * 0.003 + m.position.x * 0.01) * 5;
+    m.position.y = (m._baseY ?? 22) + Math.sin(time * 0.003 + m.position.x * 0.01) * 5;
     if (m.children && m.children[1]) {
       m.children[1].rotation.y = spin * 0.7;
       m.children[1].rotation.x = -spin * 0.5;
@@ -362,7 +482,7 @@ export function sync3DScene(time, dt = game.lastDt || 1) {
     m.visible = true;
     m.rotation.y = time * 0.005;
     m.rotation.x = 0;
-    m.position.y = 9 + Math.sin(time * 0.004 + m.position.x * 0.01) * 2.5;
+    m.position.y = (m._baseY ?? 9) + Math.sin(time * 0.004 + m.position.x * 0.01) * 2.5;
     if (m._discMat) m._discMat.emissiveIntensity = 0.3 + 0.2 * Math.sin(time * 0.007 + m.position.z * 0.01);
   });
 
@@ -371,19 +491,33 @@ export function sync3DScene(time, dt = game.lastDt || 1) {
 
   THREE_STATE.boostPadMeshes.forEach(m => {
     const pulse = 0.55 + 0.35 * Math.sin(time * 0.01 + m.position.x * 0.01);
-    if (m._padMat) m._padMat.emissiveIntensity = 0.4 + 0.4 * pulse;
-    m.position.y = 1.5 + pulse * 0.5;
+    if (m._padMat) m._padMat.emissiveIntensity = 0.45 + 0.45 * pulse;
+    m.position.y = (m._baseY ?? 1.5) + pulse * 0.35;
+    if (m._arrows?.length) {
+      const ph = m._padLen || 70;
+      const scrollBase = (time * 0.0017) % 1;
+      for (let a = 0; a < m._arrows.length; a++) {
+        const phase = (a / m._arrows.length + scrollBase) % 1;
+        m._arrows[a].position.z = -ph * 0.42 + phase * ph * 0.84;
+        const edgeFade = Math.sin(phase * Math.PI);
+        if (m._arrowMats?.[a]) {
+          m._arrowMats[a].opacity = 0.28 + 0.72 * edgeFade;
+          m._arrowMats[a].emissiveIntensity = 0.9 + 1.1 * edgeFade;
+        }
+      }
+    }
   });
 
   THREE_STATE.movingObjectMeshes.forEach(m => {
     const obj = m._movingObjectRef;
     if (!obj) return;
-    m.position.set(obj.x, 24 + Math.sin(time * 0.01 + obj.idx) * 4, obj.y);
+    const objElevY = getTrackElevationY(obj.x, obj.y);
+    m.position.set(obj.x, objElevY + 24 + Math.sin(time * 0.01 + obj.idx) * 4, obj.y);
     m.rotation.y = -(obj.ang || 0) + Math.PI / 2;
     if (m.material) m.material.emissiveIntensity = 0.45 + 0.25 * Math.sin(time * 0.012 + obj.idx);
   });
 
-  syncMergeTethers3D();
+  syncMergeTethers3D(getTrackElevationY);
 
   syncHazards3D(time);
   syncDragons3D(time);
@@ -504,7 +638,7 @@ export function sync3DUltimates(time) {
         continue;
       }
 
-      aura.position.set(kart.x, 0, kart.y);
+      aura.position.set(kart.x, getTrackElevationY(kart.x, kart.y) + (kart.z || 0), kart.y);
       const t = time * 0.001;
 
       // Animate rings
@@ -562,11 +696,12 @@ export function spawn3DShockwave(x, z, maxRadius, colorHex) {
       transparent: true, opacity: 0.85, side: T.DoubleSide,
     });
     const ring = new T.Mesh(ringGeo, ringMat);
-    ring.position.set(x, 8 + i * 6, z);
+    const swY = getTrackElevationY(x, z);
+    ring.position.set(x, swY + 8 + i * 6, z);
     ring.rotation.x = Math.PI / 2;
     THREE_STATE.scene.add(ring);
     const light = (i === 0) ? new T.PointLight(col, 1.5, maxRadius * 2) : null;
-    if (light) { light.position.set(x, 20, z); THREE_STATE.scene.add(light); }
+    if (light) { light.position.set(x, swY + 20, z); THREE_STATE.scene.add(light); }
     THREE_STATE._shockwaves.push({
       mesh: ring, light, maxRadius, age: 0, delay: i * 4,
       startX: x, startZ: z,
@@ -618,6 +753,7 @@ export function syncHazards3D(time) {
     }
     mesh.visible = true;
     mesh.position.x = hazard.x;
+    mesh.position.y = getTrackElevationY(hazard.x, hazard.y) + (mesh.userData?._baseY ?? 0);
     mesh.position.z = hazard.y;
     mesh.rotation.y = -(hazard.heading || 0) + Math.PI / 2 + (hazard.spin || 0);
     const ctor2 = hazard.constructor?.name || "";
@@ -667,7 +803,7 @@ function animateDragonModel(model, wingPhase, jawPhase, enraged, time) {
 export function syncDragons3D(time) {
   if (!THREE_STATE.scene) return;
   const dragon = game.track && game.track.regulatoryDragon;
-  const currentMapId = MAPS[game.selectedMapIdx || 0].id;
+  const currentMapId = getActiveMapConfig(game).id;
   if (dragon && currentMapId !== "dragon_escape" && !THREE_STATE.dragonModel) {
     THREE_STATE.dragonModel = buildDragonModel3D(false);
     if (THREE_STATE.dragonModel) THREE_STATE.scene.add(THREE_STATE.dragonModel);
@@ -675,7 +811,7 @@ export function syncDragons3D(time) {
   if (THREE_STATE.dragonModel) {
     THREE_STATE.dragonModel.visible = !!(dragon && dragon.active && currentMapId !== "dragon_escape");
     if (dragon && dragon.active) {
-      const dragonHover = 42 + Math.sin(time * 0.002) * 12;
+      const dragonHover = getTrackElevationY(dragon.x, dragon.y) + 42 + Math.sin(time * 0.002) * 12;
       THREE_STATE.dragonModel.position.set(dragon.x, dragonHover, dragon.y);
       THREE_STATE.dragonModel.rotation.y = -dragon.heading;
       const scale = dragon.enraged ? 1.55 : 1.35;
@@ -709,8 +845,11 @@ export function syncDragons3D(time) {
 
 function sync3DFirmamentToCamera() {
   if (!THREE_STATE.camera) return;
-  if (THREE_STATE.skyMesh) THREE_STATE.skyMesh.position.copy(THREE_STATE.camera.position);
-  if (THREE_STATE.starField) THREE_STATE.starField.position.copy(THREE_STATE.camera.position);
+  const cp = THREE_STATE.camera.position;
+  if (THREE_STATE.skyMesh) THREE_STATE.skyMesh.position.copy(cp);
+  if (THREE_STATE.starField) THREE_STATE.starField.position.copy(cp);
+  if (THREE_STATE.skyCloudsGroup) THREE_STATE.skyCloudsGroup.position.set(cp.x, cp.y * 0.25, cp.z);
+  if (THREE_STATE.skyAuroraGroup) THREE_STATE.skyAuroraGroup.position.set(cp.x, cp.y * 0.25, cp.z);
 }
 
 
@@ -748,10 +887,14 @@ export function setCameraForKart(kart, time, dt = game.lastDt || 1, cs = THREE_S
 
   const targetX = kart.x - fx * camDist + lx * camSwing;
   const targetZ = kart.y - fy * camDist + ly * camSwing;
-  const targetCamHeight = Math.max(24, camHeight + z * 0.45 - cs._landDip);
   const lookX = kart.x + fx * lookAhead + lx * lookSwing;
   const lookZ = kart.y + fy * lookAhead + ly * lookSwing;
-  const lookY = (isDragonChaseView ? 15 : 12) + Math.min(z, 40) * 0.35 - cs._landDip * 0.4;
+
+  const surf = getTrackElevationAt(kart.x, kart.y);
+  const aheadSurf = getTrackElevationAt(lookX, lookZ);
+  const baseSurfY = surf.y;
+  const targetCamHeight = Math.max(baseSurfY + 24, baseSurfY + camHeight + z * 0.45 - cs._landDip);
+  const lookY = lerp(baseSurfY, aheadSurf.y, 0.58) + (isDragonChaseView ? 15 : 12) + Math.min(z, 40) * 0.35 - cs._landDip * 0.4;
 
   const posAlpha = 1 - Math.pow(0.935, dt);
   const lookAlpha = 1 - Math.pow(0.91, dt);
@@ -773,15 +916,19 @@ export function setCameraForKart(kart, time, dt = game.lastDt || 1, cs = THREE_S
   );
   THREE_STATE.camera.lookAt(cs.lx, cs.ly, cs.lz);
 
-  const targetRoll = clamp(latV * 0.012 - driftDir * 0.038, -0.075, 0.075);
+  const alignDot = fx * surf.ux + fy * surf.uy;
+  const bankCamRoll = -surf.bank * alignDot * 0.38;
+  const targetRoll = clamp(latV * 0.012 - driftDir * 0.038 + bankCamRoll, -0.095, 0.095);
   cs.roll += (targetRoll - cs.roll) * rollAlpha;
   if (Math.abs(cs.roll) > 0.0005) {
     THREE_STATE.camera.rotateZ(cs.roll);
   }
 
   const boostActive = kart.boostTimer > 0;
+  const ultraActive = boostActive && !!kart.ultraBoostActive;
   const slipActive = (kart.slipstreamBoostTimer || kart.draftBoostTimer || 0) > 0;
-  const targetFov = 66 + sp * 4 + (boostActive ? 11 : 0) + (slipActive ? 6 : 0) + (isDragonChaseView ? 4 : 0);
+  const trickBoostFov = (kart.trickDone && z > 2) ? 3.5 : 0;
+  const targetFov = 66 + sp * 4 + (boostActive ? 11 : 0) + (ultraActive ? 5 : 0) + (slipActive ? 6 : 0) + trickBoostFov + (isDragonChaseView ? 4 : 0);
   cs.fov += (targetFov - cs.fov) * fovAlpha;
   THREE_STATE.camera.fov = cs.fov;
   THREE_STATE.camera.updateProjectionMatrix();
@@ -882,7 +1029,7 @@ function sync3DNameTags(time) {
       THREE_STATE.scene.add(sprite);
       THREE_STATE.nameTagSprites.set(kart, sprite);
     }
-    sprite.position.set(kart.x, 34, kart.y);
+    sprite.position.set(kart.x, getTrackElevationY(kart.x, kart.y) + 34 + (kart.z || 0), kart.y);
     const isUlt = kart.ultActiveTimer > 0;
     sprite.material.opacity = isUlt ? 0.6 + 0.3 * Math.sin(time * 0.02) : 0.85;
   }
@@ -937,11 +1084,11 @@ function sync3DSpeechBubbles(time) {
           THREE_STATE.scene.add(newSprite);
           THREE_STATE.speechBubbleSprites.set(kart, newSprite);
           newSprite._quoteText = kart.activeQuote;
-          newSprite.position.set(kart.x, 58, kart.y);
+          newSprite.position.set(kart.x, getTrackElevationY(kart.x, kart.y) + 58 + (kart.z || 0), kart.y);
         }
         continue;
       }
-      sprite.position.set(kart.x, 58, kart.y);
+      sprite.position.set(kart.x, getTrackElevationY(kart.x, kart.y) + 58 + (kart.z || 0), kart.y);
       const fadeIn = Math.min(1, kart.quoteTimer / 10);
       sprite.material.opacity = fadeIn;
     }
@@ -1055,14 +1202,20 @@ function sync3DParticleEffects(time) {
   const dt = game.lastDt || 1;
   for (const [kart, model] of THREE_STATE.kartModels) {
     const fxCos = Math.cos(kart.heading), fxSin = Math.sin(kart.heading);
+    const baseY = getTrackElevationY(kart.x, kart.y) + (kart.z || 0);
 
-    // Boost exhaust particles
-    if (kart.boostTimer > 0 && Math.random() < 0.6 * dt) {
+    // Boost exhaust particles (tier-colored!)
+    if ((kart.boostTimer > 0 || (kart.draftBoostTimer || 0) > 0) && Math.random() < 0.6 * dt) {
       const bx = kart.x - fxCos * 18, bz = kart.y - fxSin * 18;
+      const isUltra = kart.boostTimer > 0 && kart.ultraBoostActive;
+      const isDraft = kart.boostTimer <= 0 && (kart.draftBoostTimer || 0) > 0;
+      const pr = isUltra ? 0.35 : isDraft ? 0.35 : 1.0;
+      const pg = isUltra ? 0.94 : isDraft ? 1.0 : 0.42 + Math.random() * 0.4;
+      const pb = isUltra ? 1.0 : isDraft ? 0.72 : 0.1;
       emit3DParticle(
-        bx + (Math.random() - 0.5) * 6, 4 + Math.random() * 6, bz + (Math.random() - 0.5) * 6,
+        bx + (Math.random() - 0.5) * 6, baseY + 4 + Math.random() * 6, bz + (Math.random() - 0.5) * 6,
         -fxCos * (2 + Math.random() * 3) + (Math.random() - 0.5), Math.random() * 2, -fxSin * (2 + Math.random() * 3) + (Math.random() - 0.5),
-        1.0, 0.4 + Math.random() * 0.4, 0.1, 20 + Math.random() * 15, 3 + Math.random() * 3
+        pr, pg, pb, 20 + Math.random() * 15, 3 + Math.random() * 3
       );
     }
 
@@ -1073,11 +1226,11 @@ function sync3DParticleEffects(time) {
         const sx = kart.x - fxCos * 10 + lx * side * 7;
         const sz = kart.y - fxSin * 10 + lz * side * 7;
         const tier = kart.driftCharge || 0;
-        const cr = tier > 80 ? 1.0 : tier > 40 ? 1.0 : 0.3;
-        const cg = tier > 80 ? 0.5 : tier > 40 ? 0.7 : 0.7;
-        const cb = tier > 80 ? 0.2 : tier > 40 ? 0.15 : 1.0;
+        const cr = tier > 80 ? 0.95 : tier > 40 ? 1.0 : 0.2;
+        const cg = tier > 80 ? 0.3 : tier > 40 ? 0.62 : 0.85;
+        const cb = tier > 80 ? 1.0 : tier > 40 ? 0.15 : 1.0;
         emit3DParticle(
-          sx, 2, sz,
+          sx, baseY + 2, sz,
           (Math.random() - 0.5) * 2, 1 + Math.random() * 2, (Math.random() - 0.5) * 2,
           cr, cg, cb, 12 + Math.random() * 10, 2 + Math.random() * 2
         );
@@ -1088,7 +1241,7 @@ function sync3DParticleEffects(time) {
     const onRoad = game.track && game.track.isOnRoad(kart.x, kart.y);
     if (!onRoad && kart.speed() > 1.0 && Math.random() < 0.3 * dt) {
       emit3DParticle(
-        kart.x + (Math.random() - 0.5) * 8, 1, kart.y + (Math.random() - 0.5) * 8,
+        kart.x + (Math.random() - 0.5) * 8, baseY + 1, kart.y + (Math.random() - 0.5) * 8,
         (Math.random() - 0.5) * 1.5, 0.5 + Math.random(), (Math.random() - 0.5) * 1.5,
         0.15, 0.5, 0.2, 25, 4 + Math.random() * 3
       );
@@ -1151,11 +1304,12 @@ export function build3DSpectators() {
     armR.position.set(1.8, baseH * 0.55, 0);
     group.add(armR);
 
-    group.position.set(sp.x, 0, sp.y);
+    const spBaseY = getTrackElevationY(sp.x, sp.y);
+    group.position.set(sp.x, spBaseY, sp.y);
     group.scale.setScalar(1.2 * (h / baseH));
     THREE_STATE.scene.add(group);
     THREE_STATE.spectatorMeshes.push({
-      group, sp, baseY: 0, armL, armR,
+      group, sp, baseY: spBaseY, armL, armR,
     });
   }
 }
@@ -1269,6 +1423,13 @@ function sync3DPillarRings(time) {
   for (const ring of THREE_STATE.pillarRings) {
     ring.rotation.z = time * 0.001 + ring.position.y * 0.1;
   }
+  if (THREE_STATE.sectorArchMats?.length) {
+    const day = isDayMode();
+    const pulse = (day ? 0.45 : 0.85) + (day ? 0.2 : 0.38) * Math.sin(time * 0.004);
+    for (const mat of THREE_STATE.sectorArchMats) {
+      mat.emissiveIntensity = pulse;
+    }
+  }
   const lights = THREE_STATE.startLightMats;
   if (lights && lights.length) {
     const isCountdown = game.state === STATE.COUNTDOWN;
@@ -1331,12 +1492,13 @@ function sync3DItemBoxHalos(time) {
 
 export function emit3DItemPickupBurst(x, z, type) {
   if (!THREE_STATE.particles3dSystem) return;
+  const ey = getTrackElevationY(x, z);
   if (type === "coin") {
-    emit3DBurst(x, 10, z, 1.0, 0.85, 0.42, 10, 2.5, 25);
+    emit3DBurst(x, ey + 10, z, 1.0, 0.85, 0.42, 10, 2.5, 25);
   } else if (type === "itemBox") {
-    emit3DBurst(x, 22, z, 1.0, 0.4, 0.8, 14, 3, 30);
+    emit3DBurst(x, ey + 22, z, 1.0, 0.4, 0.8, 14, 3, 30);
   } else if (type === "boost") {
-    emit3DBurst(x, 3, z, 0.64, 1.0, 0.5, 12, 3, 20);
+    emit3DBurst(x, ey + 3, z, 0.64, 1.0, 0.5, 12, 3, 20);
   }
 }
 

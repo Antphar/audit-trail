@@ -100,6 +100,9 @@ export function simulationStep(dt, time) {
       if (canResolveBattleCombat()) {
         updateBattleApprovals();
         checkBattleEnd();
+        if (game.state === STATE.FINISHED) {
+          return { earlyReturn: true };
+        }
       }
       updateSpectate();
     }

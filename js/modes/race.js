@@ -469,7 +469,7 @@ export function completeClosedCircuitLap(kart) {
     if (!game.finishOrder.includes(kart)) game.finishOrder.push(kart);
     if (kart === game.player && !isDragonEscape() && !game.multiplayer) {
       const bestLapThisRun = kart.lapTimes.length ? Math.min(...kart.lapTimes) : 0;
-      game.newRecord = updateMapRecord(MAPS[game.selectedMapIdx || 0].id, {
+      game.newRecord = updateMapRecord(getActiveMapConfig(game).id, {
         total: kart.finishTime,
         lap: bestLapThisRun,
       });

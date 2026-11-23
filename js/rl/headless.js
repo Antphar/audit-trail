@@ -482,10 +482,10 @@ export function makeHeadlessConfig(overrides = {}) {
     trace: overrides.trace ?? headlessFlag("trace", false),
     traceEvery: Math.max(1, Math.floor(Number(overrides.traceEvery ?? URL_PARAMS.get("traceEvery") ?? 30))),
     frameSkip: Math.max(1, Math.floor(Number(overrides.frameSkip ?? URL_PARAMS.get("frameSkip") ?? 4))),
-    // Battle is a free-for-all: force opponents on and items on regardless of race defaults.
+    // Battle is a free-for-all: force opponents, items, and item hazards on regardless of race defaults.
     solo: battle ? false : (overrides.solo ?? headlessFlag("solo", false)),
     noItems: battle ? false : (overrides.noItems ?? (headlessFlag("noItems", false) || (headlessFlag("items", false) === false && URL_PARAMS.get("items") === "0"))),
-    noHazards: battle ? true : (overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0"))),
+    noHazards: battle ? false : (overrides.noHazards ?? (headlessFlag("noHazards", false) || (headlessFlag("hazards", false) === false && URL_PARAMS.get("hazards") === "0"))),
     map: overrides.map ?? URL_PARAMS.get("map") ?? URL_PARAMS.get("headlessMap") ?? (battle ? rlRuntime.BATTLE_ARENA_ID : "protocol_amendment_labyrinth"),
     character: overrides.character ?? URL_PARAMS.get("char") ?? URL_PARAMS.get("character") ?? "anton",
     opponentModels: Array.isArray(overrides.opponentModels) && overrides.opponentModels.length ? overrides.opponentModels : null,

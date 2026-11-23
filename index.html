@@ -47,9 +47,8 @@
       </div>
     </div>
     <div style="display:flex; flex-direction:column; gap:10px;">
-      <button class="btn" id="start-1p-btn">1 Player Race</button>
+      <button class="btn" id="start-1p-btn">1 Player</button>
       <button class="btn btn-alt" id="start-2p-btn">2 Players Split-Screen</button>
-      <button class="btn btn-alt" id="start-battle-btn">Battle Arena</button>
       <button class="btn btn-alt" id="start-p2p-btn">Online PvP</button>
       <button class="btn btn-alt" id="settings-btn" type="button">Settings</button>
     </div>
@@ -171,6 +170,10 @@
 
     <!-- Map Selection Section -->
     <div class="map-select-section" id="map-select-section">
+      <div class="mode-toggle-group" id="mode-toggle-group" role="tablist" aria-label="Game Mode">
+        <button class="btn toggle-btn active" data-mode="race" type="button" role="tab" aria-selected="true">Circuit Race</button>
+        <button class="btn toggle-btn" data-mode="battle" type="button" role="tab" aria-selected="false">Battle Arena</button>
+      </div>
       <div class="map-select-title" id="map-select-title">Select Circuit Track</div>
       <div class="map-select-container" id="maps-container"></div>
     </div>

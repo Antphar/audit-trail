@@ -700,7 +700,7 @@ export function checkBattleEnd() {
     for (const k of alive) {
       if (!k.finished) k.finishTime = game.raceTime;
     }
-    runtime.finishRaceSim();
+    (runtime.finishRace || runtime.finishRaceSim)();
   }
 }
 
