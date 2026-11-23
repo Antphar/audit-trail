@@ -38,8 +38,8 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn, TimeRemainingColumn
 from rich.table import Table
 
-BATTLE_DEFAULT_ANCHORS = "dqn-arena-v5,dqn-arena"
-RACE_DEFAULT_ANCHORS = "dqn-15act-h64-tanh-ortho-300k"
+BATTLE_DEFAULT_ANCHORS = "dqn-arena"
+RACE_DEFAULT_ANCHORS = "dqn-race-v8"
 CHARACTER_IDS = ("anton", "artur", "rissal", "pia", "florian")
 MATCHUP_ELO_K = 16.0
 
@@ -981,6 +981,45 @@ def export_training_checkpoint(
 RACE_DUEL_PROGRESS_EPS = 1e-4
 
 
+def resolve_training_device(args: argparse.Namespace) -> tuple[torch.device, torch.dtype | None]:
+    """Select optimal device & autocast precision for the configured MLP size."""
+    requested = getattr(args, "device", "auto")
+    if requested == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("--device mps requested, but PyTorch MPS is not available.")
+        device = torch.device("mps")
+    elif requested == "cpu":
+        device = torch.device("cpu")
+    else:
+        # On Apple Silicon (M-series), small MLPs (hidden <= 128, batch <= 256) run faster
+        # in CPU L1/L2 + AMX than over Metal command-buffer dispatch; switch to MPS for larger nets.
+        use_mps = (
+            torch.backends.mps.is_available()
+            and int(getattr(args, "hidden", 64)) >= 256
+            and int(getattr(args, "batch_size", 256)) >= 512
+        )
+        device = torch.device("mps" if use_mps else "cpu")
+
+    if device.type == "cpu":
+        cpu_threads = int(getattr(args, "cpu_threads", 0) or 0)
+        if cpu_threads > 0:
+            torch.set_num_threads(cpu_threads)
+        elif torch.backends.mps.is_available():
+            # Cap CPU intra-op threads to 4 on Apple Silicon to avoid thread-sync overhead on small GEMMs.
+            torch.set_num_threads(min(4, max(1, torch.get_num_threads())))
+
+    precision = getattr(args, "precision", "fp32")
+    amp_dtype = {"fp16": torch.float16, "bf16": torch.bfloat16}.get(precision)
+    return device, amp_dtype
+
+
+def _model_device(model: torch.nn.Module) -> torch.device:
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return torch.device("cpu")
+
+
 @torch.no_grad()
 def _score_battle_duel_episode(
     env: Any,
@@ -1012,9 +1051,10 @@ def _score_battle_duel_episode(
     obs = env.reset_with(**reset_kwargs)
     done = False
     last_info: dict[str, Any] = {}
+    device = _model_device(model)
     while not done:
         if live_is_player or opponent_payload is None:
-            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            q_vals = model(torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32)).unsqueeze(0).to(device))
             action = int(torch.argmax(q_vals, dim=1).item())
         else:
             action = env.decide_headless_action(opponent_payload)
@@ -1096,9 +1136,10 @@ def _score_race_duel_episode(
     obs = env.reset_with(**reset_kwargs)
     done = False
     last_info: dict[str, Any] = {}
+    device = _model_device(model)
     while not done:
         if live_is_player or opponent_payload is None:
-            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            q_vals = model(torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32)).unsqueeze(0).to(device))
             action = int(torch.argmax(q_vals, dim=1).item())
         else:
             action = env.decide_headless_action(opponent_payload)
@@ -1110,8 +1151,8 @@ def _score_race_duel_episode(
     if not player_entry or not opp_entry:
         return 0.5
 
-    player_finished = bool(player_entry.get("finished"))
-    opp_finished = bool(opp_entry.get("finished"))
+    player_finished = bool(player_entry.get("finished")) and not bool(player_entry.get("eliminated"))
+    opp_finished = bool(opp_entry.get("finished")) and not bool(opp_entry.get("eliminated"))
     if player_finished and not opp_finished:
         return 1.0
     if opp_finished and not player_finished:
@@ -1462,7 +1503,10 @@ def payload_to_slot_label(
 
 
 def duel_map_for_eval(args: argparse.Namespace) -> str:
-    return args.arena_map if args.mode == "battle" else args.elo_map
+    if args.mode == "battle":
+        arena_maps = parse_csv(args.arena_map)
+        return arena_maps[0] if arena_maps else "battle_arena"
+    return args.elo_map
 
 
 @torch.no_grad()
@@ -1769,8 +1813,9 @@ def run_classic_baseline_eval(
             reset_kwargs["race_position_reward"] = False
         obs = eval_env.reset_with(**reset_kwargs)
         done = False
+        device = _model_device(model)
         while not done:
-            q_vals = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+            q_vals = model(torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32)).unsqueeze(0).to(device))
             action = int(torch.argmax(q_vals, dim=1).item())
             obs, _, done, _ = eval_env.step(action)
         ranking = eval_env.get_episode_ranking()
@@ -1996,12 +2041,13 @@ def evaluate(
             done = False
             total_reward = 0.0
             last_info: dict[str, Any] = {}
+            device = _model_device(model)
             while not done:
-                q = model(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+                q = model(torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32)).unsqueeze(0).to(device))
                 action = int(torch.argmax(q, dim=1).item())
                 obs, reward, done, last_info = env.step(action)
                 total_reward += reward
-            finishes += int(bool(last_info.get("finished")))
+            finishes += int(bool(last_info.get("finished")) and not bool(last_info.get("eliminated")))
             ranking = env.get_last_ranking()
             if ranking:
                 winner = ranking[0].get("charId") or ranking[0].get("name") or "unknown"
@@ -2105,7 +2151,17 @@ def evaluate_tracks(env: Any, model: DQN, args: argparse.Namespace, *, eval_step
     primary = "battle" if is_battle else "classic"
     avg_reward = float(np.mean([m[primary]["avg_reward"] for m in per_track.values()])) if per_track else 0.0
     avg_finish = float(np.mean([m[primary]["finish_rate"] for m in per_track.values()])) if per_track else 0.0
-    return {"avg_reward": avg_reward, "avg_finish_rate": avg_finish, "tracks": per_track}
+    avg_battle_win = (
+        float(np.mean([m[primary].get("battle_win_rate", 0.0) for m in per_track.values()]))
+        if per_track
+        else 0.0
+    )
+    return {
+        "avg_reward": avg_reward,
+        "avg_finish_rate": avg_finish,
+        "avg_battle_win_rate": avg_battle_win,
+        "tracks": per_track,
+    }
 
 
 def run_headless_waypoint_reference(
@@ -2250,11 +2306,15 @@ def train(args: argparse.Namespace) -> None:
     if args.procedural_maps and args.procedural_map_prob <= 0.0:
         args.procedural_map_prob = 0.5
     if is_battle:
-        # Arena is a single-map free-for-all: opponents + items ON, hazards OFF, no lap navigation.
-        args.map = args.arena_map
-        args.maps = args.arena_map
-        args.eval_maps = args.arena_map
-        args.random_map = False
+        # Arena free-for-all: opponents + items ON, hazards OFF, no lap navigation.
+        # Supports multi-arena domain randomization when --random-map or comma-separated --arena-map is used.
+        arena_maps = parse_csv(args.arena_map) or ["battle_arena"]
+        if args.random_map and len(arena_maps) == 1 and arena_maps[0] == "battle_arena":
+            arena_maps = ["battle_arena", "battle_open_arena"]
+        args.map = arena_maps[0]
+        args.maps = ",".join(arena_maps)
+        args.eval_maps = ",".join(arena_maps)
+        args.random_map = len(arena_maps) > 1
         args.procedural_maps = False
         args.procedural_map_prob = 0.0
         args.solo = False
@@ -2439,6 +2499,8 @@ def train(args: argparse.Namespace) -> None:
         eval_env.load()
         obs_dim = int(obs.shape[0])
         action_dim = len(env.actions)
+        device, amp_dtype = resolve_training_device(args)
+        use_amp = amp_dtype is not None
 
         q = DQN(
             obs_dim,
@@ -2451,7 +2513,7 @@ def train(args: argparse.Namespace) -> None:
             weight_norm=args.weight_norm,
             mean_expansion_k=args.mean_expansion_k,
             advantage_centering=not args.rdq,
-        )
+        ).to(device)
         target_q = DQN(
             obs_dim,
             action_dim,
@@ -2463,9 +2525,9 @@ def train(args: argparse.Namespace) -> None:
             weight_norm=args.weight_norm,
             mean_expansion_k=args.mean_expansion_k,
             advantage_centering=not args.rdq,
-        )
+        ).to(device)
         target_q.load_state_dict(q.state_dict())
-        optimizer = torch.optim.Adam(q.parameters(), lr=args.lr)
+        optimizer = torch.optim.Adam(q.parameters(), lr=args.lr, foreach=True)
         if env.frame_stack > 1 and not hasattr(env, "_stack_mask"):
             env._build_stack_mask()
         buffer = common.FrameReplayBuffer(
@@ -2482,8 +2544,10 @@ def train(args: argparse.Namespace) -> None:
 
         episode_reward = 0.0
         episode_count = 0
-        best_eval_reward = -math.inf
-        last_loss = None
+        best_eval_score = (-1.0, -math.inf)
+        best_eval_step: int | None = None
+        last_loss: float | None = None
+        last_loss_tensor: torch.Tensor | None = None
         started_at = time.perf_counter()
         recent_rewards: deque[float] = deque(maxlen=20)
         recent_laps: deque[float] = deque(maxlen=20)
@@ -2567,6 +2631,9 @@ def train(args: argparse.Namespace) -> None:
                 ),
                 f"[bold]Replay dtype[/bold]: {args.replay_dtype} "
                 f"({buffer.memory_bytes / 1024 / 1024:.2f} MiB buffer)",
+                f"[bold]Compute[/bold]: device={device.type} precision={args.precision} "
+                f"train_freq={args.train_freq} hidden={args.hidden} bs={args.batch_size}"
+                + (f" threads={torch.get_num_threads()}" if device.type == "cpu" else ""),
                 f"[bold]Self-play[/bold]: {args.self_play} ({len(league)} league models)"
                 + (f", {len(anchors)} anchors" if anchors else ""),
                 f"[bold]Checkpoint every[/bold]: {args.checkpoint_every}",
@@ -2722,7 +2789,9 @@ def train(args: argparse.Namespace) -> None:
                         )
                 recent_rewards.append(episode_reward)
                 recent_laps.append(float(info.get("lap", 0)))
-                recent_finishes.append(1.0 if info.get("finished") else 0.0)
+                recent_finishes.append(
+                    1.0 if (info.get("finished") and not info.get("eliminated")) else 0.0
+                )
                 recent_maps.append(env.map_id)
                 recent_chars.append(env.character)
                 if args.self_play and not is_battle and args.race_league:
@@ -2740,39 +2809,52 @@ def train(args: argparse.Namespace) -> None:
             return False
 
         def after_transition_hooks(step: int, eps: float) -> None:
-            nonlocal last_loss, eval_event_count, latest_eval_report, latest_eval_metrics
-            nonlocal latest_attribution, best_eval_reward, elo_store
+            nonlocal last_loss, last_loss_tensor, eval_event_count, latest_eval_report, latest_eval_metrics
+            nonlocal latest_attribution, best_eval_score, best_eval_step, elo_store
 
-            if len(buffer) >= args.batch_size and step >= args.learning_starts:
+            if (
+                len(buffer) >= args.batch_size
+                and step >= args.learning_starts
+                and step % args.train_freq == 0
+            ):
                 per_beta = (
                     args.per_beta_start
                     + (args.per_beta_end - args.per_beta_start) * min(1.0, step / args.steps)
                 ) if args.prioritized_replay else 0.0
-                batch = buffer.sample(args.batch_size, beta=per_beta) if args.prioritized_replay else buffer.sample(args.batch_size)
+                batch = (
+                    buffer.sample(args.batch_size, beta=per_beta, device=device)
+                    if args.prioritized_replay
+                    else buffer.sample(args.batch_size, device=device)
+                )
                 if args.prioritized_replay:
                     b_obs, b_actions, b_rewards, b_next_obs, b_dones, is_weights, batch_indices = batch
                 else:
                     b_obs, b_actions, b_rewards, b_next_obs, b_dones = batch
                     is_weights = None
                     batch_indices = None
-                with torch.no_grad():
-                    best_actions = q(b_next_obs).argmax(dim=1, keepdim=True)
-                    next_q = target_q(b_next_obs).gather(1, best_actions).squeeze(1)
-                    target = b_rewards + (args.gamma ** args.n_step) * (1.0 - b_dones) * next_q
-                q_values, baselines, residuals = q.forward_components(b_obs)
-                pred = q_values.gather(1, b_actions).squeeze(1)
-                td_errors = pred - target
-                if is_weights is not None:
-                    loss = (is_weights * torch.nn.functional.smooth_l1_loss(pred, target, reduction="none")).mean()
-                    buffer.update_priorities(batch_indices, td_errors.detach().cpu().numpy())
-                else:
-                    loss = torch.nn.functional.smooth_l1_loss(pred, target)
-                if args.rdq and args.rdq_beta > 0:
-                    rdq_penalty = 0.5 * (
-                        baselines.square().mean() + residuals.square().sum(dim=1).mean()
-                    )
-                    loss = loss + args.rdq_beta * rdq_penalty
-                last_loss = float(loss.detach().cpu().item())
+                with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
+                    with torch.no_grad():
+                        best_actions = q(b_next_obs).argmax(dim=1, keepdim=True)
+                        next_q = target_q(b_next_obs).gather(1, best_actions).squeeze(1)
+                        target = b_rewards + (args.gamma ** args.n_step) * (1.0 - b_dones) * next_q
+                    q_values, baselines, residuals = q.forward_components(b_obs)
+                    pred = q_values.gather(1, b_actions).squeeze(1)
+                    td_errors = pred - target
+                    if is_weights is not None:
+                        loss = (
+                            is_weights
+                            * torch.nn.functional.smooth_l1_loss(pred, target, reduction="none")
+                        ).mean()
+                    else:
+                        loss = torch.nn.functional.smooth_l1_loss(pred, target)
+                    if args.rdq and args.rdq_beta > 0:
+                        rdq_penalty = 0.5 * (
+                            baselines.square().mean() + residuals.square().sum(dim=1).mean()
+                        )
+                        loss = loss + args.rdq_beta * rdq_penalty
+                if is_weights is not None and batch_indices is not None:
+                    buffer.update_priorities(batch_indices, td_errors.detach().float().cpu().numpy())
+                last_loss_tensor = loss.detach()
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(q.parameters(), args.grad_clip)
@@ -2784,6 +2866,8 @@ def train(args: argparse.Namespace) -> None:
                 target_q.load_state_dict(q.state_dict())
 
             if step % args.log_every_steps == 0:
+                if last_loss_tensor is not None:
+                    last_loss = float(last_loss_tensor.float().cpu().item())
                 elapsed = max(1e-6, time.perf_counter() - started_at)
                 progress_payload = {
                     "event": "progress",
@@ -2902,8 +2986,31 @@ def train(args: argparse.Namespace) -> None:
                         action_counts,
                         [a["name"] for a in env.actions],
                     )
-                if eval_report["avg_reward"] > best_eval_reward:
-                    best_eval_reward = eval_report["avg_reward"]
+                if is_battle:
+                    eval_score = (float(eval_report.get("avg_battle_win_rate", 0.0)), float(eval_report["avg_reward"]))
+                else:
+                    eval_score = (float(eval_report["avg_finish_rate"]), float(eval_report["avg_reward"]))
+                if eval_score > best_eval_score:
+                    best_eval_score = eval_score
+                    best_eval_step = step
+                    best_path = Path(args.checkpoint_dir) / f"{args.model_id}-best.json"
+                    best_meta = build_training_checkpoint_meta(
+                        args,
+                        step,
+                        metrics=metrics,
+                        eval_report=eval_report,
+                        reference_metrics=reference_metrics or None,
+                        attribution=attribution or None,
+                    )
+                    best_meta["id"] = args.model_id
+                    best_meta["name"] = args.model_name
+                    export_dqn_json(q, env.obs_keys, env.actions, best_path, best_meta, None)
+                    if not args.json_logs:
+                        score_label = "win" if is_battle else "finish"
+                        console.print(
+                            f"[bold green]New best eval @ step {step}[/bold green]: "
+                            f"{score_label}={eval_score[0]:.2f} reward={eval_score[1]:.1f} -> {best_path}"
+                        )
 
             if run_elo:
                 elo_path = Path(args.checkpoint_dir) / f"elo-{args.model_id}.json"
@@ -2963,7 +3070,11 @@ def train(args: argparse.Namespace) -> None:
                     action = random.randrange(action_dim)
                 else:
                     with torch.no_grad():
-                        q_values = q(torch.tensor(obs, dtype=torch.float32).unsqueeze(0))
+                        q_values = q(
+                            torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32))
+                            .unsqueeze(0)
+                            .to(device)
+                        )
                         q_max = float(torch.max(q_values).detach().cpu().item())
                         q_mean = float(torch.mean(q_values).detach().cpu().item())
                         action = int(torch.argmax(q_values, dim=1).item())
@@ -3220,7 +3331,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--map", default="core_mainframe")
     parser.add_argument(
         "--maps",
-        default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,protocol_amendment_labyrinth",
+        default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,regulatory_dragon_run,protocol_amendment_labyrinth",
     )
     parser.add_argument("--random-map", action="store_true")
     parser.add_argument(
@@ -3236,7 +3347,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--eval-maps",
-        default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,protocol_amendment_labyrinth",
+        default="core_mainframe,audit_super_ring,compliance_chicane,black_ice_data_vault,regulatory_dragon_run,protocol_amendment_labyrinth",
     )
     parser.add_argument("--character", default="florian")
     parser.add_argument("--characters", default="anton,artur,rissal,pia,florian")
@@ -3270,6 +3381,30 @@ def parse_args() -> argparse.Namespace:
         help="RDQ L2 penalty coefficient for baseline and residual outputs.",
     )
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--train-freq",
+        type=int,
+        default=1,
+        help="Perform one gradient update every N environment steps (default 1; 2-4 speeds up training substantially).",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "mps"],
+        default="auto",
+        help="Compute device (auto chooses mps for large MLPs >=256x512, cpu with AMX threads for small MLPs).",
+    )
+    parser.add_argument(
+        "--precision",
+        choices=["fp32", "bf16", "fp16"],
+        default="fp32",
+        help="Training autocast precision (default fp32).",
+    )
+    parser.add_argument(
+        "--cpu-threads",
+        type=int,
+        default=0,
+        help="PyTorch CPU intra-op threads (0 = auto).",
+    )
     parser.add_argument("--prioritized-replay", action="store_true")
     parser.add_argument(
         "--replay-dtype",

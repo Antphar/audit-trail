@@ -492,6 +492,7 @@ export function makeHeadlessConfig(overrides = {}) {
     classicOpponentSlots: Math.max(0, Math.floor(Number(overrides.classicOpponentSlots ?? 0))),
     opponentCount: Number.isFinite(Number(overrides.opponentCount)) && overrides.opponentCount !== null && overrides.opponentCount !== undefined ? Math.min(7, Math.max(0, Math.floor(Number(overrides.opponentCount)))) : null,
     racePositionReward: !!overrides.racePositionReward,
+    randomizeArena: overrides.randomizeArena === undefined ? true : !!overrides.randomizeArena,
     seed: Number.isFinite(Number(overrides.seed ?? URL_PARAMS.get("seed")))
       ? Number(overrides.seed ?? URL_PARAMS.get("seed")) >>> 0
       : undefined,
@@ -512,6 +513,82 @@ export function applyHeadlessEpisodeSeed(config) {
     if (mapId === "dragon_escape") regenerateDragonTrail();
   } else {
     resetSimRngToNondeterministic();
+  }
+}
+
+function randomizeBattleArenaEpisode() {
+  const floor = game.track?.arenaFloor;
+  if (!floor) return;
+  const { cx, cy, rx, ry } = floor;
+  const karts = [game.player, ...(game.ais || [])].filter(Boolean);
+  const placed = [];
+  const baseMinSep = Math.min(260, Math.min(rx, ry) * 0.35);
+
+  for (const kart of karts) {
+    let bestX = kart.x;
+    let bestY = kart.y;
+    let bestSep = -1;
+    for (let attempt = 0; attempt < 48; attempt++) {
+      const a = simRandom() * Math.PI * 2;
+      const rNorm = 0.16 + Math.sqrt(simRandom()) * 0.66; // [0.16, 0.82] inside ellipse
+      const x = cx + Math.cos(a) * rx * rNorm;
+      const y = cy + Math.sin(a) * ry * rNorm;
+      let minSep = Infinity;
+      for (const p of placed) {
+        const d = dist(x, y, p.x, p.y);
+        if (d < minSep) minSep = d;
+      }
+      if (minSep >= baseMinSep) {
+        bestX = x;
+        bestY = y;
+        break;
+      }
+      if (minSep > bestSep) {
+        bestSep = minSep;
+        bestX = x;
+        bestY = y;
+      }
+    }
+    const inward = Math.atan2(cy - bestY, cx - bestX);
+    const heading = simRandom() < 0.5
+      ? inward + (simRandom() - 0.5) * Math.PI * 0.9
+      : simRandom() * Math.PI * 2;
+    kart.x = bestX;
+    kart.y = bestY;
+    kart.prevX = bestX;
+    kart.prevY = bestY;
+    kart.heading = heading;
+    kart.vx = 0;
+    kart.vy = 0;
+    placed.push({ x: bestX, y: bestY });
+  }
+
+  // Rotate and lightly jitter pickups/boosts in normalized ellipse space so the
+  // agent must rely on rays instead of memorizing fixed map coordinates.
+  const rot = simRandom() * Math.PI * 2;
+  const cosR = Math.cos(rot);
+  const sinR = Math.sin(rot);
+  const transformPoint = (obj, jitterAmp = 0.08) => {
+    const nx = (obj.x - cx) / Math.max(1, rx);
+    const ny = (obj.y - cy) / Math.max(1, ry);
+    let rnx = nx * cosR - ny * sinR;
+    let rny = nx * sinR + ny * cosR;
+    const scale = 1 + (simRandom() - 0.5) * 2 * jitterAmp;
+    rnx *= scale;
+    rny *= scale;
+    const nd = Math.sqrt(rnx * rnx + rny * rny);
+    if (nd > 0.86) {
+      rnx = (rnx / nd) * 0.86;
+      rny = (rny / nd) * 0.86;
+    }
+    obj.x = cx + rnx * rx;
+    obj.y = cy + rny * ry;
+  };
+  for (const box of game.track.itemBoxes || []) transformPoint(box, 0.12);
+  for (const coin of game.track.coins || []) transformPoint(coin, 0.08);
+  for (const pad of game.track.boostPads || []) {
+    transformPoint(pad, 0.08);
+    if (Number.isFinite(pad.ang)) pad.ang += rot;
   }
 }
 
@@ -577,7 +654,10 @@ export function configureHeadlessEpisode(config) {
   game.headlessNoHazards = !!config.noHazards;
   // Re-init battle lives: the agent kart (and self-play opponents) replaced the karts
   // that rlRuntime.buildRace() originally initialized, leaving their `approvals` undefined.
-  if (isBattleMode()) initBattleKartState();
+  if (isBattleMode()) {
+    initBattleKartState();
+    if (config.randomizeArena !== false) randomizeBattleArenaEpisode();
+  }
   if (game.player) game.player._rlSlotIdx = -1;
   if (game.ais?.length) {
     game.ais.forEach((ai, idx) => {

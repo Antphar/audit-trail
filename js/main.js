@@ -524,9 +524,16 @@ window.addEventListener("keydown", (e) => {
   const key = e.key;
   const isGameplayActive = game.state === STATE.COUNTDOWN || game.state === STATE.RACING;
   const interactiveFocus = !!(target && typeof target.closest === "function" && target.closest("button, a, [role='button']"));
+  const isSelectSpaceLock =
+    game.state === STATE.SELECT &&
+    code === "Space" &&
+    !(target && typeof target.closest === "function" && target.closest("#select-back-btn, #drive-btn, #ai-import-btn, a"));
 
-  // Prevent default scroll behavior for navigation keys only during active gameplay
-  if (isGameplayActive && (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", " "].includes(key) || ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code))) {
+  // Prevent default scroll / focused toggle button activation for gameplay keys and Select Spacebar lock
+  if (
+    isSelectSpaceLock ||
+    (isGameplayActive && (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space", " "].includes(key) || ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"].includes(code)))
+  ) {
     e.preventDefault();
   }
 
@@ -561,7 +568,7 @@ window.addEventListener("keydown", (e) => {
   if (code === "KeyS") setActionCode("p1", "down", code, true);
   if (code === "KeyA") setActionCode("p1", "left", code, true);
   if (code === "KeyD") setActionCode("p1", "right", code, true);
-  if (code === "Space" && !interactiveFocus) setActionCode("p1", "drift", code, true);
+  if (code === "Space" && (!interactiveFocus || isSelectSpaceLock)) setActionCode("p1", "drift", code, true);
   if (code === "ShiftLeft") setActionCode("p1", "item", code, true);
   if (code === "KeyQ") setActionCode("p1", "ult", code, true);
   if (code === "KeyE") setActionCode("p1", "honk", code, true);
@@ -1606,7 +1613,7 @@ if (finishMenuBtn) {
 // (finish_rate also exists there but is always 0 — battles aren't "finished"), else finish rate.
 function headlineModelRate(metrics) {
   const candidates = isBattleMode()
-    ? [metrics.battle_win_rate, metrics.player_win_rate, metrics.win_rate]
+    ? [metrics.player_win_rate, metrics.battle_win_rate, metrics.win_rate]
     : [metrics.finish_rate, metrics.win_rate];
   for (const v of candidates) {
     if (Number.isFinite(Number(v))) return Number(v);

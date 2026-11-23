@@ -226,6 +226,50 @@ export function selectArenaMap(idx) {
   game.tournament = null;
 }
 
+export function updateLocalMultiplayerLobbyUi() {
+  const battleSection = document.getElementById("battle-select-section");
+  const showBattleRules = isBattleMode();
+  if (battleSection) {
+    battleSection.style.display = showBattleRules ? "flex" : "none";
+    battleSection.querySelectorAll("button").forEach((b) => {
+      b.disabled = false;
+      b.classList.remove("disabled");
+    });
+  }
+  if (showBattleRules) renderApprovalsSelect();
+  const mapTitle = document.getElementById("map-select-title");
+  if (mapTitle) mapTitle.innerText = "Select Mode & Map";
+  const subtitle = document.getElementById("lobby-subtitle");
+  if (subtitle) {
+    subtitle.innerText = showBattleRules
+      ? "2P Battle Arena: Ready Up"
+      : "Lobby: 2 Players Ready Up";
+  }
+  const hint = document.getElementById("lobby-hint");
+  if (hint) {
+    hint.innerText = "Space to lock P1 · Right Shift to lock P2 · Esc for menu";
+  }
+}
+
+export function selectLocalMultiplayerMap({ mapIdx, mode } = {}) {
+  if (game.p1Locked && game.p2Locked) return;
+  const nextMode = sanitizeP2pLobbyMode(mode);
+  game.mode = nextMode;
+  if (nextMode === "battle") {
+    game.tournament = null;
+    if (mapIdx !== undefined) selectArenaMap(mapIdx);
+  } else if (mapIdx !== undefined) {
+    selectCircuitMap(mapIdx);
+  }
+  ensureSelectedMapMatchesMode();
+  const selectedMap = MAPS[game.selectedMapIdx || 0];
+  if (selectedMap) uiRuntime.previewSelectedMapMusic(selectedMap);
+  renderMapSelect();
+  updateLocalMultiplayerLobbyUi();
+  updateDriveButtonLabel();
+  Sound.tone(nextMode === "battle" ? 700 : 520, 0.08, "sine", 0.15);
+}
+
 export function selectP2pMap({ mapIdx, mapSelection, mode } = {}) {
   if (game.p1Locked && game.p2pRole === "host") return;
   const nextMode = sanitizeP2pLobbyMode(mode);
@@ -471,7 +515,7 @@ export function renderSelectScreen() {
     `;
 
     card.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+      if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
         card.click();
@@ -480,10 +524,11 @@ export function renderSelectScreen() {
 
     card.addEventListener("click", () => {
       if (game.p2pMode && game.p1Locked) return;
+      if (game.multiplayer && !game.p2pMode && game.p1Locked) return;
       game.selectedCharIdx = idx;
       if (game.p2pMode) uiRuntime.setLocalP2pCharacterIdx(idx);
       uiRuntime.updateSelectionHighlight();
-      renderAiOpponentSelectors();
+      uiRuntime.renderAiOpponentSelectors?.();
       Sound.tone(440, 0.08, "square", 0.12);
       if (game.p2pMode) {
         sendP2pMessage({
@@ -537,6 +582,9 @@ export function showSelectScreen() {
   }
   uiRuntime.hideAll();
   screens.show("select");
+  if (document.activeElement && typeof document.activeElement.blur === "function") {
+    document.activeElement.blur();
+  }
   resetAllInputs();
   game.state = STATE.SELECT;
   game.selectedCharIdx = game.selectedCharIdx || 0;
@@ -589,6 +637,9 @@ export function showSelectScreen() {
       if (mapTitle) mapTitle.innerText = "Select Mode & Map";
     }
     uiRuntime.updateP2pBattleLobbyUi();
+  } else if (game.multiplayer) {
+    if (mapSection) mapSection.style.display = "";
+    updateLocalMultiplayerLobbyUi();
   } else if (isBattleMode()) {
     if (mapSection) {
       mapSection.style.display = "";
@@ -720,14 +771,14 @@ export function buildMapCard({
 
   if (!disabled && onSelect) {
     card.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " " || e.code === "Space") {
+      if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
         card.click();
       }
     });
     card.addEventListener("click", () => {
-      if (game.p1Locked) return;
+      if (game.p1Locked && (!game.multiplayer || game.p2pMode || game.p2Locked)) return;
       onSelect();
     });
   }
@@ -837,6 +888,40 @@ export function renderP2pDualMapSelect(container) {
   uiRuntime.updateP2pBattleLobbyUi();
 }
 
+export function renderLocalMultiplayerDualMapSelect(container) {
+  const raceSection = document.createElement("div");
+  raceSection.className = "p2p-map-category";
+  raceSection.innerHTML = `<div class="map-select-title">Circuit Races</div>`;
+  const raceGrid = document.createElement("div");
+  raceGrid.className = "map-select-container";
+  MAPS.forEach((map, idx) => {
+    if (map.arena) return;
+    raceGrid.appendChild(buildCircuitMapCard(map, idx, {
+      targetMode: "race",
+      onSelect: (_, mapIdx) => selectLocalMultiplayerMap({ mapIdx, mode: "race" }),
+    }));
+  });
+  raceSection.appendChild(raceGrid);
+
+  const battleSection = document.createElement("div");
+  battleSection.className = "p2p-map-category";
+  battleSection.innerHTML = `<div class="map-select-title">Battle Arenas (Approvals)</div>`;
+  const battleGrid = document.createElement("div");
+  battleGrid.className = "map-select-container";
+  MAPS.forEach((map, idx) => {
+    if (!map.arena) return;
+    battleGrid.appendChild(buildCircuitMapCard(map, idx, {
+      targetMode: "battle",
+      onSelect: (_, mapIdx) => selectLocalMultiplayerMap({ mapIdx, mode: "battle" }),
+    }));
+  });
+  battleSection.appendChild(battleGrid);
+
+  container.appendChild(raceSection);
+  container.appendChild(battleSection);
+  updateLocalMultiplayerLobbyUi();
+}
+
 export function renderMapSelect() {
   const container = document.getElementById("maps-container");
   if (!container) return;
@@ -845,6 +930,11 @@ export function renderMapSelect() {
 
   if (game.p2pMode) {
     renderP2pDualMapSelect(container);
+    return;
+  }
+
+  if (game.multiplayer) {
+    renderLocalMultiplayerDualMapSelect(container);
     return;
   }
 

@@ -187,15 +187,45 @@ class _SumTree:
             raise RuntimeError(f"sum tree returned padded leaf {index}")
         return index
 
+    def get_batch(self, indices: np.ndarray) -> np.ndarray:
+        return self.tree[self._leaf_offset + indices]
+
+    def set_batch(self, indices: np.ndarray, values: np.ndarray) -> None:
+        if indices.size == 0:
+            return
+        last_vals: dict[int, float] = {}
+        for i in range(indices.size):
+            last_vals[int(indices[i])] = float(values[i])
+        uniq_idx = np.fromiter(last_vals.keys(), dtype=np.intp, count=len(last_vals))
+        new_vals = np.fromiter(last_vals.values(), dtype=np.float64, count=len(last_vals))
+        leaves = self._leaf_offset + uniq_idx
+        deltas = new_vals - self.tree[leaves]
+        self.tree[leaves] = new_vals
+        nodes = leaves
+        while nodes[0] > 0:
+            nodes = (nodes - 1) >> 1
+            np.add.at(self.tree, nodes, deltas)
+
     def stratified_sample(self, batch_size: int) -> np.ndarray:
         total = self.total()
         if total <= 0.0:
             raise ValueError("Cannot sample from empty sum tree")
         segment = total / batch_size
-        indices = np.empty(batch_size, dtype=np.intp)
-        for i in range(batch_size):
-            cum = segment * (i + random.random())
-            indices[i] = self._retrieve(cum)
+        u = np.fromiter((random.random() for _ in range(batch_size)), dtype=np.float64, count=batch_size)
+        cums = segment * (np.arange(batch_size, dtype=np.float64) + u)
+        cums = np.minimum(cums, np.nextafter(total, 0.0))
+        idx = np.zeros(batch_size, dtype=np.intp)
+        tree = self.tree
+        leaf_offset = self._leaf_offset
+        while idx[0] < leaf_offset:
+            left = (idx << 1) + 1
+            left_vals = tree[left]
+            go_right = cums >= left_vals
+            cums = np.where(go_right, cums - left_vals, cums)
+            idx = np.where(go_right, left + 1, left)
+        indices = idx - leaf_offset
+        if np.any(indices >= self._capacity):
+            raise RuntimeError("sum tree returned padded leaf")
         return indices
 
 
@@ -259,6 +289,12 @@ class FrameReplayBuffer:
         self.dones = np.zeros(capacity, dtype=bool)
         self.valid = np.zeros(capacity, dtype=bool)
         self.sampleable = np.zeros(capacity, dtype=bool)
+        self._nstep_rewards = np.zeros(capacity, dtype=np.float32)
+        self._nstep_dones = np.zeros(capacity, dtype=bool)
+        self._nstep_next_anchors = np.zeros(capacity, dtype=np.intp)
+        self._sampleable_slots = np.empty(capacity, dtype=np.intp)
+        self._slot_to_sampleable_pos = np.full(capacity, -1, dtype=np.intp)
+        self._rng = np.random.default_rng()
         self._sum_tree = _SumTree(capacity) if alpha is not None else None
         self._max_priority = 1.0
         self._write_pos = 0
@@ -310,30 +346,35 @@ class FrameReplayBuffer:
             self.valid[p] = False
             self._n_valid -= 1
         if self.sampleable[p]:
-            self.sampleable[p] = False
-            self._n_sampleable -= 1
-            if self._sum_tree is not None:
-                self._sum_tree.set(p, 0.0)
+            self._set_sampleable(p, False)
         if invalidate_prev:
             prev = (p - 1) % self._capacity
             if self.valid[prev]:
                 self.valid[prev] = False
                 self._n_valid -= 1
             if self.sampleable[prev]:
-                self.sampleable[prev] = False
-                self._n_sampleable -= 1
-                if self._sum_tree is not None:
-                    self._sum_tree.set(prev, 0.0)
+                self._set_sampleable(prev, False)
         self._refresh_anchors_near(p)
 
     def _set_sampleable(self, anchor: int, sampleable: bool) -> None:
         if sampleable and not self.sampleable[anchor]:
             self.sampleable[anchor] = True
+            pos = self._n_sampleable
+            self._sampleable_slots[pos] = anchor
+            self._slot_to_sampleable_pos[anchor] = pos
             self._n_sampleable += 1
             if self._sum_tree is not None:
                 self._sum_tree.set(anchor, self._max_priority**self._alpha)
         elif not sampleable and self.sampleable[anchor]:
             self.sampleable[anchor] = False
+            pos = int(self._slot_to_sampleable_pos[anchor])
+            last_pos = self._n_sampleable - 1
+            if pos >= 0:
+                if pos != last_pos:
+                    moved = int(self._sampleable_slots[last_pos])
+                    self._sampleable_slots[pos] = moved
+                    self._slot_to_sampleable_pos[moved] = pos
+                self._slot_to_sampleable_pos[anchor] = -1
             self._n_sampleable -= 1
             if self._sum_tree is not None:
                 self._sum_tree.set(anchor, 0.0)
@@ -370,7 +411,11 @@ class FrameReplayBuffer:
     def _refresh_anchors_near(self, end_slot: int) -> None:
         for offset in range(self._n_step):
             anchor = (end_slot - offset) % self._capacity
-            ok, _, _, _ = self._evaluate_anchor(anchor)
+            ok, total_reward, done, next_anchor = self._evaluate_anchor(anchor)
+            if ok:
+                self._nstep_rewards[anchor] = total_reward
+                self._nstep_dones[anchor] = done
+                self._nstep_next_anchors[anchor] = next_anchor
             self._set_sampleable(anchor, ok)
 
     def _write_frame(self, base_obs: np.ndarray, episode_id: int, *, invalidate_prev: bool = False) -> None:
@@ -402,7 +447,7 @@ class FrameReplayBuffer:
         self._refresh_anchors_near(prev)
 
     def _sampleable_indices(self) -> np.ndarray:
-        return np.flatnonzero(self.sampleable)
+        return self._sampleable_slots[: self._n_sampleable]
 
     def _stack_index_matrix(self, anchors: np.ndarray, episode_ids: np.ndarray) -> np.ndarray:
         cap = self._capacity
@@ -449,20 +494,22 @@ class FrameReplayBuffer:
         return self._dequantize(obs_full), self._dequantize(next_full)
 
     def _batch_chain_info(self, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        batch = indices.shape[0]
-        rewards = np.empty(batch, dtype=np.float32)
-        dones = np.empty(batch, dtype=bool)
-        next_anchors = np.empty(batch, dtype=np.intp)
-        for i, anchor in enumerate(indices):
-            ok, total_reward, done, next_anchor = self._evaluate_anchor(int(anchor))
-            if not ok:
-                raise ValueError(f"sampled non-sampleable anchor {anchor}")
-            rewards[i] = total_reward
-            dones[i] = done
-            next_anchors[i] = next_anchor
-        return rewards, dones, next_anchors
+        if not np.all(self.sampleable[indices]):
+            bad = int(indices[np.flatnonzero(~self.sampleable[indices])[0]])
+            raise ValueError(f"sampled non-sampleable anchor {bad}")
+        return (
+            self._nstep_rewards[indices],
+            self._nstep_dones[indices],
+            self._nstep_next_anchors[indices],
+        )
 
-    def sample(self, batch_size: int, beta: float = 0.4) -> tuple[torch.Tensor, ...]:
+    def sample(
+        self,
+        batch_size: int,
+        beta: float = 0.4,
+        *,
+        device: torch.device | None = None,
+    ) -> tuple[torch.Tensor, ...]:
         if self._n_sampleable < batch_size:
             raise ValueError(
                 f"Not enough sampleable transitions: {self._n_sampleable} < {batch_size}"
@@ -470,23 +517,30 @@ class FrameReplayBuffer:
         if self._sum_tree is not None:
             indices = self._sum_tree.stratified_sample(batch_size)
             total = self._n_sampleable
-            probs = np.array([self._sum_tree.get(int(i)) for i in indices], dtype=np.float64)
-            probs /= self._sum_tree.total()
+            probs = self._sum_tree.get_batch(indices) / self._sum_tree.total()
             weights = (total * probs) ** (-beta)
             weights /= weights.max()
-            weights_t = torch.tensor(weights, dtype=torch.float32)
+            weights_t = torch.from_numpy(weights.astype(np.float32, copy=False))
         else:
-            sampleable_idx = self._sampleable_indices()
-            indices = np.random.choice(sampleable_idx, size=batch_size, replace=False)
+            pos = self._rng.choice(self._n_sampleable, size=batch_size, replace=False)
+            indices = self._sampleable_slots[pos]
             weights_t = None
 
         rewards, dones, next_anchors = self._batch_chain_info(indices)
         obs, next_obs = self._reconstruct_stacks(indices, next_anchors)
-        actions = torch.tensor(self.actions[indices], dtype=torch.int64).unsqueeze(1)
-        rewards_t = torch.tensor(rewards, dtype=torch.float32)
-        dones_t = torch.tensor(dones, dtype=torch.float32)
-        obs_t = torch.tensor(obs, dtype=torch.float32)
-        next_obs_t = torch.tensor(next_obs, dtype=torch.float32)
+        actions = torch.from_numpy(self.actions[indices].astype(np.int64, copy=False)).unsqueeze(1)
+        rewards_t = torch.from_numpy(np.ascontiguousarray(rewards, dtype=np.float32))
+        dones_t = torch.from_numpy(dones.astype(np.float32, copy=False))
+        obs_t = torch.from_numpy(np.ascontiguousarray(obs, dtype=np.float32))
+        next_obs_t = torch.from_numpy(np.ascontiguousarray(next_obs, dtype=np.float32))
+        if device is not None and device.type != "cpu":
+            obs_t = obs_t.to(device, non_blocking=True)
+            actions = actions.to(device, non_blocking=True)
+            rewards_t = rewards_t.to(device, non_blocking=True)
+            next_obs_t = next_obs_t.to(device, non_blocking=True)
+            dones_t = dones_t.to(device, non_blocking=True)
+            if weights_t is not None:
+                weights_t = weights_t.to(device, non_blocking=True)
         if weights_t is not None:
             return obs_t, actions, rewards_t, next_obs_t, dones_t, weights_t, indices
         return obs_t, actions, rewards_t, next_obs_t, dones_t
@@ -494,19 +548,19 @@ class FrameReplayBuffer:
     def update_priorities(self, indices: np.ndarray, td_errors: np.ndarray) -> None:
         if self._sum_tree is None or self._alpha is None:
             return
-        raw = np.abs(td_errors) + 1e-6
-        for idx, priority in zip(indices, raw):
-            slot = int(idx)
-            self._max_priority = max(self._max_priority, float(priority))
-            self._sum_tree.set(slot, float(priority) ** self._alpha)
+        raw = np.abs(td_errors).astype(np.float64, copy=False) + 1e-6
+        max_p = float(raw.max()) if raw.size else 0.0
+        if max_p > self._max_priority:
+            self._max_priority = max_p
+        self._sum_tree.set_batch(np.asarray(indices, dtype=np.intp), np.power(raw, self._alpha))
 
     def sample_obs(self, n: int) -> np.ndarray:
         if self._n_sampleable < n:
             raise ValueError(
                 f"Not enough sampleable transitions: {self._n_sampleable} < {n}"
             )
-        sampleable_idx = self._sampleable_indices()
-        indices = np.random.choice(sampleable_idx, size=n, replace=False)
+        pos = self._rng.choice(self._n_sampleable, size=n, replace=False)
+        indices = self._sampleable_slots[pos]
         obs, _ = self._reconstruct_stacks(indices)
         return obs
 
@@ -1054,14 +1108,15 @@ def smoothgrad_attribution(
 ) -> dict[str, float]:
     if len(buffer) < n_samples:
         return {}
+    device = next(model.parameters()).device
     if hasattr(buffer, "sample_obs"):
-        obs_batch = torch.tensor(buffer.sample_obs(n_samples), dtype=torch.float32)
+        obs_batch = torch.tensor(buffer.sample_obs(n_samples), dtype=torch.float32, device=device)
     else:
         batch = random.sample(buffer.data, n_samples)
-        obs_batch = torch.tensor(np.stack([t.obs for t in batch]), dtype=torch.float32)
+        obs_batch = torch.tensor(np.stack([t.obs for t in batch]), dtype=torch.float32, device=device)
     obs_batch.requires_grad_(True)
 
-    attributions = torch.zeros(obs_batch.shape[1])
+    attributions = torch.zeros(obs_batch.shape[1], device=device)
     for _ in range(n_smooth):
         noisy = (obs_batch + torch.randn_like(obs_batch) * noise_std).detach()
         noisy.requires_grad_(True)
@@ -1077,7 +1132,7 @@ def smoothgrad_attribution(
 
     attributions /= max(1, n_smooth)
     result: dict[str, float] = {}
-    for i, score in enumerate(attributions.tolist()):
+    for i, score in enumerate(attributions.detach().cpu().tolist()):
         key = obs_keys[i] if i < len(obs_keys) else f"obs_{i}"
         result[key] = round(score, 6)
     return dict(sorted(result.items(), key=lambda kv: -kv[1]))

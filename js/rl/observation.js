@@ -276,7 +276,12 @@ export function computeHeadlessFrameReward(kart, beforeProgress, beforeLap, befo
   const afterProgress = progressValue(kart);
   let reward = Math.fround(Math.fround(afterProgress) - Math.fround(beforeProgress)) * 10;
   if ((kart.lap || 0) > beforeLap) reward += 50;
-  if (!beforeFinished && kart.finished) reward += 200;
+  if (kart.eliminated && !kart._rlRaceEliminationCounted) {
+    kart._rlRaceEliminationCounted = true;
+    reward -= 50;
+  } else if (!beforeFinished && kart.finished && !kart.eliminated) {
+    reward += 200;
+  }
   return Math.fround(reward);
 }
 
