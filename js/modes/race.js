@@ -495,7 +495,10 @@ export function completeClosedCircuitLap(kart) {
       // much faster than real time, so a stale timer from a finished episode would
       // fire mid-way through the NEXT episode and force-finish it, corrupting
       // training data and eval results. Headless loops call finishRaceSim themselves.
-      if (allHumanFinished && !HEADLESS_MODE) setTimeout(() => runtime.finishRace(), 1500);
+      if (allHumanFinished && !HEADLESS_MODE) {
+        if (runtime.scheduleFinishRace) runtime.scheduleFinishRace(1500);
+        else setTimeout(() => runtime.finishRace(), 1500);
+      }
     }
   }
 }

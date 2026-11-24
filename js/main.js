@@ -1195,7 +1195,11 @@ function update(dt, time) {
       showSelectScreen();
     } else if (game.state === STATE.FINISHED) {
       if (!(game.p2pMode && game.p2pRole === "guest")) {
-        showSelectScreen();
+        if (isGrandPrixActive(game.tournament)) {
+          rematchRace();
+        } else {
+          showSelectScreen();
+        }
       }
     }
   }

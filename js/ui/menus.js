@@ -8,6 +8,7 @@ import { getMapRecord } from "../core/settings.js";
 import {
   STATE, game, normalizeTimeOfDay, isBattleMode, isDayMode, isGrandPrixActive, isGrandPrixSelection,
 } from "../core/state.js";
+import { isDragonEscape } from "../modes/race.js";
 import { Sound } from "../audio/sound.js";
 import { handleP2pDisconnect } from "../net/p2p.js";
 import { setViewMode, apply3DMapTheme } from "../render/three-scene.js";
@@ -575,18 +576,38 @@ export function setMusicTrack(idx) {
 export function previewSelectedMapMusic(map) {
   if (!Sound.ctx) return;
   Sound.stopTitleTheme(false);
+  if (Sound._previewMusicTimer) {
+    clearTimeout(Sound._previewMusicTimer);
+    Sound._previewMusicTimer = null;
+  }
   const assignedTrack = Number.isInteger(map.musicTrack) ? map.musicTrack : (Sound.trackIdx || 0);
   const safeTrack = Math.floor(clamp(assignedTrack, 0, Sound.tracks.length - 1));
-  Sound.mapStyle = map.id === "dragon_escape" ? "japanese" : "retro";
-  if (Sound.mapStyle === "retro") {
-    setMusicTrack(safeTrack);
+  const targetStyle = map.id === "dragon_escape" ? "japanese" : "retro";
+  const styleChanged = Sound.mapStyle !== targetStyle;
+  Sound.mapStyle = targetStyle;
+  if (targetStyle === "retro") {
+    if (styleChanged && Sound.isPlayingMusic) {
+      Sound.stopMusic(true);
+      Sound.trackIdx = safeTrack;
+      Sound.tempo = Sound.tracks[safeTrack].tempo;
+      uiRuntime.saveGameSettings({ musicTrack: safeTrack });
+      Sound._previewMusicTimer = setTimeout(() => {
+        Sound._previewMusicTimer = null;
+        Sound.startMusic();
+      }, 90);
+    } else {
+      setMusicTrack(safeTrack);
+      if (!Sound.isPlayingMusic && !Sound._switchTrackTimer) Sound.startMusic();
+    }
   } else {
     Sound.stopMusic(true);
     Sound.trackIdx = safeTrack;
-    Sound.tempo = 90;
-    setTimeout(() => Sound.startMusic(), 80);
+    Sound.tempo = 96;
+    Sound._previewMusicTimer = setTimeout(() => {
+      Sound._previewMusicTimer = null;
+      Sound.startMusic();
+    }, 90);
   }
-  if (!Sound.isPlayingMusic) Sound.startMusic();
 }
 
 export function showSettingsScreen({ returnTo = "title" } = {}) {
